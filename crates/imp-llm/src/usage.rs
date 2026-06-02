@@ -31,9 +31,21 @@ pub struct Cost {
 }
 
 impl Usage {
+    /// Raw total tokens across input and output.
+    pub fn raw_total_tokens(&self) -> u32 {
+        self.input_tokens + self.output_tokens
+    }
+
+    /// Cache-adjusted total tokens for comparing effective prompt cost/volume.
+    pub fn effective_total_tokens(&self) -> u32 {
+        self.input_tokens
+            .saturating_sub(self.cache_read_tokens)
+            .saturating_add(self.output_tokens)
+    }
+
     /// Total tokens across input and output (excludes cache).
     pub fn total_tokens(&self) -> u32 {
-        self.input_tokens + self.output_tokens
+        self.raw_total_tokens()
     }
 
     /// Calculate dollar cost given a model's pricing.
@@ -86,6 +98,30 @@ mod tests {
             cache_write_tokens: 10,
         };
         assert_eq!(usage.total_tokens(), 150);
+    }
+
+    #[test]
+    fn raw_and_effective_totals_distinguish_cached_input() {
+        let usage = Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: 80,
+            cache_write_tokens: 10,
+        };
+        assert_eq!(usage.raw_total_tokens(), 150);
+        assert_eq!(usage.total_tokens(), 150);
+        assert_eq!(usage.effective_total_tokens(), 70);
+    }
+
+    #[test]
+    fn effective_total_saturates_when_cache_exceeds_input() {
+        let usage = Usage {
+            input_tokens: 20,
+            output_tokens: 5,
+            cache_read_tokens: 30,
+            cache_write_tokens: 0,
+        };
+        assert_eq!(usage.effective_total_tokens(), 5);
     }
 
     #[test]

@@ -564,6 +564,8 @@ pub struct RuntimeUsageSummary {
     pub output_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_write_tokens: u32,
+    pub raw_total_tokens: u32,
+    pub effective_total_tokens: u32,
     pub total_tokens: u32,
     pub total_cost: Option<String>,
 }

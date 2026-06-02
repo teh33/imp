@@ -575,6 +575,8 @@ fn runtime_usage_summary(usage: &Usage, cost: &Cost) -> RuntimeUsageSummary {
         output_tokens: usage.output_tokens,
         cache_read_tokens: usage.cache_read_tokens,
         cache_write_tokens: usage.cache_write_tokens,
+        raw_total_tokens: usage.raw_total_tokens(),
+        effective_total_tokens: usage.effective_total_tokens(),
         total_tokens: usage.total_tokens(),
         total_cost: Some(format!("{:.6}", cost.total)),
     }

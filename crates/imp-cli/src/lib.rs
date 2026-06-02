@@ -194,7 +194,7 @@ struct Cli {
     #[arg(long, default_value = "interactive")]
     mode: String,
 
-    /// Final output format for --print: text or json
+    /// Final output format for --print: text, json, or jsonl
     #[arg(long, default_value = "text")]
     output: String,
     /// Emit shared runtime_event/runtime_state payloads alongside legacy JSON events
@@ -2880,6 +2880,8 @@ fn rpc_agent_event_legacy_json(event: &AgentEvent) -> Value {
             "output_tokens": usage.output_tokens,
             "cache_read_tokens": usage.cache_read_tokens,
             "cache_write_tokens": usage.cache_write_tokens,
+            "raw_total_tokens": usage.raw_total_tokens(),
+            "effective_total_tokens": usage.effective_total_tokens(),
             "cost_total": cost.total,
         }),
         AgentEvent::TurnStart { index } => json!({ "type": "turn_start", "index": index }),
@@ -3050,6 +3052,7 @@ async fn emit_protocol_error(stdout_tx: &mpsc::Sender<Value>, error: impl Into<S
 enum PrintOutputMode {
     Text,
     Json,
+    Jsonl,
 }
 
 impl PrintOutputMode {
@@ -3057,8 +3060,15 @@ impl PrintOutputMode {
         match raw.trim().to_ascii_lowercase().as_str() {
             "text" | "human" => Ok(Self::Text),
             "json" => Ok(Self::Json),
-            other => Err(format!("unknown --output mode `{other}`; use text or json")),
+            "jsonl" | "benchmark-jsonl" => Ok(Self::Jsonl),
+            other => Err(format!(
+                "unknown --output mode `{other}`; use text, json, or jsonl"
+            )),
         }
+    }
+
+    fn is_structured(self) -> bool {
+        matches!(self, Self::Json | Self::Jsonl)
     }
 }
 
@@ -3068,8 +3078,29 @@ struct PrintJsonOutcome {
     final_text: String,
     policy_violations: Vec<PrintPolicyViolation>,
     tool_calls: Vec<PrintToolCall>,
+    metrics: PrintRunMetrics,
     usage: Option<PrintUsage>,
     cost: Option<PrintCost>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct PrintRunMetrics {
+    wall_time_ms: Option<u64>,
+    ttft_ms: Option<u64>,
+    first_stream_event_ms: Option<u64>,
+    turns: u32,
+    tool_calls: u32,
+    failed_tool_calls: u32,
+    files_read: u32,
+    files_written: u32,
+    commands_run: u32,
+    verification: PrintVerificationSummary,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct PrintVerificationSummary {
+    commands: Vec<String>,
+    passed: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3088,14 +3119,86 @@ struct PrintToolCall {
 struct PrintUsage {
     input_tokens: u32,
     output_tokens: u32,
+    cache_read_tokens: u32,
+    cache_write_tokens: u32,
+    raw_total_tokens: u32,
+    effective_total_tokens: u32,
 }
 
 #[derive(Debug, Serialize)]
 struct PrintCost {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
     total: f64,
 }
 
+fn print_usage(usage: &imp_llm::Usage) -> PrintUsage {
+    PrintUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_write_tokens: usage.cache_write_tokens,
+        raw_total_tokens: usage.raw_total_tokens(),
+        effective_total_tokens: usage.effective_total_tokens(),
+    }
+}
+
+fn print_cost(cost: &imp_llm::Cost) -> PrintCost {
+    PrintCost {
+        input: cost.input,
+        output: cost.output,
+        cache_read: cost.cache_read,
+        cache_write: cost.cache_write,
+        total: cost.total,
+    }
+}
+
+fn emit_print_jsonl_event(value: Value) -> Result<(), Box<dyn std::error::Error>> {
+    println!("{}", serde_json::to_string(&value)?);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn final_summary_jsonl(outcome: &PrintJsonOutcome) -> Value {
+    let mut value = serde_json::to_value(outcome).unwrap_or(Value::Null);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("type".into(), Value::String("final_summary".into()));
+    }
+    value
+}
+
+fn update_verification_summary(metrics: &mut PrintRunMetrics, gate: &VerificationGate) {
+    if let Some(command) = &gate.command {
+        if !metrics
+            .verification
+            .commands
+            .iter()
+            .any(|existing| existing == &command.command)
+        {
+            metrics.verification.commands.push(command.command.clone());
+        }
+    }
+
+    match gate.status {
+        imp_core::workflow::VerificationGateStatus::Failed
+        | imp_core::workflow::VerificationGateStatus::Blocked => {
+            metrics.verification.passed = Some(false);
+        }
+        imp_core::workflow::VerificationGateStatus::Passed => {
+            if metrics.verification.passed.is_none() {
+                metrics.verification.passed = Some(true);
+            }
+        }
+        imp_core::workflow::VerificationGateStatus::Pending
+        | imp_core::workflow::VerificationGateStatus::Running
+        | imp_core::workflow::VerificationGateStatus::Skipped => {}
+    }
+}
+
 async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let run_started_at = std::time::Instant::now();
     let mut startup_timer = StartupTimer::new(cli.verbose);
     emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
     let cwd = std::env::current_dir()?;
@@ -3173,7 +3276,9 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
     let mut printed_trailing_newline = false;
 
     let print_output_mode = PrintOutputMode::parse(&cli.output)?;
+    let structured_output = print_output_mode.is_structured();
     let json_output = print_output_mode == PrintOutputMode::Json;
+    let jsonl_output = print_output_mode == PrintOutputMode::Jsonl;
     let mut json_outcome = PrintJsonOutcome {
         status: "done".to_string(),
         ..Default::default()
@@ -3181,10 +3286,17 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
     let mut active_tool: Option<String> = None;
 
     while let Some(event) = session.recv_event().await {
+        if jsonl_output {
+            emit_print_jsonl_event(rpc_agent_event_legacy_json(&event))?;
+        }
         match event {
             AgentEvent::MessageDelta { delta } => match delta {
                 StreamEvent::TextDelta { text } => {
-                    if json_output {
+                    if structured_output {
+                        if json_outcome.metrics.ttft_ms.is_none() {
+                            json_outcome.metrics.ttft_ms =
+                                Some(run_started_at.elapsed().as_millis() as u64);
+                        }
                         json_outcome.final_text.push_str(&text);
                     } else {
                         print!("{text}");
@@ -3192,7 +3304,7 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
                     }
                 }
                 StreamEvent::ThinkingDelta { text } => {
-                    if !json_output {
+                    if !structured_output {
                         eprint!("{text}")
                     }
                 }
@@ -3220,12 +3332,19 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
                         .to_string(),
                     _ => String::new(),
                 };
-                if !json_output {
+                if !structured_output {
                     if summary.is_empty() {
                         eprintln!("[tool: {tool_name}]");
                     } else {
                         eprintln!("[tool: {tool_name} {summary}]");
                     }
+                }
+                json_outcome.metrics.tool_calls += 1;
+                match tool_name.as_str() {
+                    "bash" => json_outcome.metrics.commands_run += 1,
+                    "read" => json_outcome.metrics.files_read += 1,
+                    "write" | "edit" => json_outcome.metrics.files_written += 1,
+                    _ => {}
                 }
             }
             AgentEvent::ToolExecutionEnd { result, .. } if !cli.no_tools => {
@@ -3240,7 +3359,10 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
                     })
                     .collect::<Vec<_>>()
                     .join("");
-                if json_output {
+                if structured_output {
+                    if result.is_error {
+                        json_outcome.metrics.failed_tool_calls += 1;
+                    }
                     if result.is_error && text.contains("run policy") {
                         json_outcome.status = "policy_denied".to_string();
                         json_outcome.policy_violations.push(PrintPolicyViolation {
@@ -3256,15 +3378,18 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
                     eprintln!("[error: {}]", truncate_chars_with_suffix(&text, 100, ""));
                 }
             }
+            AgentEvent::TurnStart { index } => {
+                json_outcome.metrics.turns = json_outcome.metrics.turns.max(index + 1);
+            }
             AgentEvent::TurnEnd { .. } => {
-                if !json_output && !printed_trailing_newline {
+                if !structured_output && !printed_trailing_newline {
                     println!();
                     printed_trailing_newline = true;
                 }
             }
             AgentEvent::Error { error } => {
                 json_outcome.status = "failed".to_string();
-                if json_output {
+                if structured_output {
                     if !json_outcome.final_text.is_empty() {
                         json_outcome.final_text.push('\n');
                     }
@@ -3276,23 +3401,62 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
                 }
             }
             AgentEvent::Timing { timing } => {
-                if cli.verbose {
+                match timing.stage {
+                    imp_core::TimingStage::FirstStreamEvent => {
+                        if json_outcome.metrics.first_stream_event_ms.is_none() {
+                            json_outcome.metrics.first_stream_event_ms =
+                                Some(run_started_at.elapsed().as_millis() as u64);
+                        }
+                    }
+                    imp_core::TimingStage::FirstTextDelta => {
+                        if json_outcome.metrics.ttft_ms.is_none() {
+                            json_outcome.metrics.ttft_ms =
+                                Some(run_started_at.elapsed().as_millis() as u64);
+                        }
+                    }
+                    _ => {}
+                }
+                if cli.verbose && !structured_output {
                     eprintln!("{}", format_timing_event(&timing));
                 }
             }
-            AgentEvent::AgentEnd { usage, cost, .. } => {
-                if json_output {
-                    json_outcome.usage = Some(PrintUsage {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                    });
-                    json_outcome.cost = Some(PrintCost { total: cost.total });
+            AgentEvent::AgentEnd {
+                usage,
+                cost,
+                status,
+            } => {
+                if json_outcome.status == "done" {
+                    json_outcome.status = match status {
+                        imp_core::agent::RunFinalStatus::Done { .. } => "done".to_string(),
+                        imp_core::agent::RunFinalStatus::DoneWithConcerns { .. } => {
+                            "done_with_concerns".to_string()
+                        }
+                        imp_core::agent::RunFinalStatus::Blocked { .. } => "blocked".to_string(),
+                        imp_core::agent::RunFinalStatus::NeedsUserInput { .. } => {
+                            "needs_user_input".to_string()
+                        }
+                        imp_core::agent::RunFinalStatus::Cancelled => "cancelled".to_string(),
+                        imp_core::agent::RunFinalStatus::Failed { .. } => "failed".to_string(),
+                    };
+                }
+                if structured_output {
+                    json_outcome.usage = Some(print_usage(&usage));
+                    json_outcome.cost = Some(print_cost(&cost));
                 } else {
                     eprintln!(
-                        "\n[tokens: ↑{} ↓{} | cost: ${:.4}]",
-                        usage.input_tokens, usage.output_tokens, cost.total
+                        "\n[tokens: raw={} effective={} (↑{} ↓{} cache_read={} cache_write={}) | cost: ${:.4}]",
+                        usage.raw_total_tokens(),
+                        usage.effective_total_tokens(),
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
+                        cost.total
                     );
                 }
+            }
+            AgentEvent::VerificationCompleted { gate, .. } => {
+                update_verification_summary(&mut json_outcome.metrics, &gate);
             }
             _ => {}
         }
@@ -3303,8 +3467,12 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
         .await
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
+    json_outcome.metrics.wall_time_ms = Some(run_started_at.elapsed().as_millis() as u64);
+
     if json_output {
         println!("{}", serde_json::to_string(&json_outcome)?);
+    } else if jsonl_output {
+        emit_print_jsonl_event(final_summary_jsonl(&json_outcome))?;
     }
 
     Ok(())
@@ -4417,6 +4585,9 @@ mod tests {
         assert_eq!(json["input_tokens"], 1000);
         assert_eq!(json["output_tokens"], 500);
         assert_eq!(json["cache_read_tokens"], 100);
+        assert_eq!(json["cache_write_tokens"], 50);
+        assert_eq!(json["raw_total_tokens"], 1500);
+        assert_eq!(json["effective_total_tokens"], 1400);
         assert_eq!(json["cost_total"], 0.0107175);
         assert_eq!(json["status"]["type"], "done");
         assert_eq!(json["status"]["reason"], "work_completed");
@@ -4476,6 +4647,69 @@ mod tests {
         assert_eq!(json["duration_ms"], 30);
         assert_eq!(json["label"], "model");
         assert_eq!(json["success"], true);
+    }
+
+    #[test]
+    fn print_usage_includes_cache_aware_totals() {
+        let usage = imp_llm::Usage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            cache_read_tokens: 250,
+            cache_write_tokens: 75,
+        };
+
+        let json = serde_json::to_value(print_usage(&usage)).unwrap();
+        assert_eq!(json["input_tokens"], 1000);
+        assert_eq!(json["output_tokens"], 500);
+        assert_eq!(json["cache_read_tokens"], 250);
+        assert_eq!(json["cache_write_tokens"], 75);
+        assert_eq!(json["raw_total_tokens"], 1500);
+        assert_eq!(json["effective_total_tokens"], 1250);
+    }
+
+    #[test]
+    fn final_summary_jsonl_tags_summary_without_losing_metrics() {
+        let mut outcome = PrintJsonOutcome {
+            status: "done".to_string(),
+            final_text: "ok".to_string(),
+            ..PrintJsonOutcome::default()
+        };
+        outcome.metrics.wall_time_ms = Some(42);
+        outcome.metrics.tool_calls = 2;
+        outcome.usage = Some(print_usage(&imp_llm::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 4,
+            cache_write_tokens: 0,
+        }));
+
+        let json = final_summary_jsonl(&outcome);
+        assert_eq!(json["type"], "final_summary");
+        assert_eq!(json["status"], "done");
+        assert_eq!(json["final_text"], "ok");
+        assert_eq!(json["metrics"]["wall_time_ms"], 42);
+        assert_eq!(json["metrics"]["tool_calls"], 2);
+        assert_eq!(json["usage"]["effective_total_tokens"], 11);
+    }
+
+    #[test]
+    fn update_verification_summary_dedupes_commands_and_tracks_failures() {
+        let mut metrics = PrintRunMetrics::default();
+        let mut passed_gate = VerificationGate::command("tests", "cargo test -p imp-cli");
+        passed_gate.status = imp_core::workflow::VerificationGateStatus::Passed;
+        update_verification_summary(&mut metrics, &passed_gate);
+        update_verification_summary(&mut metrics, &passed_gate);
+        assert_eq!(metrics.verification.commands, vec!["cargo test -p imp-cli"]);
+        assert_eq!(metrics.verification.passed, Some(true));
+
+        let mut failed_gate = VerificationGate::command("fmt", "cargo fmt --check");
+        failed_gate.status = imp_core::workflow::VerificationGateStatus::Failed;
+        update_verification_summary(&mut metrics, &failed_gate);
+        assert_eq!(
+            metrics.verification.commands,
+            vec!["cargo test -p imp-cli", "cargo fmt --check"]
+        );
+        assert_eq!(metrics.verification.passed, Some(false));
     }
 
     #[test]
