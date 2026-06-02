@@ -12,7 +12,7 @@ use crate::views::editor::EditorView;
 use crate::views::sidebar::{
     build_detail_render_data, build_stream_lines, SidebarDetailRenderData,
 };
-use crate::views::startup::StartupPanelData;
+use crate::views::startup::{StartupPanelData, StartupSection};
 use crate::views::status::StatusInfo;
 use crate::views::tools::DisplayToolCall;
 
