@@ -422,26 +422,160 @@ pub fn validate_workflow(
     diagnostics
 }
 
-pub fn next_runnable_steps(doc: &WorkflowDocument) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowStepReadiness {
+    pub step: String,
+    pub status: StepStatus,
+    pub state: WorkflowReadinessState,
+    pub reasons: Vec<WorkflowReadinessReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowReadinessState {
+    Runnable,
+    Waiting,
+    Blocked,
+    Terminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowReadinessReason {
+    pub kind: WorkflowReadinessReasonKind,
+    pub subject: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowReadinessReasonKind {
+    DependencyMissing,
+    DependencyNotReady,
+    WorkerMissing,
+    StatusNotRunnable,
+    CheckPending,
+    CheckFailed,
+    CheckBlocked,
+}
+
+pub fn workflow_step_readiness(doc: &WorkflowDocument) -> Vec<WorkflowStepReadiness> {
     doc.steps
         .iter()
-        .filter(|(_, step)| matches!(step.status, StepStatus::Todo | StepStatus::Ready))
-        .filter(|(_, step)| {
-            step.depends_on.iter().all(|dependency| {
-                doc.steps
-                    .get(dependency)
-                    .map(|dependency_step| is_terminal_success(dependency_step.status))
-                    .unwrap_or(false)
-            })
+        .map(|(step_id, step)| {
+            let mut reasons = Vec::new();
+
+            if is_terminal_step_status(step.status) {
+                return WorkflowStepReadiness {
+                    step: step_id.clone(),
+                    status: step.status,
+                    state: WorkflowReadinessState::Terminal,
+                    reasons,
+                };
+            }
+
+            if !matches!(step.status, StepStatus::Todo | StepStatus::Ready) {
+                reasons.push(WorkflowReadinessReason {
+                    kind: WorkflowReadinessReasonKind::StatusNotRunnable,
+                    subject: Some(step_id.clone()),
+                    message: format!("step status is {}", format!("{:?}", step.status).to_case()),
+                });
+            }
+
+            for dependency in &step.depends_on {
+                match doc.steps.get(dependency) {
+                    Some(dependency_step) if is_terminal_success(dependency_step.status) => {}
+                    Some(dependency_step) => reasons.push(WorkflowReadinessReason {
+                        kind: WorkflowReadinessReasonKind::DependencyNotReady,
+                        subject: Some(dependency.clone()),
+                        message: format!(
+                            "dependency `{dependency}` is {}",
+                            format!("{:?}", dependency_step.status).to_case()
+                        ),
+                    }),
+                    None => reasons.push(WorkflowReadinessReason {
+                        kind: WorkflowReadinessReasonKind::DependencyMissing,
+                        subject: Some(dependency.clone()),
+                        message: format!("dependency `{dependency}` is missing"),
+                    }),
+                }
+            }
+
+            if let Some(worker) = &step.worker {
+                if !doc.workers.contains_key(worker) {
+                    reasons.push(WorkflowReadinessReason {
+                        kind: WorkflowReadinessReasonKind::WorkerMissing,
+                        subject: Some(worker.clone()),
+                        message: format!("worker `{worker}` is missing"),
+                    });
+                }
+            }
+
+            for check_id in &step.checks {
+                if let Some(check) = doc.checks.get(check_id) {
+                    let kind = match check.status {
+                        CheckStatus::Pending => Some(WorkflowReadinessReasonKind::CheckPending),
+                        CheckStatus::Failed => Some(WorkflowReadinessReasonKind::CheckFailed),
+                        CheckStatus::Blocked => Some(WorkflowReadinessReasonKind::CheckBlocked),
+                        CheckStatus::Passed | CheckStatus::Skipped => None,
+                    };
+                    if let Some(kind) = kind {
+                        reasons.push(WorkflowReadinessReason {
+                            kind,
+                            subject: Some(check_id.clone()),
+                            message: format!(
+                                "check `{check_id}` is {}",
+                                format!("{:?}", check.status).to_case()
+                            ),
+                        });
+                    }
+                }
+            }
+
+            let state = if reasons.iter().any(|reason| {
+                matches!(
+                    reason.kind,
+                    WorkflowReadinessReasonKind::DependencyMissing
+                        | WorkflowReadinessReasonKind::WorkerMissing
+                )
+            }) {
+                WorkflowReadinessState::Blocked
+            } else if reasons.iter().any(|reason| {
+                matches!(
+                    reason.kind,
+                    WorkflowReadinessReasonKind::DependencyNotReady
+                        | WorkflowReadinessReasonKind::StatusNotRunnable
+                )
+            }) {
+                WorkflowReadinessState::Waiting
+            } else {
+                WorkflowReadinessState::Runnable
+            };
+
+            WorkflowStepReadiness {
+                step: step_id.clone(),
+                status: step.status,
+                state,
+                reasons,
+            }
         })
-        .filter(|(_, step)| {
-            step.worker
-                .as_ref()
-                .map(|worker| doc.workers.contains_key(worker))
-                .unwrap_or(true)
-        })
-        .map(|(id, _)| id.clone())
         .collect()
+}
+
+pub fn next_runnable_steps(doc: &WorkflowDocument) -> Vec<String> {
+    workflow_step_readiness(doc)
+        .into_iter()
+        .filter(|readiness| matches!(readiness.state, WorkflowReadinessState::Runnable))
+        .map(|readiness| readiness.step)
+        .collect()
+}
+
+fn is_terminal_step_status(status: StepStatus) -> bool {
+    matches!(
+        status,
+        StepStatus::Done
+            | StepStatus::DoneWithConcerns
+            | StepStatus::Skipped
+            | StepStatus::Failed
+            | StepStatus::Blocked
+    )
 }
 
 fn validate_directory_id(
@@ -905,6 +1039,23 @@ fn is_workflow_directory_name(value: &str) -> bool {
         && components.next().is_none()
 }
 
+trait CaseExt {
+    fn to_case(&self) -> String;
+}
+
+impl CaseExt for str {
+    fn to_case(&self) -> String {
+        let mut out = String::new();
+        for (index, ch) in self.chars().enumerate() {
+            if ch.is_uppercase() && index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1033,6 +1184,141 @@ closeout:
             .expect_err("invalid status and missing acceptance status should fail during parse");
         let message = error.to_string();
         assert!(message.contains("status"), "{message}");
+    }
+
+    #[test]
+    fn workflow_readiness_explains_runnable_and_blocked_steps() {
+        let yaml = r#"
+schema: imp.workflow/v1
+id: readiness
+title: Readiness
+status: active
+kind: test
+settings: {}
+spec:
+  goal: Test readiness.
+  acceptance:
+    done:
+      text: Work is ready.
+      status: todo
+context: {}
+steps:
+  inspect:
+    kind: context
+    status: done
+  build:
+    kind: build
+    status: todo
+    depends_on: [inspect]
+    worker: missing_builder
+    checks: [pending_check]
+  verify:
+    kind: verify
+    status: todo
+    depends_on: [build]
+  missing_dep:
+    kind: verify
+    status: todo
+    depends_on: [does_not_exist]
+  active_step:
+    kind: build
+    status: active
+  failed_step:
+    kind: build
+    status: failed
+prototypes: {}
+checks:
+  pending_check:
+    kind: command
+    status: pending
+    command: cargo test -p imp-core workflow
+workers: {}
+results:
+  path: .imp/workflows/readiness/results.md
+closeout:
+  done:
+    requires: [pending_check]
+"#;
+        let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+        let readiness = workflow_step_readiness(&doc);
+        let find = |step: &str| {
+            readiness
+                .iter()
+                .find(|entry| entry.step == step)
+                .unwrap_or_else(|| panic!("missing readiness for {step}"))
+        };
+
+        assert_eq!(find("inspect").state, WorkflowReadinessState::Terminal);
+        assert_eq!(find("build").state, WorkflowReadinessState::Blocked);
+        assert!(find("build").reasons.iter().any(|reason| {
+            reason.kind == WorkflowReadinessReasonKind::WorkerMissing
+                && reason.subject.as_deref() == Some("missing_builder")
+        }));
+        assert!(find("build").reasons.iter().any(|reason| {
+            reason.kind == WorkflowReadinessReasonKind::CheckPending
+                && reason.subject.as_deref() == Some("pending_check")
+        }));
+        assert_eq!(find("verify").state, WorkflowReadinessState::Waiting);
+        assert!(find("verify").reasons.iter().any(|reason| {
+            reason.kind == WorkflowReadinessReasonKind::DependencyNotReady
+                && reason.subject.as_deref() == Some("build")
+        }));
+        assert_eq!(find("missing_dep").state, WorkflowReadinessState::Blocked);
+        assert!(find("missing_dep").reasons.iter().any(|reason| {
+            reason.kind == WorkflowReadinessReasonKind::DependencyMissing
+                && reason.subject.as_deref() == Some("does_not_exist")
+        }));
+        assert_eq!(find("active_step").state, WorkflowReadinessState::Waiting);
+        assert!(find("active_step")
+            .reasons
+            .iter()
+            .any(|reason| { reason.kind == WorkflowReadinessReasonKind::StatusNotRunnable }));
+        assert_eq!(find("failed_step").state, WorkflowReadinessState::Terminal);
+    }
+
+    #[test]
+    fn workflow_readiness_preserves_next_runnable_steps_compatibility() {
+        let yaml = r#"
+schema: imp.workflow/v1
+id: readiness-compat
+title: Readiness compatibility
+status: active
+kind: test
+settings: {}
+spec:
+  goal: Test next runnable compatibility.
+  acceptance:
+    done:
+      text: Work is ready.
+      status: todo
+context: {}
+steps:
+  add_schema_module:
+    kind: build
+    status: todo
+  add_validation_tests:
+    kind: verify
+    status: todo
+    depends_on: [add_schema_module]
+prototypes: {}
+checks: {}
+workers: {}
+results:
+  path: .imp/workflows/readiness-compat/results.md
+closeout:
+  done:
+    requires: []
+"#;
+        let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+
+        let readiness = workflow_step_readiness(&doc)
+            .into_iter()
+            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Runnable))
+            .map(|entry| entry.step)
+            .collect::<Vec<_>>();
+
+        assert_eq!(readiness, vec!["add_schema_module".to_owned()]);
+        assert_eq!(next_runnable_steps(&doc), readiness);
     }
 
     #[test]

@@ -12,9 +12,10 @@ use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{
     load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow,
-    workflow_subagent_input, CheckKind, CheckStatus, StepKind, StepStatus, ValidateOptions,
-    ValidationMode, WorkflowCheck, WorkflowDocument, WorkflowStep, WorkflowStepAction,
-    WorkflowStepActionKind, WorkflowWorker,
+    workflow_step_readiness, workflow_subagent_input, CheckKind, CheckStatus, StepKind, StepStatus,
+    ValidateOptions, ValidationMode, WorkflowCheck, WorkflowDocument, WorkflowReadinessReasonKind,
+    WorkflowReadinessState, WorkflowStep, WorkflowStepAction, WorkflowStepActionKind,
+    WorkflowWorker,
 };
 
 pub struct WorkflowTool;
@@ -182,6 +183,21 @@ struct WorkflowWorkerAssignment {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct WorkflowSubagentBatchAssignment {
+    step: String,
+    step_kind: String,
+    contract: WorkflowAgentActionContract,
+    input: SubagentInput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkflowHeldBackStep {
+    step: String,
+    step_kind: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum WorkflowNextAction {
     OrchestratedCommandChecks {
@@ -202,6 +218,10 @@ enum WorkflowNextAction {
         contract: WorkflowAgentActionContract,
         input: SubagentInput,
     },
+    SubagentBatch {
+        assignments: Vec<WorkflowSubagentBatchAssignment>,
+        held_back: Vec<WorkflowHeldBackStep>,
+    },
     MissingActionContract {
         step: String,
         step_kind: String,
@@ -217,6 +237,7 @@ enum WorkflowNextAction {
         depends_on: Vec<String>,
     },
     NoRunnableSteps {
+        summary: WorkflowReadinessSummary,
         blocked_steps: Vec<WorkflowBlockedStep>,
     },
 }
@@ -237,10 +258,27 @@ struct WorkflowAgentActionContract {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct WorkflowReadinessSummary {
+    runnable: usize,
+    waiting: usize,
+    blocked: usize,
+    terminal: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkflowBlockedStepReason {
+    kind: String,
+    subject: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct WorkflowBlockedStep {
     step: String,
     status: String,
+    state: String,
     reasons: Vec<String>,
+    reason_details: Vec<WorkflowBlockedStepReason>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -519,7 +557,14 @@ async fn run_action(
                         .expect("runnable step exists");
                     if ran_steps.is_empty() {
                         if run_mode == WorkflowExecutionMode::Subagents {
-                            if let Some(action) = &step.action {
+                            if let Some(batch) = subagent_batch_for_runnable_steps(
+                                &id,
+                                &current_doc,
+                                next_runnable_steps(&current_doc),
+                                run_mode,
+                            ) {
+                                deferred_action = Some(batch);
+                            } else if let Some(action) = &step.action {
                                 deferred_action = Some(subagent_action_for_runnable_step(
                                     &id, &step_id, step, action, run_mode,
                                 ));
@@ -556,8 +601,10 @@ async fn run_action(
                 reconciled: all_reconciled,
             }
         } else {
+            let (summary, blocked_steps) = blocked_steps(&current_doc);
             WorkflowNextAction::NoRunnableSteps {
-                blocked_steps: blocked_steps(&current_doc),
+                summary,
+                blocked_steps,
             }
         };
         (action, result_status)
@@ -901,6 +948,45 @@ fn render_run_result(result: &WorkflowRunResult) -> String {
             lines.push("Launch this with the Subagent tool; workflow state is unchanged until the subagent reports an outcome.".to_string());
             lines.join("\n")
         }
+        WorkflowNextAction::SubagentBatch {
+            assignments,
+            held_back,
+        } => {
+            let mut lines = vec![format!(
+                "Workflow recommends {} parallel subagent action(s).",
+                assignments.len()
+            )];
+            if !assignments.is_empty() {
+                lines.push(String::new());
+                lines.push("Launchable:".to_string());
+                for assignment in assignments {
+                    lines.push(format!(
+                        "- {} [{}]: {}",
+                        assignment.step, assignment.step_kind, assignment.contract.role
+                    ));
+                    lines.push(format!("  - objective: {}", assignment.contract.objective));
+                    if !assignment.contract.write_scope.is_empty() {
+                        lines.push(format!(
+                            "  - writes: {}",
+                            assignment.contract.write_scope.join(", ")
+                        ));
+                    }
+                }
+            }
+            if !held_back.is_empty() {
+                lines.push(String::new());
+                lines.push("Held back:".to_string());
+                for step in held_back {
+                    lines.push(format!(
+                        "- {} [{}]: {}",
+                        step.step, step.step_kind, step.reason
+                    ));
+                }
+            }
+            lines.push(String::new());
+            lines.push("Launch each assignment with the Subagent tool; workflow state is unchanged until subagents report outcomes.".to_string());
+            lines.join("\n")
+        }
         WorkflowNextAction::MissingActionContract {
             step,
             step_kind,
@@ -954,17 +1040,23 @@ fn render_run_result(result: &WorkflowRunResult) -> String {
             }
             text
         }
-        WorkflowNextAction::NoRunnableSteps { blocked_steps } => {
+        WorkflowNextAction::NoRunnableSteps {
+            summary,
+            blocked_steps,
+        } => {
             let mut text = String::from("No runnable workflow steps.");
+            text.push_str("\n\nReadiness summary:");
+            text.push_str(&format!("\n- runnable: {}", summary.runnable));
+            text.push_str(&format!("\n- waiting: {}", summary.waiting));
+            text.push_str(&format!("\n- blocked: {}", summary.blocked));
+            text.push_str(&format!("\n- terminal: {}", summary.terminal));
             if !blocked_steps.is_empty() {
-                text.push_str("\nBlocked/pending steps:");
+                text.push_str("\n\nBlocked/pending steps:");
                 for step in blocked_steps {
-                    text.push_str(&format!(
-                        "\n- {} [{}]: {}",
-                        step.step,
-                        step.status,
-                        step.reasons.join("; ")
-                    ));
+                    text.push_str(&format!("\n- {} [{}]", step.step, step.status));
+                    for reason in &step.reasons {
+                        text.push_str(&format!("\n  - {reason}"));
+                    }
                 }
             }
             text
@@ -972,41 +1064,87 @@ fn render_run_result(result: &WorkflowRunResult) -> String {
     }
 }
 
-fn blocked_steps(doc: &WorkflowDocument) -> Vec<WorkflowBlockedStep> {
-    doc.steps
-        .iter()
-        .filter(|(_, step)| matches!(step.status, StepStatus::Todo | StepStatus::Ready))
-        .map(|(step_id, step)| {
-            let mut reasons = Vec::new();
-            for dependency in &step.depends_on {
-                match doc.steps.get(dependency) {
-                    Some(dependency_step)
-                        if matches!(
-                            dependency_step.status,
-                            StepStatus::Done | StepStatus::DoneWithConcerns
-                        ) => {}
-                    Some(dependency_step) => reasons.push(format!(
-                        "dependency `{dependency}` is {}",
-                        format!("{:?}", dependency_step.status).to_case()
-                    )),
-                    None => reasons.push(format!("dependency `{dependency}` is missing")),
-                }
-            }
-            if let Some(worker) = &step.worker {
-                if !doc.workers.contains_key(worker) {
-                    reasons.push(format!("worker `{worker}` is missing"));
-                }
-            }
-            if reasons.is_empty() {
-                reasons.push("waiting for workflow engine support or checks".to_string());
+fn blocked_steps(doc: &WorkflowDocument) -> (WorkflowReadinessSummary, Vec<WorkflowBlockedStep>) {
+    let readiness = workflow_step_readiness(doc);
+    let summary = WorkflowReadinessSummary {
+        runnable: readiness
+            .iter()
+            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Runnable))
+            .count(),
+        waiting: readiness
+            .iter()
+            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Waiting))
+            .count(),
+        blocked: readiness
+            .iter()
+            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Blocked))
+            .count(),
+        terminal: readiness
+            .iter()
+            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Terminal))
+            .count(),
+    };
+
+    let blocked_steps = readiness
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                entry.state,
+                WorkflowReadinessState::Waiting | WorkflowReadinessState::Blocked
+            )
+        })
+        .map(|entry| {
+            let mut reason_details = entry
+                .reasons
+                .into_iter()
+                .map(|reason| WorkflowBlockedStepReason {
+                    kind: readiness_reason_kind_label(reason.kind).to_string(),
+                    subject: reason.subject,
+                    message: reason.message,
+                })
+                .collect::<Vec<_>>();
+            if reason_details.is_empty() {
+                reason_details.push(WorkflowBlockedStepReason {
+                    kind: "unknown".to_string(),
+                    subject: None,
+                    message: "waiting for workflow engine support or checks".to_string(),
+                });
             }
             WorkflowBlockedStep {
-                step: step_id.clone(),
-                status: format!("{:?}", step.status).to_case(),
-                reasons,
+                step: entry.step,
+                status: format!("{:?}", entry.status).to_case(),
+                state: readiness_state_label(entry.state).to_string(),
+                reasons: reason_details
+                    .iter()
+                    .map(|reason| reason.message.clone())
+                    .collect(),
+                reason_details,
             }
         })
-        .collect()
+        .collect();
+
+    (summary, blocked_steps)
+}
+
+fn readiness_state_label(state: WorkflowReadinessState) -> &'static str {
+    match state {
+        WorkflowReadinessState::Runnable => "runnable",
+        WorkflowReadinessState::Waiting => "waiting",
+        WorkflowReadinessState::Blocked => "blocked",
+        WorkflowReadinessState::Terminal => "terminal",
+    }
+}
+
+fn readiness_reason_kind_label(kind: WorkflowReadinessReasonKind) -> &'static str {
+    match kind {
+        WorkflowReadinessReasonKind::DependencyMissing => "dependency_missing",
+        WorkflowReadinessReasonKind::DependencyNotReady => "dependency_not_ready",
+        WorkflowReadinessReasonKind::WorkerMissing => "worker_missing",
+        WorkflowReadinessReasonKind::StatusNotRunnable => "status_not_runnable",
+        WorkflowReadinessReasonKind::CheckPending => "check_pending",
+        WorkflowReadinessReasonKind::CheckFailed => "check_failed",
+        WorkflowReadinessReasonKind::CheckBlocked => "check_blocked",
+    }
 }
 
 async fn evaluate_pending_check(
@@ -1116,6 +1254,119 @@ async fn evaluate_pending_check(
         }
         _ => Err(format!("check kind {:?} is not runnable", check.kind)),
     }
+}
+
+const MAX_SUBAGENT_BATCH_ASSIGNMENTS: usize = 4;
+
+fn subagent_batch_for_runnable_steps(
+    workflow_id: &str,
+    doc: &WorkflowDocument,
+    runnable_steps: Vec<String>,
+    run_mode: WorkflowExecutionMode,
+) -> Option<WorkflowNextAction> {
+    let mut assignments = Vec::new();
+    let mut held_back = Vec::new();
+    let mut selected_scopes: Vec<(String, Vec<PathBuf>)> = Vec::new();
+
+    for step_id in runnable_steps {
+        let Some(step) = doc.steps.get(&step_id) else {
+            continue;
+        };
+        let step_kind = format!("{:?}", step.kind).to_case();
+        let Some(action) = &step.action else {
+            held_back.push(WorkflowHeldBackStep {
+                step: step_id,
+                step_kind,
+                reason: "missing explicit action contract".to_string(),
+            });
+            continue;
+        };
+
+        if assignments.len() >= MAX_SUBAGENT_BATCH_ASSIGNMENTS {
+            held_back.push(WorkflowHeldBackStep {
+                step: step_id,
+                step_kind,
+                reason: format!("subagent batch cap of {MAX_SUBAGENT_BATCH_ASSIGNMENTS} reached"),
+            });
+            continue;
+        }
+
+        if action.write_scope.is_empty() {
+            held_back.push(WorkflowHeldBackStep {
+                step: step_id,
+                step_kind,
+                reason: "missing write scope for safe parallel dispatch".to_string(),
+            });
+            continue;
+        }
+
+        if let Some((conflicting_step, _)) = selected_scopes
+            .iter()
+            .find(|(_, scopes)| write_scopes_overlap(scopes, &action.write_scope))
+        {
+            held_back.push(WorkflowHeldBackStep {
+                step: step_id,
+                step_kind,
+                reason: format!("write scope overlaps with {conflicting_step}"),
+            });
+            continue;
+        }
+
+        selected_scopes.push((step_id.clone(), action.write_scope.clone()));
+        assignments.push(WorkflowSubagentBatchAssignment {
+            step: step_id.clone(),
+            step_kind: step_kind.clone(),
+            contract: agent_action_contract(workflow_id, &step_id, &step_kind, action, run_mode),
+            input: workflow_subagent_input(workflow_id, &step_id, action),
+        });
+    }
+
+    if assignments.len() > 1 {
+        Some(WorkflowNextAction::SubagentBatch {
+            assignments,
+            held_back,
+        })
+    } else {
+        None
+    }
+}
+
+fn write_scopes_overlap(left: &[PathBuf], right: &[PathBuf]) -> bool {
+    left.iter()
+        .any(|left| right.iter().any(|right| write_scope_overlaps(left, right)))
+}
+
+fn write_scope_overlaps(left: &Path, right: &Path) -> bool {
+    let left = normalize_write_scope(left);
+    let right = normalize_write_scope(right);
+
+    if is_broad_write_scope(&left) || is_broad_write_scope(&right) {
+        return true;
+    }
+    if left == right {
+        return true;
+    }
+
+    let left_prefix = left.strip_suffix("/**").unwrap_or(&left);
+    let right_prefix = right.strip_suffix("/**").unwrap_or(&right);
+    left_prefix == right_prefix
+        || left_prefix.starts_with(&format!("{right_prefix}/"))
+        || right_prefix.starts_with(&format!("{left_prefix}/"))
+}
+
+fn normalize_write_scope(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            std::path::Component::CurDir => None,
+            _ => Some("**"),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn is_broad_write_scope(scope: &str) -> bool {
+    matches!(scope, "" | "." | "**") || scope.contains("*") && !scope.ends_with("/**")
 }
 
 fn subagent_action_for_runnable_step(
@@ -2212,6 +2463,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_run_reports_readiness_summary_when_no_steps_are_runnable() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let workflows_root = write_no_runnable_workflow(temp.path());
+
+        let ctx = test_ctx(temp.path());
+        let output = run_action(
+            &workflows_root,
+            Some("no-runnable-workflow"),
+            WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
+            &ctx,
+        )
+        .await
+        .expect("run succeeds");
+        let text = output.text_content().expect("text output");
+        assert!(text.contains("No runnable workflow steps."), "{text}");
+        assert!(text.contains("Readiness summary:"), "{text}");
+        assert!(text.contains("- waiting: 2"), "{text}");
+        assert!(text.contains("- terminal: 0"), "{text}");
+        assert!(text.contains("step status is active"), "{text}");
+        assert!(text.contains("dependency `inspect` is active"), "{text}");
+
+        let next_action = &output.details["result"]["next_action"];
+        assert_eq!(next_action["kind"], "no_runnable_steps");
+        assert_eq!(next_action["summary"]["waiting"], 2);
+        assert_eq!(next_action["summary"]["terminal"], 0);
+        assert_eq!(
+            next_action["blocked_steps"][1]["reason_details"][0]["kind"],
+            "dependency_not_ready"
+        );
+    }
+
+    #[tokio::test]
     async fn workflow_complete_step_marks_step_checks_and_workflow_done() {
         let temp = tempfile::TempDir::new().expect("tempdir");
         let workflows_root = write_agent_action_workflow(temp.path());
@@ -2337,6 +2621,79 @@ mod tests {
         assert_eq!(
             output.details["result"]["next_action"]["input"]["child_run_id"],
             "workflow-agent-action-workflow-inspect"
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_run_renders_subagent_batch_for_parallel_action_steps() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let workflows_root = write_parallel_action_workflow(temp.path(), false);
+
+        let ctx = test_ctx(temp.path());
+        let output = run_action(
+            &workflows_root,
+            Some("parallel-action-workflow"),
+            WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::Subagents,
+            &ctx,
+        )
+        .await
+        .expect("run succeeds");
+        let text = output.text_content().expect("text output");
+        assert!(
+            text.contains("Workflow recommends 3 parallel subagent action(s)."),
+            "{text}"
+        );
+        assert!(text.contains("- cli [build]: CLI coder"), "{text}");
+        assert!(text.contains("- core [build]: Core coder"), "{text}");
+        assert_eq!(
+            output.details["result"]["next_action"]["kind"],
+            "subagent_batch"
+        );
+        assert_eq!(
+            output.details["result"]["next_action"]["assignments"]
+                .as_array()
+                .expect("assignments")
+                .len(),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_run_holds_back_overlapping_subagent_write_scope() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let workflows_root = write_parallel_action_workflow(temp.path(), true);
+
+        let ctx = test_ctx(temp.path());
+        let output = run_action(
+            &workflows_root,
+            Some("parallel-action-workflow"),
+            WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::Subagents,
+            &ctx,
+        )
+        .await
+        .expect("run succeeds");
+        let text = output.text_content().expect("text output");
+        assert!(
+            text.contains("Workflow recommends 2 parallel subagent action(s)."),
+            "{text}"
+        );
+        assert!(text.contains("Held back:"), "{text}");
+        assert!(text.contains("write scope overlaps with cli"), "{text}");
+        assert_eq!(
+            output.details["result"]["next_action"]["assignments"]
+                .as_array()
+                .expect("assignments")
+                .len(),
+            2
+        );
+        assert_eq!(
+            output.details["result"]["next_action"]["held_back"]
+                .as_array()
+                .expect("held back")
+                .len(),
+            1
         );
     }
 
@@ -2869,6 +3226,46 @@ closeout:
         );
     }
 
+    fn write_no_runnable_workflow(root: &Path) -> PathBuf {
+        let workflows_root = root.join(".imp/workflows");
+        let workflow_root = workflows_root.join("no-runnable-workflow");
+        std::fs::create_dir_all(&workflow_root).expect("create workflow root");
+        std::fs::write(
+            workflow_root.join("workflow.yaml"),
+            r#"schema: imp.workflow/v1
+id: no-runnable-workflow
+title: No runnable workflow
+status: active
+kind: test
+spec:
+  goal: Report readiness when blocked.
+  acceptance:
+    done:
+      text: Readiness is reported.
+      status: todo
+steps:
+  inspect:
+    kind: context
+    status: active
+  verify:
+    kind: verify
+    status: todo
+    depends_on:
+      - inspect
+checks: {}
+results:
+  path: .imp/workflows/no-runnable-workflow/results.md
+workers: {}
+closeout:
+  done:
+    requires:
+      - no_unapproved_goal_or_acceptance_changes
+"#,
+        )
+        .expect("write workflow");
+        workflows_root
+    }
+
     fn write_agent_action_workflow(root: &Path) -> PathBuf {
         let workflows_root = root.join(".imp/workflows");
         let workflow_root = workflows_root.join("agent-action-workflow");
@@ -2920,6 +3317,102 @@ closeout:
     requires:
       - inspected
 "#,
+        )
+        .expect("write workflow");
+        workflows_root
+    }
+
+    fn write_parallel_action_workflow(root: &Path, overlap: bool) -> PathBuf {
+        let workflows_root = root.join(".imp/workflows");
+        let workflow_root = workflows_root.join("parallel-action-workflow");
+        std::fs::create_dir_all(&workflow_root).expect("create workflow root");
+        let docs_scope = if overlap {
+            "crates/imp-cli/src/lib.rs"
+        } else {
+            "docs/workflows.md"
+        };
+        std::fs::write(
+            workflow_root.join("workflow.yaml"),
+            format!(
+                r#"schema: imp.workflow/v1
+id: parallel-action-workflow
+title: Parallel action workflow
+status: active
+kind: test
+spec:
+  goal: Dispatch parallel action steps.
+  acceptance:
+    done:
+      text: Parallel actions are dispatched.
+      status: todo
+      checks:
+        - cli_done
+        - core_done
+        - docs_done
+steps:
+  cli:
+    kind: build
+    status: ready
+    checks:
+      - cli_done
+    action:
+      kind: agent
+      role: CLI coder
+      objective: Update CLI workflow behavior.
+      write_scope:
+        - crates/imp-cli/src/lib.rs
+      completion:
+        checks:
+          - cli_done
+  core:
+    kind: build
+    status: ready
+    checks:
+      - core_done
+    action:
+      kind: agent
+      role: Core coder
+      objective: Update core workflow behavior.
+      write_scope:
+        - crates/imp-core/src/tools/workflow.rs
+      completion:
+        checks:
+          - core_done
+  docs:
+    kind: build
+    status: ready
+    checks:
+      - docs_done
+    action:
+      kind: agent
+      role: Docs writer
+      objective: Update workflow docs.
+      write_scope:
+        - {docs_scope}
+      completion:
+        checks:
+          - docs_done
+checks:
+  cli_done:
+    kind: review
+    status: pending
+  core_done:
+    kind: review
+    status: pending
+  docs_done:
+    kind: review
+    status: pending
+results:
+  path: .imp/workflows/parallel-action-workflow/results.md
+workers: {{}}
+closeout:
+  done:
+    requires:
+      - cli_done
+      - core_done
+      - docs_done
+"#
+            ),
         )
         .expect("write workflow");
         workflows_root
