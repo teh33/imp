@@ -193,7 +193,10 @@ impl WorkflowRunController {
     }
 
     pub fn record_workflow_orchestration_started(&mut self, run_id: Option<String>) {
-        let run_id = run_id.unwrap_or_else(|| "unknown".to_string());
+        let Some(run_id) = run_id.filter(|id| !id.trim().is_empty() && id != "unknown") else {
+            self.record_workflow_graph_changed();
+            return;
+        };
         self.update_child_run_status(&run_id, WorkflowChildRunStatus::Running);
     }
 
@@ -810,6 +813,23 @@ mod tests {
             WorkflowControllerDecision::Continue {
                 prompt: workflow_supervision_prompt(),
                 reason: ContinueReason::OrchestrationProgress,
+            }
+        );
+    }
+
+    #[test]
+    fn workflow_orchestration_without_concrete_run_id_does_not_create_phantom_child_run() {
+        let mut controller = WorkflowRunController::new();
+        controller.record_workflow_orchestration_started(None);
+        controller.record_workflow_orchestration_started(Some("unknown".into()));
+        controller.record_workflow_orchestration_started(Some("   ".into()));
+
+        assert!(controller.child_runs.is_empty());
+        assert_eq!(
+            controller.decide_next(),
+            WorkflowControllerDecision::Continue {
+                prompt: workflow_graph_closeout_prompt(),
+                reason: ContinueReason::WorkflowCloseout,
             }
         );
     }
