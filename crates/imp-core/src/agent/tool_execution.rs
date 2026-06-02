@@ -343,6 +343,7 @@ impl Agent {
             policy_context.metadata = metadata;
         }
         policy_context.mode = self.mode;
+        policy_context.policy = self.config.policy.clone();
         policy_context.apply_workflow_contract(self.workflow_contract());
 
         let policy_record =
@@ -458,12 +459,10 @@ impl Agent {
                     while let Some(update) = update_rx.recv().await {
                         for block in &update.content {
                             if let imp_llm::ContentBlock::Text { text } = block {
-                                let _ = event_tx
-                                    .send(AgentEvent::ToolOutputDelta {
-                                        tool_call_id: delta_call_id.clone(),
-                                        text: text.clone(),
-                                    })
-                                    .await;
+                                let _ = event_tx.send(AgentEvent::ToolOutputDelta {
+                                    tool_call_id: delta_call_id.clone(),
+                                    text: text.clone(),
+                                });
                             }
                         }
                     }

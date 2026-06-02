@@ -804,7 +804,6 @@ mod trace_tests {
                 resource_scope: crate::reference_monitor::ResourceScope::Command {
                     program: "bash".into(),
                 },
-                autonomy_mode: crate::workflow::AutonomyMode::Safe,
                 workflow_type: crate::workflow::WorkflowType::AdHoc,
                 risk_level: crate::workflow::RiskLevel::Low,
                 trust_scope: crate::reference_monitor::TrustScopeContext::default(),

@@ -144,7 +144,7 @@ pub struct Agent {
     /// Runtime-owned autonomy TODO list used to continue until obligations resolve.
     pub(crate) obligation_ledger: ObligationLedger,
 
-    event_tx: mpsc::Sender<AgentEvent>,
+    event_tx: mpsc::UnboundedSender<AgentEvent>,
     command_tx: mpsc::Sender<AgentCommand>,
     command_rx: mpsc::Receiver<AgentCommand>,
     cancel_token: Arc<std::sync::atomic::AtomicBool>,
@@ -152,7 +152,7 @@ pub struct Agent {
 
 /// Handle for controlling the agent from outside.
 pub struct AgentHandle {
-    pub event_rx: mpsc::Receiver<AgentEvent>,
+    pub event_rx: mpsc::UnboundedReceiver<AgentEvent>,
     pub command_tx: mpsc::Sender<AgentCommand>,
     pub cancel_token: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -173,7 +173,7 @@ enum RepeatedToolCallCheck {
 
 impl Agent {
     pub fn new(model: Model, cwd: PathBuf) -> (Self, AgentHandle) {
-        let (event_tx, event_rx) = mpsc::channel(256);
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::channel(32);
         let cancel_token = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut hooks = HookRunner::new();
@@ -181,11 +181,9 @@ impl Agent {
         hooks.set_background_reporter(Arc::new(move |event: HookBackgroundEvent| {
             let background_event_tx = background_event_tx.clone();
             tokio::spawn(async move {
-                let _ = background_event_tx
-                    .send(AgentEvent::Warning {
-                        message: event.to_string(),
-                    })
-                    .await;
+                let _ = background_event_tx.send(AgentEvent::Warning {
+                    message: event.to_string(),
+                });
             });
         }));
 
@@ -398,7 +396,7 @@ impl Agent {
             _ => {}
         }
         self.write_trace_event(&event);
-        let _ = self.event_tx.send(event).await;
+        let _ = self.event_tx.send(event);
     }
 
     fn write_trace_event(&self, event: &AgentEvent) {
@@ -442,7 +440,7 @@ impl Agent {
         self.write_trace_event(&AgentEvent::Timing {
             timing: timing.clone(),
         });
-        let _ = self.event_tx.send(AgentEvent::Timing { timing }).await;
+        let _ = self.event_tx.send(AgentEvent::Timing { timing });
     }
 
     pub async fn emit_recovery_checkpoint(&self, checkpoint: RecoveryCheckpoint) {
@@ -454,8 +452,7 @@ impl Agent {
         });
         let _ = self
             .event_tx
-            .send(AgentEvent::RecoveryCheckpoint { checkpoint })
-            .await;
+            .send(AgentEvent::RecoveryCheckpoint { checkpoint });
     }
 
     fn recovery_checkpoint(
@@ -1784,8 +1781,7 @@ mod tests {
         let evidence = std::fs::read_to_string(run_dir.join("evidence.md")).unwrap();
         assert!(evidence.contains("# Evidence Packet"));
         assert!(evidence.contains("Do the work"));
-        assert!(evidence.contains("**Autonomy:** allow-all"));
-        assert!(evidence.contains("allow-all mode was active"));
+        assert!(evidence.contains("config policy:"));
         assert!(evidence.contains("hard-rail bypass: none recorded"));
         assert!(evidence.contains("policy.checked trace events"));
         assert!(evidence.contains("trace.jsonl"));
@@ -1817,7 +1813,6 @@ mod tests {
         let events = events_task.await.unwrap();
 
         let policy = first_policy_record(&events).expect("policy checked");
-        assert_eq!(policy.autonomy_mode, crate::workflow::AutonomyMode::Safe);
         assert!(policy.decision.is_allowed());
         let result = first_tool_result(&events).expect("tool end event");
         assert!(!result.is_error);
@@ -1853,7 +1848,6 @@ mod tests {
         let events = events_task.await.unwrap();
 
         let policy = first_policy_record(&events).expect("policy checked");
-        assert_eq!(policy.autonomy_mode, crate::workflow::AutonomyMode::Safe);
         assert!(policy.decision.is_allowed());
         let result = first_tool_result(&events).expect("tool end event");
         assert!(!result.is_error);
@@ -1886,7 +1880,6 @@ mod tests {
         let events = events_task.await.unwrap();
 
         let policy = first_policy_record(&events).expect("policy checked");
-        assert_eq!(policy.autonomy_mode, crate::workflow::AutonomyMode::Safe);
         assert!(matches!(
             policy.decision,
             crate::reference_monitor::ToolPolicyDecision::Deny { .. }
@@ -1922,7 +1915,6 @@ mod tests {
         let events = events_task.await.unwrap();
 
         let policy = first_policy_record(&events).expect("policy checked");
-        assert_eq!(policy.autonomy_mode, crate::workflow::AutonomyMode::Safe);
         assert!(matches!(
             policy.decision,
             crate::reference_monitor::ToolPolicyDecision::Deny { .. }
@@ -1978,7 +1970,7 @@ mod tests {
         assert_eq!(result.details["policy"]["tool_name"], "extension_net");
         assert_eq!(
             result.details["policy"]["decision"]["reason"]["code"],
-            "extension_network_denied"
+            "policy_extension_network_denied"
         );
     }
 
@@ -2068,10 +2060,6 @@ mod tests {
             })
             .expect("policy checked event");
         assert_eq!(policy_event.tool_name, "write");
-        assert_eq!(
-            policy_event.autonomy_mode,
-            crate::workflow::AutonomyMode::default()
-        );
         assert!(matches!(
             policy_event.decision,
             crate::reference_monitor::ToolPolicyDecision::Deny { .. }
@@ -2419,6 +2407,38 @@ mod tests {
                 .workflow_orchestration_run_id_for_test(std::slice::from_ref(&result))
                 .as_deref(),
             Some("run-42")
+        );
+        assert!(agent.workflow_orchestration_started_for_test(std::slice::from_ref(&result)));
+    }
+
+    #[test]
+    fn native_workflow_run_result_without_child_run_id_counts_as_orchestration() {
+        let result = imp_llm::ToolResultMessage {
+            tool_call_id: "call_workflow".to_string(),
+            tool_name: "workflow".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "Workflow needs main agent action.".to_string(),
+            }],
+            is_error: false,
+            details: serde_json::json!({
+                "action": "run",
+                "id": "agent-action-workflow",
+                "status": "pending",
+                "result": {
+                    "next_action": { "kind": "agent_action" }
+                }
+            }),
+            timestamp: 0,
+        };
+
+        let agent = Agent::new(
+            test_model(Arc::new(MockProvider::new(vec![]))),
+            PathBuf::from("/tmp"),
+        )
+        .0;
+        assert_eq!(
+            agent.workflow_orchestration_run_id_for_test(std::slice::from_ref(&result)),
+            None
         );
         assert!(agent.workflow_orchestration_started_for_test(std::slice::from_ref(&result)));
     }

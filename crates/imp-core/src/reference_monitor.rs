@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::AgentMode;
+use crate::config::{AgentMode, PolicyAction, PolicyConfig};
 use crate::policy::{RunPolicy, ToolPolicyDecision as RunToolDecision, WritePolicyDecision};
-use crate::workflow::{AutonomyMode, RiskLevel, WorkflowContract, WorkflowType, WorkspaceScope};
+use crate::workflow::{RiskLevel, WorkflowContract, WorkflowType, WorkspaceScope};
 use crate::{guardrails::GuardrailLevel, hooks::HookResult, trust::Provenance};
 
 /// Central policy boundary for deciding whether a tool/action may proceed.
@@ -81,30 +81,13 @@ impl ReferenceMonitor {
         }
 
         if context.metadata.extension && context.metadata.network {
-            return match context.autonomy_mode {
-                AutonomyMode::AllowAll => ToolPolicyDecision::Allow {
-                    reasons: vec![PolicyReason::new(
-                        PolicySource::WorkflowAutonomy,
-                        "extension_network_allowed_allow_all",
-                        "TypeScript extension network capability allowed by allow-all autonomy.",
-                    )],
-                },
-                AutonomyMode::Suggest => self.ask_user_decision(
-                    "extension_network_requires_approval",
-                    "TypeScript extension network capability requires approval.",
-                ),
-                AutonomyMode::Safe
-                | AutonomyMode::LocalAuto
-                | AutonomyMode::WorktreeAuto
-                | AutonomyMode::AllowAllLocal
-                | AutonomyMode::Ci => ToolPolicyDecision::Deny {
-                    reason: PolicyReason::new(
-                        PolicySource::ToolManifest,
-                        "extension_network_denied",
-                        "TypeScript extension network capability is denied in this autonomy mode.",
-                    ),
-                },
-            };
+            return self.apply_policy_action(
+                context.policy.extension_network,
+                "policy_extension_network_requires_approval",
+                "Extension network capability requires approval by policy.",
+                "policy_extension_network_denied",
+                "Extension network capability is denied by policy.",
+            );
         }
 
         let trust_decision = self.check_trust_escalation(context);
@@ -112,9 +95,9 @@ impl ReferenceMonitor {
             return trust_decision;
         }
 
-        let autonomy_decision = self.check_autonomy(context);
-        if !autonomy_decision.is_allowed() {
-            return autonomy_decision;
+        let config_decision = self.check_config_policy(context);
+        if !config_decision.is_allowed() {
+            return config_decision;
         }
 
         ToolPolicyDecision::allow()
@@ -386,164 +369,109 @@ impl ReferenceMonitor {
         }
     }
 
-    fn check_autonomy(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
-        use AutonomyMode::*;
-        match context.autonomy_mode {
-            Suggest => match context.action_kind {
-                ToolActionKind::Read | ToolActionKind::Search | ToolActionKind::AskUser => {
-                    ToolPolicyDecision::allow()
-                }
-                _ => ToolPolicyDecision::Deny {
-                    reason: PolicyReason::new(
-                        PolicySource::WorkflowAutonomy,
-                        "autonomy_suggest_side_effect_denied",
-                        "Suggest mode does not execute side-effecting tools.",
-                    ),
-                },
+    fn check_config_policy(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
+        if !context.policy.allow_side_effects
+            && !matches!(
+                context.action_kind,
+                ToolActionKind::Read | ToolActionKind::Search | ToolActionKind::AskUser
+            )
+        {
+            return ToolPolicyDecision::Deny {
+                reason: PolicyReason::new(
+                    PolicySource::ConfigPolicy,
+                    "policy_side_effect_denied",
+                    "Side-effecting tool actions are denied by policy.",
+                ),
+            };
+        }
+
+        if context.metadata.secrets || context.action_kind == ToolActionKind::Secret {
+            return self.apply_policy_action(
+                context.policy.secrets,
+                "policy_secret_requires_approval",
+                "Secret access requires approval by policy.",
+                "policy_secret_denied",
+                "Secret reveal or direct secret access is denied by policy.",
+            );
+        }
+
+        if context.policy.deny_approval_required
+            && (context.metadata.requires_approval || context.metadata.default_requires_approval)
+        {
+            return ToolPolicyDecision::Deny {
+                reason: PolicyReason::new(
+                    PolicySource::ConfigPolicy,
+                    "policy_approval_required_denied",
+                    "This action would require approval, but approval-required actions are denied by policy.",
+                ),
+            };
+        }
+
+        if context.metadata.network
+            || matches!(context.resource_scope, ResourceScope::Network { .. })
+        {
+            return self.apply_policy_action(
+                context.policy.network,
+                "policy_network_requires_approval",
+                "Network actions require approval by policy.",
+                "policy_network_denied",
+                "Network actions are denied by policy.",
+            );
+        }
+
+        if context.metadata.workspace_write
+            || matches!(
+                context.action_kind,
+                ToolActionKind::Write | ToolActionKind::Edit
+            )
+        {
+            let action = if self.is_outside_workspace(context) {
+                context.policy.outside_workspace_writes
+            } else {
+                context.policy.workspace_writes
+            };
+            return self.apply_policy_action(
+                action,
+                "policy_write_requires_approval",
+                "File writes require approval by policy.",
+                "policy_write_denied",
+                "File writes are denied by policy.",
+            );
+        }
+
+        if context.action_kind == ToolActionKind::Execute || context.metadata.external_side_effect {
+            return self.apply_policy_action(
+                context.policy.shell,
+                "policy_shell_requires_approval",
+                "Shell or external side-effect actions require approval by policy.",
+                "policy_shell_denied",
+                "Shell or external side-effect actions are denied by policy.",
+            );
+        }
+
+        ToolPolicyDecision::allow()
+    }
+
+    fn apply_policy_action(
+        &self,
+        action: PolicyAction,
+        ask_code: &'static str,
+        ask_message: &'static str,
+        deny_code: &'static str,
+        deny_message: &'static str,
+    ) -> ToolPolicyDecision {
+        match action {
+            PolicyAction::Allow => ToolPolicyDecision::allow(),
+            PolicyAction::Ask => self.ask_user_decision(ask_code, ask_message),
+            PolicyAction::Deny => ToolPolicyDecision::Deny {
+                reason: PolicyReason::new(PolicySource::ConfigPolicy, deny_code, deny_message),
             },
-            Safe => ToolPolicyDecision::allow(),
-            LocalAuto | WorktreeAuto => self.check_local_auto(context),
-            AllowAllLocal => self.check_allow_all_local(context),
-            AllowAll => self.check_allow_all(context),
-            Ci => self.check_ci(context),
         }
-    }
-
-    fn check_local_auto(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
-        if context.metadata.secrets || context.action_kind == ToolActionKind::Secret {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_secret_denied",
-                    "Autonomy modes cannot reveal or directly access secrets.",
-                ),
-            };
-        }
-        if matches!(context.resource_scope, ResourceScope::Network { .. })
-            || context.metadata.network
-        {
-            return self.ask_user_decision(
-                "autonomy_network_requires_approval",
-                "Network actions require approval in local-auto mode.",
-            );
-        }
-        if self.is_outside_workspace(context) {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_outside_workspace_denied",
-                    "Autonomous writes outside the workspace are denied.",
-                ),
-            };
-        }
-        if context.autonomy_mode == AutonomyMode::WorktreeAuto
-            && !matches!(context.workspace_scope, WorkspaceScope::Worktree { .. })
-        {
-            return ToolPolicyDecision::SandboxOnly {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_worktree_required",
-                    "worktree-auto requires an isolated worktree. Worktree execution lands in 394.9; run in an existing worktree context or choose local-auto/safe for current-workspace execution.",
-                ),
-            };
-        }
-        ToolPolicyDecision::allow()
-    }
-
-    fn check_allow_all_local(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
-        if context.metadata.secrets || context.action_kind == ToolActionKind::Secret {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_secret_denied",
-                    "Allow-all modes still deny secret reveal or direct secret access.",
-                ),
-            };
-        }
-        if context.metadata.network
-            || matches!(context.resource_scope, ResourceScope::Network { .. })
-        {
-            return self.ask_user_decision(
-                "autonomy_network_requires_approval",
-                "Network actions require approval in allow-all-local mode.",
-            );
-        }
-        if self.is_outside_workspace(context) {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_outside_workspace_denied",
-                    "allow-all-local is scoped to the workspace/worktree.",
-                ),
-            };
-        }
-        ToolPolicyDecision::allow()
-    }
-
-    fn check_allow_all(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
-        if context.metadata.secrets || context.action_kind == ToolActionKind::Secret {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_secret_denied",
-                    "Allow-all still denies secret reveal or direct secret access.",
-                ),
-            };
-        }
-        if self.is_outside_workspace(context) && context.metadata.workspace_write {
-            return self.ask_user_decision(
-                "autonomy_outside_workspace_requires_approval",
-                "Outside-workspace writes require explicit approval in allow-all mode.",
-            );
-        }
-        ToolPolicyDecision::allow()
-    }
-
-    fn check_ci(&self, context: &ToolPolicyContext) -> ToolPolicyDecision {
-        if context.metadata.secrets || context.action_kind == ToolActionKind::Secret {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_secret_denied",
-                    "CI mode cannot reveal or directly access secrets.",
-                ),
-            };
-        }
-        if context.metadata.network
-            || matches!(context.resource_scope, ResourceScope::Network { .. })
-        {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_ci_network_denied",
-                    "CI mode denies network actions unless future trusted configuration grants them.",
-                ),
-            };
-        }
-        if context.metadata.requires_approval || context.metadata.default_requires_approval {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_ci_approval_denied",
-                    "CI mode fails closed when an action would require approval.",
-                ),
-            };
-        }
-        if self.is_outside_workspace(context) {
-            return ToolPolicyDecision::Deny {
-                reason: PolicyReason::new(
-                    PolicySource::WorkflowAutonomy,
-                    "autonomy_outside_workspace_denied",
-                    "CI mode denies outside-workspace writes.",
-                ),
-            };
-        }
-        ToolPolicyDecision::allow()
     }
 
     fn ask_user_decision(&self, code: &'static str, message: &'static str) -> ToolPolicyDecision {
         ToolPolicyDecision::AskUser {
-            reason: PolicyReason::new(PolicySource::WorkflowAutonomy, code, message),
+            reason: PolicyReason::new(PolicySource::ConfigPolicy, code, message),
         }
     }
 
@@ -554,6 +482,9 @@ impl ReferenceMonitor {
         let Some(path) = context.resource_scope.path() else {
             return false;
         };
+        if path.as_os_str().is_empty() {
+            return false;
+        }
         !path.starts_with(cwd)
     }
 }
@@ -572,7 +503,7 @@ pub struct ToolPolicyContext {
     pub cwd: Option<PathBuf>,
     pub resource_scope: ResourceScope,
     pub mode: AgentMode,
-    pub autonomy_mode: AutonomyMode,
+    pub policy: PolicyConfig,
     pub workflow_type: WorkflowType,
     pub risk_level: RiskLevel,
     pub workspace_scope: WorkspaceScope,
@@ -598,7 +529,7 @@ impl ToolPolicyContext {
             cwd: None,
             resource_scope: ResourceScope::default(),
             mode: AgentMode::default(),
-            autonomy_mode: AutonomyMode::default(),
+            policy: PolicyConfig::default(),
             workflow_type: WorkflowType::default(),
             risk_level: RiskLevel::default(),
             workspace_scope: WorkspaceScope::default(),
@@ -612,7 +543,6 @@ impl ToolPolicyContext {
             .id
             .clone()
             .or_else(|| contract.workflow_unit_ref.clone());
-        self.autonomy_mode = contract.autonomy_mode;
         self.workflow_type = contract.workflow_type;
         self.risk_level = contract.risk_level;
         self.workspace_scope = contract.workspace_scope.clone();
@@ -1035,6 +965,7 @@ pub enum PolicySource {
     Hook,
     Schema,
     Guardrail,
+    ConfigPolicy,
     WorkflowAutonomy,
     TrustLabel,
     ToolManifest,
@@ -1084,7 +1015,6 @@ pub struct PolicyTraceRecord {
     pub decision: ToolPolicyDecision,
     pub args_hash: Option<String>,
     pub resource_scope: ResourceScope,
-    pub autonomy_mode: AutonomyMode,
     pub workflow_type: WorkflowType,
     pub risk_level: RiskLevel,
     pub trust_scope: TrustScopeContext,
@@ -1104,7 +1034,6 @@ impl PolicyTraceRecord {
             decision,
             args_hash: context.args_hash.clone(),
             resource_scope: context.resource_scope.clone(),
-            autonomy_mode: context.autonomy_mode,
             workflow_type: context.workflow_type,
             risk_level: context.risk_level,
             trust_scope: context.trust_scope.clone(),
@@ -1122,7 +1051,6 @@ impl PolicyTraceRecord {
                 "decision": self.decision,
                 "resource_scope": self.resource_scope_summary(),
                 "args_hash": self.args_hash,
-                "autonomy_mode": self.autonomy_mode,
                 "workflow_type": self.workflow_type,
                 "risk_level": self.risk_level,
                 "trust_scope": self.trust_scope,
@@ -1255,12 +1183,12 @@ mod reference_monitor_types_tests {
     }
 
     #[test]
-    fn extension_secret_capability_is_denied_before_autonomy() {
+    fn extension_secret_capability_is_denied_before_config_policy() {
         let monitor = ReferenceMonitor;
         let mut context = ToolPolicyContext::new("secret_ext", ToolActionKind::Extension);
         context.metadata.extension = true;
         context.metadata.secrets = true;
-        context.autonomy_mode = AutonomyMode::AllowAll;
+        context.policy.secrets = PolicyAction::Allow;
 
         let decision = monitor.check_tool_action(&context, &RunPolicy::default());
         assert!(matches!(
@@ -1270,33 +1198,31 @@ mod reference_monitor_types_tests {
     }
 
     #[test]
-    fn extension_network_capability_requires_policy_grant() {
+    fn extension_network_capability_uses_config_policy() {
         let monitor = ReferenceMonitor;
         let mut context = ToolPolicyContext::new("net_ext", ToolActionKind::Extension);
         context.metadata.extension = true;
         context.metadata.network = true;
-        context.autonomy_mode = AutonomyMode::Safe;
 
         let decision = monitor.check_tool_action(&context, &RunPolicy::default());
         assert!(matches!(
             decision,
-            ToolPolicyDecision::Deny { reason } if reason.code == "extension_network_denied"
+            ToolPolicyDecision::Deny { reason } if reason.code == "policy_extension_network_denied"
         ));
 
-        context.autonomy_mode = AutonomyMode::AllowAll;
+        context.policy.extension_network = PolicyAction::Allow;
         let decision = monitor.check_tool_action(&context, &RunPolicy::default());
         assert!(matches!(decision, ToolPolicyDecision::Allow { .. }));
     }
 
     #[test]
-    fn safe_mode_allows_extension_readonly_capability() {
+    fn config_policy_allows_extension_readonly_capability() {
         let monitor = ReferenceMonitor;
         let mut context = ToolPolicyContext::new("readonly_ext", ToolActionKind::Read);
         context.metadata.extension = true;
         context.metadata.readonly = true;
         context.metadata.external_side_effect = false;
         context.metadata.workspace_write = false;
-        context.autonomy_mode = AutonomyMode::Safe;
 
         let decision = monitor.check_tool_action(&context, &RunPolicy::default());
         assert!(matches!(decision, ToolPolicyDecision::Allow { .. }));
@@ -1455,7 +1381,7 @@ mod reference_monitor_types_tests {
     #[test]
     fn reference_monitor_context_defaults_preserve_absent_contract_behavior() {
         let context = ToolPolicyContext::new("read", ToolActionKind::Read);
-        assert_eq!(context.autonomy_mode, AutonomyMode::Safe);
+        assert_eq!(context.policy, PolicyConfig::default());
         assert_eq!(context.workflow_type, WorkflowType::AdHoc);
         assert_eq!(context.risk_level, RiskLevel::Unknown);
         assert_eq!(context.workspace_scope, WorkspaceScope::CurrentDirectory);
@@ -1471,10 +1397,9 @@ mod reference_monitor_types_tests {
     }
 
     #[test]
-    fn reference_monitor_context_accepts_allow_all_placeholder_without_enforcing_it() {
-        let mut contract = WorkflowContract::implicit("autonomous local work")
-            .with_autonomy_mode(AutonomyMode::AllowAll);
-        contract.id = Some("wf-allow-all".into());
+    fn reference_monitor_context_accepts_workflow_contract_without_policy_mode() {
+        let mut contract = WorkflowContract::implicit("local work");
+        contract.id = Some("wf-config-policy".into());
         contract.workflow_type = WorkflowType::CodeChange;
         contract.risk_level = RiskLevel::High;
         contract.trust_scope.allow_external_context = false;
@@ -1482,8 +1407,7 @@ mod reference_monitor_types_tests {
 
         let context = ToolPolicyContext::new("bash", ToolActionKind::Execute)
             .with_workflow_contract(&contract);
-        assert_eq!(context.workflow_id.as_deref(), Some("wf-allow-all"));
-        assert_eq!(context.autonomy_mode, AutonomyMode::AllowAll);
+        assert_eq!(context.workflow_id.as_deref(), Some("wf-config-policy"));
         assert_eq!(context.workflow_type, WorkflowType::CodeChange);
         assert_eq!(context.risk_level, RiskLevel::High);
         assert_eq!(context.workspace_scope, contract.workspace_scope);
@@ -1491,23 +1415,18 @@ mod reference_monitor_types_tests {
         assert!(context
             .trust_labels
             .contains(&"external-context-blocked".to_string()));
-        assert!(
-            ReferenceMonitor
-                .check_tool_action(&context, &RunPolicy::new())
-                .is_allowed(),
-            "allow-all is passed through as context only in 394.5.8"
-        );
+        assert!(ReferenceMonitor
+            .check_tool_action(&context, &RunPolicy::new())
+            .is_allowed());
     }
 
     #[test]
     fn policy_trace_record_includes_trust_scope_and_labels() {
-        let mut contract = WorkflowContract::implicit("trusted review")
-            .with_autonomy_mode(AutonomyMode::LocalAuto);
+        let mut contract = WorkflowContract::implicit("trusted review");
         contract.trust_scope.low_trust_requires_review = false;
         let context =
             ToolPolicyContext::new("read", ToolActionKind::Read).with_workflow_contract(&contract);
         let record = PolicyTraceRecord::from_context(&context, ToolPolicyDecision::allow());
-        assert_eq!(record.autonomy_mode, AutonomyMode::LocalAuto);
         assert!(!record.trust_scope.low_trust_requires_review);
         assert!(record
             .trust_labels
@@ -1570,7 +1489,7 @@ mod reference_monitor_types_tests {
     }
 
     #[test]
-    fn dangerous_grant_records_fail_closed_above_allow_all() {
+    fn dangerous_grant_records_fail_closed_above_config_policy() {
         let monitor = ReferenceMonitor;
         let context = ToolPolicyContext::new("bash", ToolActionKind::Execute);
         let rails = [
@@ -1621,94 +1540,84 @@ mod reference_monitor_types_tests {
     }
 
     #[test]
-    fn autonomy_reference_monitor_maps_representative_tool_classes() {
+    fn config_policy_maps_representative_tool_classes() {
         let monitor = ReferenceMonitor;
         let policy = RunPolicy::new();
 
-        let read = test_context(AutonomyMode::Suggest, "read", ToolActionKind::Read);
+        let read = test_context("read", ToolActionKind::Read);
         assert!(monitor.check_tool_action(&read, &policy).is_allowed());
 
-        let write = test_context(AutonomyMode::Suggest, "write", ToolActionKind::Write);
+        let mut write = test_context("write", ToolActionKind::Write);
+        write.policy.allow_side_effects = false;
         assert_reason_code(
             monitor.check_tool_action(&write, &policy),
-            "autonomy_suggest_side_effect_denied",
+            "policy_side_effect_denied",
         );
 
-        let local_write = test_context(AutonomyMode::LocalAuto, "write", ToolActionKind::Write);
+        let local_write = test_context("write", ToolActionKind::Write);
         assert!(monitor
             .check_tool_action(&local_write, &policy)
             .is_allowed());
 
-        let mut local_network =
-            test_context(AutonomyMode::LocalAuto, "web", ToolActionKind::Network);
-        local_network.metadata.network = true;
-        local_network.resource_scope = ResourceScope::Network {
+        let mut network = test_context("web", ToolActionKind::Network);
+        network.metadata.network = true;
+        network.resource_scope = ResourceScope::Network {
             host: Some("example.com".into()),
         };
+        network.policy.network = PolicyAction::Ask;
         assert_reason_code(
-            monitor.check_tool_action(&local_network, &policy),
-            "autonomy_network_requires_approval",
+            monitor.check_tool_action(&network, &policy),
+            "policy_network_requires_approval",
         );
 
-        let mut secret = test_context(AutonomyMode::AllowAll, "secret", ToolActionKind::Secret);
+        let mut secret = test_context("secret", ToolActionKind::Secret);
         secret.metadata.secrets = true;
         assert_reason_code(
             monitor.check_tool_action(&secret, &policy),
-            "autonomy_secret_denied",
+            "policy_secret_denied",
         );
 
-        let mut ci_bash = test_context(AutonomyMode::Ci, "bash", ToolActionKind::Execute);
-        ci_bash.metadata.default_requires_approval = true;
+        let mut ci_like = test_context("bash", ToolActionKind::Execute);
+        ci_like.metadata.default_requires_approval = true;
+        ci_like.policy.deny_approval_required = true;
         assert_reason_code(
-            monitor.check_tool_action(&ci_bash, &policy),
-            "autonomy_ci_approval_denied",
+            monitor.check_tool_action(&ci_like, &policy),
+            "policy_approval_required_denied",
         );
     }
 
     #[test]
-    fn autonomy_reference_monitor_handles_outside_workspace_and_worktree_placeholder() {
+    fn config_policy_handles_outside_workspace_writes() {
         let monitor = ReferenceMonitor;
         let policy = RunPolicy::new();
 
-        let mut outside = test_context(AutonomyMode::AllowAllLocal, "write", ToolActionKind::Write);
+        let mut outside = test_context("write", ToolActionKind::Write);
         outside.cwd = Some(std::path::PathBuf::from("/repo"));
         outside.resource_scope = ResourceScope::File {
             path: std::path::PathBuf::from("/tmp/file"),
         };
         assert_reason_code(
             monitor.check_tool_action(&outside, &policy),
-            "autonomy_outside_workspace_denied",
+            "policy_write_denied",
         );
 
-        let worktree = test_context(AutonomyMode::WorktreeAuto, "write", ToolActionKind::Write);
-        let decision = monitor.check_tool_action(&worktree, &policy);
-        assert_reason_code(decision.clone(), "autonomy_worktree_required");
-        let message = policy_decision_reason(&decision).unwrap().message;
-        assert!(message.contains("394.9"));
-        assert!(message.contains("local-auto"));
-
-        let read_worktree = test_context(AutonomyMode::WorktreeAuto, "read", ToolActionKind::Read);
+        outside.policy.outside_workspace_writes = PolicyAction::Ask;
         assert_reason_code(
-            monitor.check_tool_action(&read_worktree, &policy),
-            "autonomy_worktree_required",
+            monitor.check_tool_action(&outside, &policy),
+            "policy_write_requires_approval",
         );
-
-        let mut isolated = worktree.clone();
-        isolated.workspace_scope = WorkspaceScope::Worktree {
-            path: std::path::PathBuf::from("/repo-worktree"),
-            branch: Some("workflow".into()),
-        };
-        assert!(monitor.check_tool_action(&isolated, &policy).is_allowed());
     }
 
     #[test]
-    fn autonomy_safe_preserves_existing_run_policy_precedence() {
+    fn config_policy_preserves_existing_run_policy_precedence() {
         let monitor = ReferenceMonitor;
-        let mut safe = test_context(AutonomyMode::Safe, "bash", ToolActionKind::Execute);
+        let mut safe = test_context("bash", ToolActionKind::Execute);
         safe.metadata.default_requires_approval = true;
-        assert!(monitor
-            .check_tool_action(&safe, &RunPolicy::new())
-            .is_allowed());
+        safe.policy.deny_approval_required = true;
+        assert!(matches!(
+            monitor.check_tool_action(&safe, &RunPolicy::new()),
+            ToolPolicyDecision::Deny { .. }
+        ));
 
         assert_reason_code(
             monitor.check_tool_action(&safe, &RunPolicy::new().deny_tool("bash")),
@@ -1716,9 +1625,8 @@ mod reference_monitor_types_tests {
         );
     }
 
-    fn test_context(mode: AutonomyMode, name: &str, kind: ToolActionKind) -> ToolPolicyContext {
+    fn test_context(name: &str, kind: ToolActionKind) -> ToolPolicyContext {
         let mut context = ToolPolicyContext::new(name, kind);
-        context.autonomy_mode = mode;
         context.metadata = ToolMetadata::for_tool_name(
             name,
             matches!(kind, ToolActionKind::Read | ToolActionKind::Search),
@@ -1732,17 +1640,6 @@ mod reference_monitor_types_tests {
             };
         }
         context
-    }
-
-    fn policy_decision_reason(decision: &ToolPolicyDecision) -> Option<PolicyReason> {
-        match decision {
-            ToolPolicyDecision::Allow { .. } => None,
-            ToolPolicyDecision::Deny { reason }
-            | ToolPolicyDecision::AskUser { reason }
-            | ToolPolicyDecision::DryRunOnly { reason }
-            | ToolPolicyDecision::SandboxOnly { reason }
-            | ToolPolicyDecision::RequireVerification { reason } => Some(reason.clone()),
-        }
     }
 
     fn assert_reason_code(decision: ToolPolicyDecision, code: &str) {
@@ -1818,7 +1715,7 @@ mod reference_monitor_types_tests {
         let context = ToolPolicyContext::new("mystery", ToolActionKind::Unknown);
         assert_eq!(context.tool_name, "mystery");
         assert_eq!(context.mode, AgentMode::Full);
-        assert_eq!(context.autonomy_mode, AutonomyMode::default());
+        assert_eq!(context.policy, PolicyConfig::default());
         assert_eq!(context.resource_scope, ResourceScope::None);
         assert_eq!(
             context.metadata,

@@ -1,0 +1,31 @@
+1. **MCP ecosystem support**
+   - Goose has broader MCP-based extension/app interoperability.
+   - `imp` has Lua/local extensions, but needs stronger external ecosystem compatibility.
+
+2. **Desktop/product UX**
+   - Goose has a more complete graphical product surface: extensions, recipes, apps, scheduler, settings.
+   - `imp` is mainly TUI/CLI/RPC.
+
+3. **Shareable reusable automations**
+   - Goose recipes are packaged, parameterized, shareable, importable, schedulable units.
+   - `imp` workflows are strong locally, but less distribution-oriented.
+
+4. **Scheduler**
+   - Goose has first-class scheduled recipes with UI/CLI management.
+   - `imp` needs equivalent recurring automation if that matters.
+
+5. **Interactive app/UI runtime**
+   - Goose supports MCP Apps, sandboxed standalone HTML apps, and inline MCP UI.
+   - `imp` would need an app surface or UI-extension story beyond terminal/TUI.
+
+6. **User-facing permission management**
+   - Goose exposes permission modes/tool permissions as product features.
+   - `imp` has policy concepts, but needs equally polished user-facing controls.
+
+7. **OS-level sandboxing**
+   - Goose Desktop has optional macOS sandboxing.
+   - `imp` would need comparable containment if targeting safer autonomy.
+
+8. **Documentation/shareability/onboarding**
+   - Goose is better packaged for other users.
+   - `imp` needs more “someone else can install, understand, configure, and trust this” polish.

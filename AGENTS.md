@@ -47,7 +47,26 @@ Useful docs:
 - `README.md`
 - `imp_ontology.md`
 - `imp_rebuild_plan.md`
+- `docs/design/imp-core-crate-boundary-plan.md`
 - `../docs/architecture/mana-platform-target-architecture.md`
+
+## Architecture guardrails
+
+Use `docs/design/imp-core-crate-boundary-plan.md` as the current crate-boundary planning note. It is a proposal, not a command to split crates preemptively, but new architecture work should preserve its intent unless there is a better inspected reason.
+
+- Keep product-facing behavior cohesive. Native model-facing tools should stay together; extract heavy engines underneath them rather than scattering tool UX across many crates.
+- Treat `imp-core` as the domain/API center, not the default home for every implementation detail. New heavyweight dependencies should not be added to `imp-core` without a clear boundary rationale.
+- Prefer composition boundaries such as `imp-bin`, `imp-runtime`, `imp-state`, `imp-tools`, and `imp-codeintel` when they make dependencies, hostability, or testing cleaner.
+- Distinguish live runtime from durable graph/state: runtime owns turn execution, cancellation, tool dispatch, and event flow; state owns sessions, indexes, memory, traces, and evidence artifacts.
+- Keep headless/RPC behavior separable from TUI behavior. Avoid introducing new `imp-cli -> imp-tui` coupling; compose user-facing modes at the binary/application boundary.
+- Do not create microcrates just to reduce line count. Split when it removes dependency pressure, clarifies ownership, improves testability, or protects a stable API seam.
+- When a change materially affects crate boundaries, public SDK shape, durable formats, extension contracts, or runtime/state ownership, update the relevant architecture docs in the same change.
+
+For crate-boundary work, include a short rationale in the change summary or docs that answers:
+- what dependency or ownership pressure is being reduced;
+- which public behavior is preserved;
+- which checks prove the moved behavior still works;
+- whether compatibility re-exports are temporary or intended API.
 
 ## Execution standard
 

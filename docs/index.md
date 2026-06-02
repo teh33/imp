@@ -13,6 +13,10 @@ This directory contains technical reference pages for imp. README.md is the entr
 - [Lua extensions](extensions-lua.md) — shipped Lua extension runtime, load paths, custom tools, slash commands, hooks, and capabilities.
 - [Architecture](architecture.md) — crate responsibilities, runtime flow, provider layer, workflow core, UI/CLI/RPC surfaces, and extension runtime.
 
+## Architecture planning
+
+- [Crate boundary plan](design/imp-core-crate-boundary-plan.md) — proposed `imp-core` split, including `imp-bin`, `imp-runtime`, `imp-state`, `imp-codeintel`, and `imp-tools` boundaries.
+
 ## Existing design notes
 
 The repository also contains older design, rebuild, and proposal notes under `docs/design/`, `docs/rebuild/`, and `docs/proposals/`. Those files are useful for historical context, but the core references above should be treated as the current technical overview unless a lower-level source file says otherwise.

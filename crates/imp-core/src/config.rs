@@ -293,6 +293,75 @@ pub struct AllowedCommandSecret {
     pub name: String,
 }
 
+/// Policy decision configured for a capability class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicyAction {
+    #[default]
+    Allow,
+    Ask,
+    Deny,
+}
+
+/// Explicit runtime policy settings for tool and capability decisions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyConfig {
+    /// Whether side-effecting tool actions are allowed at all.
+    #[serde(default = "default_true")]
+    pub allow_side_effects: bool,
+    /// Policy for writes inside the current workspace.
+    #[serde(default)]
+    pub workspace_writes: PolicyAction,
+    /// Policy for writes outside the current workspace. Defaults to deny.
+    #[serde(default = "default_policy_deny")]
+    pub outside_workspace_writes: PolicyAction,
+    /// Policy for shell/execute actions.
+    #[serde(default)]
+    pub shell: PolicyAction,
+    /// Policy for network actions. Defaults to allow for normal user ergonomics.
+    #[serde(default)]
+    pub network: PolicyAction,
+    /// Policy for secret reveal/direct secret access. Defaults to deny.
+    #[serde(default = "default_policy_deny")]
+    pub secrets: PolicyAction,
+    /// Policy for extension-declared network capability. Defaults to deny.
+    #[serde(default = "default_policy_deny")]
+    pub extension_network: PolicyAction,
+    /// Deny actions that would require approval in noninteractive contexts.
+    #[serde(default)]
+    pub deny_approval_required: bool,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            allow_side_effects: true,
+            workspace_writes: PolicyAction::Allow,
+            outside_workspace_writes: PolicyAction::Deny,
+            shell: PolicyAction::Allow,
+            network: PolicyAction::Allow,
+            secrets: PolicyAction::Deny,
+            extension_network: PolicyAction::Deny,
+            deny_approval_required: false,
+        }
+    }
+}
+
+fn default_policy_deny() -> PolicyAction {
+    PolicyAction::Deny
+}
+
+impl std::fmt::Display for PolicyAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            PolicyAction::Allow => "allow",
+            PolicyAction::Ask => "ask",
+            PolicyAction::Deny => "deny",
+        };
+        f.write_str(value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkflowScopePreference {
@@ -450,6 +519,10 @@ pub struct Config {
     /// Secret injection policy for native command execution.
     #[serde(default)]
     pub secrets: SecretsConfig,
+
+    /// Explicit runtime policy settings for tool and capability decisions.
+    #[serde(default)]
+    pub policy: PolicyConfig,
 
     /// Personality settings, including identity sentence and saved profiles.
     #[serde(default)]

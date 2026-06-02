@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{Agent, AgentCommand, AgentEvent, AgentHandle, RunFinalStatus};
+use crate::agent::{
+    Agent, AgentCommand, AgentEvent, AgentHandle, ParentRunId, RunFinalStatus, SubagentArtifactRef,
+    SubagentContext, SubagentEvent, SubagentInput, SubagentMergePolicy, SubagentResourceLimits,
+    SubagentRole, SubagentRunId, SubagentStatus,
+};
 use crate::error::Result;
 use crate::roles::{Role, RoleRegistry, RoleRegistryError, RoleToolPolicy};
 use crate::workflow::{AutonomyMode, VerificationRequirement, WorkflowContract, WorkflowType};
@@ -420,6 +424,165 @@ pub struct ChildWorkflowExecutionResult {
     pub final_status: Option<RunFinalStatus>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowSubagentSpawn {
+    pub input: SubagentInput,
+    pub started_event: SubagentEvent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowSubagentCompletion {
+    pub status: SubagentStatus,
+    pub summary: String,
+    pub event: SubagentEvent,
+}
+
+pub fn workflow_subagent_input(
+    workflow_id: &str,
+    step_id: &str,
+    action: &crate::workflow::WorkflowStepAction,
+) -> SubagentInput {
+    let child_run_id = SubagentRunId::new(format!("workflow-{workflow_id}-{step_id}"));
+    let role = subagent_role(action.role.as_deref(), action.worker.as_deref());
+    SubagentInput {
+        parent_run_id: ParentRunId::new(format!("workflow-{workflow_id}")),
+        child_run_id,
+        role,
+        objective: action.objective.clone(),
+        context: SubagentContext {
+            instructions: action.instructions.clone(),
+            messages: vec![format!(
+                "Workflow `{workflow_id}` delegated step `{step_id}`. Report progress, blockers, evidence, and final outcome through the workflow communication mailbox."
+            )],
+            files: Vec::new(),
+            artifacts: action
+                .completion
+                .artifacts
+                .iter()
+                .map(|path| SubagentArtifactRef {
+                    name: path.display().to_string(),
+                    path: Some(path.clone()),
+                    description: Some("required completion artifact".to_string()),
+                })
+                .collect(),
+        },
+        resource_limits: SubagentResourceLimits {
+            writable_paths: action.write_scope.clone(),
+            allowed_paths: action.write_scope.clone(),
+            ..SubagentResourceLimits::default()
+        },
+        merge_policy: merge_policy_for_role(action.role.as_deref()),
+        output_contract: Some(format!(
+            "Complete workflow `{workflow_id}` step `{step_id}`. Required checks: {}. Required artifacts: {}.",
+            action.completion.checks.join(", "),
+            action
+                .completion
+                .artifacts
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+pub fn workflow_subagent_spawn(
+    workflow_id: &str,
+    step_id: &str,
+    action: &crate::workflow::WorkflowStepAction,
+) -> WorkflowSubagentSpawn {
+    let input = workflow_subagent_input(workflow_id, step_id, action);
+    let started_event = SubagentEvent::Started {
+        child_run_id: input.child_run_id.clone(),
+        role: input.role.clone(),
+        objective: input.objective.clone(),
+    };
+    WorkflowSubagentSpawn {
+        input,
+        started_event,
+    }
+}
+
+pub fn workflow_subagent_completion(
+    input: &SubagentInput,
+    final_status: Option<&RunFinalStatus>,
+) -> WorkflowSubagentCompletion {
+    let status = subagent_status_from_final_status(final_status);
+    let summary = match final_status {
+        Some(RunFinalStatus::Done { reason }) => {
+            format!("subagent completed: {}", reason.as_str())
+        }
+        Some(RunFinalStatus::DoneWithConcerns { concerns, .. }) => {
+            format!("subagent completed with concerns: {}", concerns.join("; "))
+        }
+        Some(RunFinalStatus::Blocked { message, .. }) => format!("subagent blocked: {message}"),
+        Some(RunFinalStatus::NeedsUserInput { question }) => {
+            format!("subagent needs user input: {question}")
+        }
+        Some(RunFinalStatus::Failed { message }) => format!("subagent failed: {message}"),
+        Some(RunFinalStatus::Cancelled) => "subagent cancelled".to_string(),
+        None => "subagent ended without a final status".to_string(),
+    };
+    let event = SubagentEvent::Completed {
+        outcome: crate::agent::SubagentOutcome {
+            child_run_id: input.child_run_id.clone(),
+            role: input.role.clone(),
+            status: status.clone(),
+            summary: summary.clone(),
+            evidence: input.context.artifacts.clone(),
+            files_changed: input.resource_limits.writable_paths.clone(),
+            files_inspected: input.resource_limits.allowed_paths.clone(),
+            verification_results: Vec::new(),
+            blockers: match status {
+                SubagentStatus::Blocked => vec![summary.clone()],
+                _ => Vec::new(),
+            },
+            follow_ups: Vec::new(),
+            diagnostics: Vec::new(),
+            confidence: None,
+        },
+    };
+    WorkflowSubagentCompletion {
+        status,
+        summary,
+        event,
+    }
+}
+
+fn subagent_role(role: Option<&str>, worker: Option<&str>) -> SubagentRole {
+    match role.or(worker).unwrap_or("worker") {
+        "searcher" | "researcher" => SubagentRole::Searcher,
+        "planner" => SubagentRole::Planner,
+        "coder" | "builder" | "implementer" => SubagentRole::Implementer,
+        "verifier" => SubagentRole::Verifier,
+        "reviewer" => SubagentRole::Reviewer,
+        "synthesizer" => SubagentRole::Synthesizer,
+        other => SubagentRole::Custom(other.to_string()),
+    }
+}
+
+fn merge_policy_for_role(role: Option<&str>) -> SubagentMergePolicy {
+    match role.unwrap_or("worker") {
+        "verifier" => SubagentMergePolicy::Verify,
+        "reviewer" => SubagentMergePolicy::Review,
+        "synthesizer" => SubagentMergePolicy::Synthesize,
+        "coder" | "builder" | "implementer" => SubagentMergePolicy::Apply,
+        other => SubagentMergePolicy::Custom(other.to_string()),
+    }
+}
+
+fn subagent_status_from_final_status(status: Option<&RunFinalStatus>) -> SubagentStatus {
+    match status {
+        Some(RunFinalStatus::Done { .. }) => SubagentStatus::Success,
+        Some(RunFinalStatus::DoneWithConcerns { .. }) => SubagentStatus::Incomplete,
+        Some(RunFinalStatus::Blocked { .. }) | Some(RunFinalStatus::NeedsUserInput { .. }) => {
+            SubagentStatus::Blocked
+        }
+        Some(RunFinalStatus::Cancelled) => SubagentStatus::Cancelled,
+        Some(RunFinalStatus::Failed { .. }) | None => SubagentStatus::Failed,
+    }
+}
+
 pub struct ChildWorkflowRunner {
     pub run: ChildWorkflowRun,
     pub agent: Agent,
@@ -704,10 +867,83 @@ mod tests {
     use crate::agent::{RunFinalStatus, StopReason};
     use crate::config::Config;
 
-    use crate::workflow::{AutonomyMode, ToolPermissionSet, WorkflowType};
+    use crate::workflow::{AutonomyMode, ToolPermissionSet, WorkflowStepAction, WorkflowType};
 
     fn registry() -> RoleRegistry {
         Config::default().role_registry().unwrap()
+    }
+
+    #[test]
+    fn workflow_subagent_spawn_builds_bounded_input_and_started_event() {
+        let action = WorkflowStepAction {
+            kind: crate::workflow::WorkflowStepActionKind::Agent,
+            role: Some("verifier".into()),
+            worker: None,
+            objective: "Verify workflow dispatch".into(),
+            instructions: vec!["Run the focused workflow tests.".into()],
+            write_scope: vec![PathBuf::from(".imp/workflows/demo/results.md")],
+            completion: crate::workflow::WorkflowStepActionCompletion {
+                checks: vec!["tests_passed".into()],
+                artifacts: vec![PathBuf::from(".imp/workflows/demo/results.md")],
+            },
+        };
+
+        let spawn = workflow_subagent_spawn("demo", "verify", &action);
+
+        assert_eq!(spawn.input.parent_run_id.as_str(), "workflow-demo");
+        assert_eq!(spawn.input.child_run_id.as_str(), "workflow-demo-verify");
+        assert_eq!(spawn.input.role, SubagentRole::Verifier);
+        assert_eq!(spawn.input.merge_policy, SubagentMergePolicy::Verify);
+        assert_eq!(
+            spawn.input.resource_limits.writable_paths,
+            action.write_scope
+        );
+        assert!(spawn
+            .input
+            .output_contract
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Required checks: tests_passed"));
+        assert_eq!(
+            spawn.started_event,
+            SubagentEvent::Started {
+                child_run_id: SubagentRunId::new("workflow-demo-verify"),
+                role: SubagentRole::Verifier,
+                objective: "Verify workflow dispatch".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
+        let action = WorkflowStepAction {
+            kind: crate::workflow::WorkflowStepActionKind::Agent,
+            role: Some("coder".into()),
+            worker: None,
+            objective: "Implement workflow dispatch".into(),
+            instructions: Vec::new(),
+            write_scope: vec![PathBuf::from("src/lib.rs")],
+            completion: crate::workflow::WorkflowStepActionCompletion::default(),
+        };
+        let input = workflow_subagent_input("demo", "build", &action);
+
+        let completion = workflow_subagent_completion(
+            &input,
+            Some(&RunFinalStatus::DoneWithConcerns {
+                reason: StopReason::NoProgress,
+                concerns: vec!["manual review recommended".into()],
+            }),
+        );
+
+        assert_eq!(completion.status, SubagentStatus::Incomplete);
+        assert!(completion.summary.contains("manual review recommended"));
+        let SubagentEvent::Completed { outcome } = completion.event else {
+            panic!("expected completed event");
+        };
+        assert_eq!(outcome.child_run_id.as_str(), "workflow-demo-build");
+        assert_eq!(outcome.role, SubagentRole::Implementer);
+        assert_eq!(outcome.status, SubagentStatus::Incomplete);
+        assert_eq!(outcome.files_changed, vec![PathBuf::from("src/lib.rs")]);
     }
 
     #[test]

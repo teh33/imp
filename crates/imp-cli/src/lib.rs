@@ -1737,21 +1737,21 @@ fn prompt_login_provider() -> Result<String, Box<dyn std::error::Error>> {
     if !std::io::stdin().is_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "No provider specified. Use `imp login <provider>` with one of: anthropic, openai, kimi.",
+            "No provider specified. Use `imp login <provider>` with one of: anthropic, openai, kimi, kimi-code.",
         )
         .into());
     }
 
     let providers = [
         ("anthropic", "Anthropic / Claude"),
-        ("openai", "OpenAI / ChatGPT"),
+        ("openai", "OpenAI"),
         ("kimi", "Kimi Code"),
     ];
     println!("Choose an OAuth provider:");
     for (idx, (_id, label)) in providers.iter().enumerate() {
         println!("{}. {label}", idx + 1);
     }
-    println!("Or type a provider id: anthropic, openai, kimi");
+    println!("Or type a provider id: anthropic, openai, kimi, kimi-code");
 
     let choice = prompt_input_line("Provider> ")?;
     let trimmed = choice.trim();
@@ -1772,7 +1772,7 @@ fn prompt_login_provider() -> Result<String, Box<dyn std::error::Error>> {
 
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
-        "Invalid provider selection. Use one of: anthropic, openai, kimi.",
+        "Invalid provider selection. Use one of: anthropic, openai, kimi, kimi-code.",
     )
     .into())
 }
@@ -1825,7 +1825,7 @@ async fn run_login(provider_name: &str) -> Result<(), Box<dyn std::error::Error>
     } else if login_provider == "openai" || login_provider == "openai-codex" {
         let oauth = ChatGptOAuth::new();
 
-        eprintln!("Opening browser for OpenAI / ChatGPT login...");
+        eprintln!("Opening browser for OpenAI login...");
         eprintln!("If the browser doesn't open, visit the URL printed below.");
 
         let credential = oauth

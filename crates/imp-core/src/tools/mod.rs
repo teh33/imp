@@ -10,6 +10,7 @@ pub mod query;
 pub mod read;
 pub mod scan;
 pub mod shell;
+pub mod subagent;
 pub mod web;
 pub mod workflow;
 pub mod write;

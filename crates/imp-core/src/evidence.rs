@@ -13,7 +13,6 @@ pub struct EvidencePacket {
     pub objective: String,
     pub workflow_type: Option<String>,
     pub risk_level: Option<String>,
-    pub autonomy_mode: Option<String>,
     pub final_status: Option<String>,
     pub summary: Vec<String>,
     pub plan: Vec<String>,
@@ -65,7 +64,6 @@ impl EvidencePacket {
         bullet(out, "Objective", &safe_inline(&self.objective));
         optional_bullet(out, "Type", self.workflow_type.as_deref());
         optional_bullet(out, "Risk", self.risk_level.as_deref());
-        optional_bullet(out, "Autonomy", self.autonomy_mode.as_deref());
         out.push('\n');
     }
 
@@ -288,7 +286,6 @@ mod tests {
             run_id: "run_1".into(),
             workflow_id: Some("394.4".into()),
             objective: "Emit evidence".into(),
-            autonomy_mode: Some("allow-all".into()),
             final_status: Some("DONE".into()),
             summary: vec!["Implemented renderer".into()],
             plan: vec!["Create model".into()],

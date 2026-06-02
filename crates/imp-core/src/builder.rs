@@ -448,7 +448,7 @@ fn apply_role_tool_policy(tools: &mut ToolRegistry, role: &Role) {
 pub fn register_native_tools(tools: &mut ToolRegistry) {
     use crate::tools::{
         ask::AskTool, bash::BashTool, edit::EditTool, git::GitTool, read::ReadTool, scan::ScanTool,
-        web::WebTool, workflow::WorkflowTool, write::WriteTool,
+        subagent::SubagentTool, web::WebTool, workflow::WorkflowTool, write::WriteTool,
     };
 
     tools.register(Arc::new(AskTool));
@@ -459,6 +459,7 @@ pub fn register_native_tools(tools: &mut ToolRegistry) {
     tools.register(Arc::new(WriteTool));
     tools.register(Arc::new(ScanTool));
     tools.register(Arc::new(WebTool));
+    tools.register(Arc::new(SubagentTool));
     tools.register(Arc::new(WorkflowTool));
 }
 

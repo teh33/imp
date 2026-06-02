@@ -16,7 +16,7 @@ use crate::evidence::{
 };
 use crate::storage;
 use crate::trust::{Provenance, RiskLabel, TrustLabel};
-use crate::workflow::{AutonomyMode, WorkflowContract, WorkflowRunController, WorktreeRunMetadata};
+use crate::workflow::{WorkflowContract, WorkflowRunController, WorktreeRunMetadata};
 use crate::workflow_review::TurnWorkflowReviewAccumulator;
 
 use super::super::{
@@ -185,55 +185,25 @@ fn evidence_verification_gate(
     }
 }
 
-fn evidence_policy_for_autonomy(mode: AutonomyMode) -> EvidencePolicy {
+fn evidence_policy_for_config(policy_config: &crate::config::PolicyConfig) -> EvidencePolicy {
     let mut policy = EvidencePolicy::default();
-    policy.decisions.push(format!("autonomy mode: {mode}"));
-    policy
-        .decisions
-        .push("policy.checked trace events record mode, scope, and decision context when policy checks run".into());
+    policy.decisions.push(format!(
+        "config policy: side_effects={}, workspace_writes={}, outside_workspace_writes={}, shell={}, network={}, secrets={}, extension_network={}, deny_approval_required={}",
+        policy_config.allow_side_effects,
+        policy_config.workspace_writes,
+        policy_config.outside_workspace_writes,
+        policy_config.shell,
+        policy_config.network,
+        policy_config.secrets,
+        policy_config.extension_network,
+        policy_config.deny_approval_required,
+    ));
+    policy.decisions.push(
+        "policy.checked trace events record explicit config policy, scope, and decision context when policy checks run".into(),
+    );
     policy
         .denials
         .push("hard-rail bypass: none recorded; dangerous grants are not implemented".into());
-    match mode {
-        AutonomyMode::LocalAuto | AutonomyMode::WorktreeAuto => {
-            policy.decisions.push(
-                "autonomous local actions remain subject to workspace, network, secret, and hard-rail policy".into(),
-            );
-            policy.approvals.push(
-                "network, outside-workspace, destructive, and secret-sensitive actions require approval or are denied".into(),
-            );
-        }
-        AutonomyMode::AllowAllLocal => {
-            policy
-                .decisions
-                .push("allow-all-local remained scoped to local workspace/worktree actions".into());
-            policy.decisions.push(
-                "notable high-risk actions should be inspected in policy.checked trace events"
-                    .into(),
-            );
-            policy.approvals.push(
-                "network, outside-workspace, production, secret, and dangerous-grant actions were not silently allowed".into(),
-            );
-        }
-        AutonomyMode::AllowAll => {
-            policy.decisions.push(
-                "allow-all mode was active; audit evidence and policy.checked trace events remain enabled".into(),
-            );
-            policy.decisions.push(
-                "notable high-risk actions should be inspected in policy.checked trace events"
-                    .into(),
-            );
-            policy.approvals.push(
-                "secret exfiltration, dangerous grants, and unsupported outside-scope mutations were not silently allowed".into(),
-            );
-        }
-        AutonomyMode::Ci => {
-            policy.decisions.push(
-                "ci mode fails closed for prompts/approvals not declared ahead of time".into(),
-            );
-        }
-        AutonomyMode::Suggest | AutonomyMode::Safe => {}
-    }
     policy
 }
 
@@ -385,9 +355,8 @@ impl Agent {
             .or_else(|| self.workflow_contract().workflow_unit_ref.clone());
         packet.workflow_type = Some(format!("{:?}", self.workflow_contract().workflow_type));
         packet.risk_level = Some(format!("{:?}", self.workflow_contract().risk_level));
-        packet.autonomy_mode = Some(self.workflow_contract().autonomy_mode.to_string());
         packet.final_status = Some(format!("{:?}", status));
-        packet.policy = evidence_policy_for_autonomy(self.workflow_contract().autonomy_mode);
+        packet.policy = evidence_policy_for_config(&self.config.policy);
         packet.trust = evidence_trust_summary_from_messages(&self.messages);
         packet
             .summary
@@ -455,12 +424,9 @@ impl Agent {
             self.write_trace_event(&AgentEvent::EvidenceWritten {
                 path: evidence_path.clone(),
             });
-            let _ = self
-                .event_tx
-                .send(AgentEvent::EvidenceWritten {
-                    path: evidence_path,
-                })
-                .await;
+            let _ = self.event_tx.send(AgentEvent::EvidenceWritten {
+                path: evidence_path,
+            });
         }
     }
 

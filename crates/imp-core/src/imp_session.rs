@@ -630,7 +630,7 @@ impl ImpSession {
     /// Get mutable access to the raw event receiver.
     ///
     /// Use this when you need `select!` or other channel combinators.
-    pub fn event_rx(&mut self) -> &mut mpsc::Receiver<AgentEvent> {
+    pub fn event_rx(&mut self) -> &mut mpsc::UnboundedReceiver<AgentEvent> {
         &mut self.handle.event_rx
     }
 
