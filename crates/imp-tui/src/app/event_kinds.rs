@@ -12,6 +12,7 @@ pub(super) fn runtime_signal_kind(signal: &RuntimeSignal) -> &'static str {
         RuntimeSignal::LuaCommandCompleted { .. } => "lua_command_completed",
         RuntimeSignal::LuaCommandRestartRequested { .. } => "lua_command_restart_requested",
         RuntimeSignal::LuaCommandFailed { .. } => "lua_command_failed",
+        RuntimeSignal::LoginUrlReady { .. } => "login_url_ready",
         RuntimeSignal::LoginTaskSucceeded(_) => "login_task_succeeded",
         RuntimeSignal::LoginTaskFailed(_) => "login_task_failed",
         RuntimeSignal::SessionListLoaded(_) => "session_list_loaded",
