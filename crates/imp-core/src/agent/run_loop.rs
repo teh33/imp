@@ -664,6 +664,25 @@ impl Agent {
                 None => build_assistant_message(&ordered_content, &tool_calls, None),
             };
 
+            if let StopReason::Error(error) = &msg.stop_reason {
+                self.emit(AgentEvent::Error {
+                    error: error.clone(),
+                })
+                .await;
+                let cost = total_usage.cost(&self.model.meta.pricing);
+                self.emit(AgentEvent::AgentEnd {
+                    usage: total_usage,
+                    cost,
+                    status: RunFinalStatus::Failed {
+                        message: error.clone(),
+                    },
+                })
+                .await;
+                return Err(crate::error::Error::Llm(imp_llm::Error::Provider(
+                    error.clone(),
+                )));
+            }
+
             turn_state.enter(TurnPhase::FinalizeAssistantMessage);
             self.emit_recovery_checkpoint(Self::recovery_checkpoint(
                 turn,

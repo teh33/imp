@@ -3225,6 +3225,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_treats_provider_terminal_error_as_failure_not_blank_turn() {
+        let provider = Arc::new(MockProvider::new_results(vec![vec![
+            Ok(StreamEvent::MessageStart {
+                model: "test-model".to_string(),
+            }),
+            Ok(StreamEvent::MessageEnd {
+                message: AssistantMessage {
+                    content: vec![],
+                    usage: Some(Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_write_tokens: 0,
+                    }),
+                    stop_reason: LlmStopReason::Error(
+                        "context_length_exceeded: input too large".to_string(),
+                    ),
+                    timestamp: 1000,
+                },
+            }),
+        ]]));
+
+        let model = test_model(provider);
+        let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+
+        let events_task = tokio::spawn(collect_events(handle));
+        let result = agent.run("Continue".to_string()).await;
+        drop(agent);
+
+        assert!(result.is_err());
+        let events = events_task.await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Error { error }
+                if error == "context_length_exceeded: input too large"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::AgentEnd {
+                status: RunFinalStatus::Failed { message },
+                ..
+            } if message == "context_length_exceeded: input too large"
+        )));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::TurnEnd { .. })));
+    }
+
+    #[tokio::test]
     async fn agent_retries_before_first_meaningful_event_but_not_after() {
         let provider = Arc::new(MockProvider::new_results(vec![
             vec![
