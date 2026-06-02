@@ -240,6 +240,38 @@ mod tests {
     }
 
     #[test]
+    fn workflow_runner_loop_continues_on_orchestration_progress() {
+        let mut assessment = assessment();
+        assessment.runtime.orchestration_started = true;
+        assessment.runtime.work_completed = true;
+
+        assert_eq!(
+            DefaultLoopPolicy.decide_after_turn(&assessment),
+            LoopDecision::Continue {
+                prompt: crate::workflow::workflow_supervision_prompt(),
+                reason: ContinueReason::OrchestrationProgress,
+            }
+        );
+    }
+
+    #[test]
+    fn run_the_workflow_continues_from_workflow_run_recommendation() {
+        let mut assessment = assessment();
+        assessment.continue_recommendation = Some(super::super::ContinueRecommendation {
+            prompt: super::super::orchestration_follow_up_text(None),
+            reason: ContinueReason::OrchestrationProgress,
+        });
+
+        assert_eq!(
+            DefaultLoopPolicy.decide_after_turn(&assessment),
+            LoopDecision::Continue {
+                prompt: crate::workflow::workflow_supervision_prompt(),
+                reason: ContinueReason::OrchestrationProgress,
+            }
+        );
+    }
+
+    #[test]
     fn planning_only_progress_maps_to_no_progress_without_continue_reason() {
         let mut assessment = assessment();
         assessment.runtime.planning_only_progress = true;

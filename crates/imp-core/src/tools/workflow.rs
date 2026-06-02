@@ -8,11 +8,13 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{Tool, ToolContext, ToolOutput};
+use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{
-    load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow, CheckKind,
-    CheckStatus, StepKind, StepStatus, ValidateOptions, ValidationMode, WorkflowCheck,
-    WorkflowDocument, WorkflowStep, WorkflowStepAction, WorkflowStepActionKind, WorkflowWorker,
+    load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow,
+    workflow_subagent_input, CheckKind, CheckStatus, StepKind, StepStatus, ValidateOptions,
+    ValidationMode, WorkflowCheck, WorkflowDocument, WorkflowStep, WorkflowStepAction,
+    WorkflowStepActionKind, WorkflowWorker,
 };
 
 pub struct WorkflowTool;
@@ -23,6 +25,7 @@ enum WorkflowAction {
     Show,
     Validate,
     Run,
+    CompleteStep,
     Update,
 }
 
@@ -33,6 +36,7 @@ impl WorkflowAction {
             Self::Show => "show",
             Self::Validate => "validate",
             Self::Run => "run",
+            Self::CompleteStep => "complete_step",
             Self::Update => "update",
         }
     }
@@ -43,9 +47,10 @@ impl WorkflowAction {
             "show" => Ok(Self::Show),
             "validate" => Ok(Self::Validate),
             "run" => Ok(Self::Run),
+            "complete_step" => Ok(Self::CompleteStep),
             "update" => Ok(Self::Update),
             other => Err(format!(
-                "unsupported workflow action `{other}`; expected list, show, validate, run, or update"
+                "unsupported workflow action `{other}`; expected list, show, validate, run, complete_step, or update"
             )),
         }
     }
@@ -108,7 +113,42 @@ struct WorkflowDiagnosticView {
 struct WorkflowRunResult {
     id: String,
     status: String,
+    execution_mode: WorkflowExecutionMode,
     next_action: WorkflowNextAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkflowExecutionMode {
+    MainAgent,
+    Subagents,
+}
+
+impl WorkflowExecutionMode {
+    fn parse(value: Option<&str>) -> std::result::Result<Self, String> {
+        match value.unwrap_or("main_agent") {
+            "main_agent" | "main" => Ok(Self::MainAgent),
+            "subagents" | "subagent" => Ok(Self::Subagents),
+            other => Err(format!(
+                "unsupported workflow execution mode `{other}`; expected main_agent or subagents"
+            )),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::MainAgent => "main agent",
+            Self::Subagents => "subagents",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WorkflowCommunicationContract {
+    channel: String,
+    inbox: String,
+    outbox: String,
+    rules: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,6 +196,12 @@ enum WorkflowNextAction {
         step_kind: String,
         contract: WorkflowAgentActionContract,
     },
+    SubagentAction {
+        step: String,
+        step_kind: String,
+        contract: WorkflowAgentActionContract,
+        input: SubagentInput,
+    },
     MissingActionContract {
         step: String,
         step_kind: String,
@@ -187,6 +233,7 @@ struct WorkflowAgentActionContract {
     completion_checks: Vec<String>,
     completion_artifacts: Vec<String>,
     worker: Option<String>,
+    communication: WorkflowCommunicationContract,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,7 +273,7 @@ impl Tool for WorkflowTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "show", "validate", "run", "update"],
+                    "enum": ["list", "show", "validate", "run", "complete_step", "update"],
                     "description": "Workflow action to perform."
                 },
                 "id": {
@@ -237,6 +284,15 @@ impl Tool for WorkflowTool {
                     "type": "string",
                     "enum": ["strict", "draft"],
                     "description": "Validation mode for validate/show. Defaults to strict."
+                },
+                "run_mode": {
+                    "type": "string",
+                    "enum": ["main_agent", "subagents"],
+                    "description": "How workflow run should dispatch agent-actionable steps. main_agent returns a contract for the current agent; subagents returns bounded subagent assignments with a communication contract. Defaults to main_agent."
+                },
+                "step": {
+                    "type": "string",
+                    "description": "Workflow step id for complete_step."
                 },
                 "path": {
                     "type": "string",
@@ -284,13 +340,19 @@ impl Tool for WorkflowTool {
             .filter(|value| !value.is_empty());
         let mode = WorkflowValidationModeParam::parse(params.get("mode").and_then(|v| v.as_str()))
             .map_err(crate::error::Error::Tool)?;
+        let run_mode =
+            WorkflowExecutionMode::parse(params.get("run_mode").and_then(|v| v.as_str()))
+                .map_err(crate::error::Error::Tool)?;
         let workflows_root = workflows_root(&ctx.cwd);
 
         match action {
             WorkflowAction::List => list_action(&workflows_root),
             WorkflowAction::Show => show_action(&workflows_root, id, mode),
             WorkflowAction::Validate => validate_action(&workflows_root, id, mode),
-            WorkflowAction::Run => run_action(&workflows_root, id, mode, &ctx).await,
+            WorkflowAction::Run => run_action(&workflows_root, id, mode, run_mode, &ctx).await,
+            WorkflowAction::CompleteStep => {
+                complete_step_action(&workflows_root, id, &params, &ctx)
+            }
             WorkflowAction::Update => update_action(&workflows_root, id, &params, &ctx),
         }
     }
@@ -307,7 +369,7 @@ fn list_action(workflows_root: &Path) -> Result<ToolOutput> {
             content: vec![imp_llm::ContentBlock::Text {
                 text: "No workflows found under .imp/workflows.".to_string(),
             }],
-            details: json!({ "workflows": Vec::<WorkflowListItem>::new() }),
+            details: json!({ "action": "list", "workflows": Vec::<WorkflowListItem>::new() }),
             is_error: false,
         });
     }
@@ -322,7 +384,7 @@ fn list_action(workflows_root: &Path) -> Result<ToolOutput> {
 
     Ok(ToolOutput {
         content: vec![imp_llm::ContentBlock::Text { text }],
-        details: json!({ "workflows": workflows }),
+        details: json!({ "action": "list", "workflows": workflows }),
         is_error: false,
     })
 }
@@ -338,6 +400,7 @@ fn show_action(
     Ok(ToolOutput {
         content: vec![imp_llm::ContentBlock::Text { text }],
         details: json!({
+            "action": "show",
             "id": id,
             "diagnostics": diagnostics.iter().map(|diagnostic| WorkflowDiagnosticView {
                 path: diagnostic.path.clone(),
@@ -394,7 +457,7 @@ fn validate_action(
 
     Ok(ToolOutput {
         content: vec![imp_llm::ContentBlock::Text { text }],
-        details: json!({ "results": results }),
+        details: json!({ "action": "validate", "results": results }),
         is_error: false,
     })
 }
@@ -403,6 +466,7 @@ async fn run_action(
     workflows_root: &Path,
     id: Option<&str>,
     mode: WorkflowValidationModeParam,
+    run_mode: WorkflowExecutionMode,
     ctx: &ToolContext,
 ) -> Result<ToolOutput> {
     let (id, root, doc) = load_selected_workflow(workflows_root, id)?;
@@ -454,8 +518,29 @@ async fn run_action(
                         .get(&step_id)
                         .expect("runnable step exists");
                     if ran_steps.is_empty() {
-                        deferred_action =
-                            Some(action_for_runnable_step(&id, &step_id, step, &current_doc));
+                        if run_mode == WorkflowExecutionMode::Subagents {
+                            if let Some(action) = &step.action {
+                                deferred_action = Some(subagent_action_for_runnable_step(
+                                    &id, &step_id, step, action, run_mode,
+                                ));
+                            } else {
+                                deferred_action = Some(action_for_runnable_step(
+                                    &id,
+                                    &step_id,
+                                    step,
+                                    &current_doc,
+                                    run_mode,
+                                ));
+                            }
+                        } else {
+                            deferred_action = Some(action_for_runnable_step(
+                                &id,
+                                &step_id,
+                                step,
+                                &current_doc,
+                                run_mode,
+                            ));
+                        }
                     }
                     break;
                 }
@@ -481,12 +566,13 @@ async fn run_action(
     let result = WorkflowRunResult {
         id: id.clone(),
         status: result_status,
+        execution_mode: run_mode,
         next_action,
     };
     let text = render_run_result(&result);
     Ok(ToolOutput {
         content: vec![imp_llm::ContentBlock::Text { text }],
-        details: json!({ "result": result }),
+        details: json!({ "action": "run", "id": id, "status": result.status, "result": result }),
         is_error: false,
     })
 }
@@ -749,7 +835,10 @@ fn render_run_result(result: &WorkflowRunResult) -> String {
             step_kind,
             contract,
         } => {
-            let mut lines = vec![format!("Workflow needs agent action: {step} [{step_kind}]")];
+            let mut lines = vec![format!(
+                "Workflow needs {} action: {step} [{step_kind}]",
+                result.execution_mode.label()
+            )];
             lines.push(String::new());
             lines.push(format!("Role: {}", contract.role));
             if let Some(worker) = &contract.worker {
@@ -780,6 +869,36 @@ fn render_run_result(result: &WorkflowRunResult) -> String {
                     lines.push(format!("- artifact: {artifact}"));
                 }
             }
+            lines.push(String::new());
+            lines.push("Communication:".to_string());
+            lines.push(format!("- channel: {}", contract.communication.channel));
+            lines.push(format!("- inbox: {}", contract.communication.inbox));
+            lines.push(format!("- outbox: {}", contract.communication.outbox));
+            for rule in &contract.communication.rules {
+                lines.push(format!("- rule: {rule}"));
+            }
+            lines.join("\n")
+        }
+        WorkflowNextAction::SubagentAction {
+            step,
+            step_kind,
+            contract,
+            input,
+        } => {
+            let mut lines = vec![format!(
+                "Workflow recommends subagent action: {step} [{step_kind}] ({})",
+                input.child_run_id.as_str()
+            )];
+            lines.push(String::new());
+            lines.push(format!("Role: {}", contract.role));
+            lines.push(format!("Objective: {}", contract.objective));
+            lines.push(String::new());
+            lines.push("Communication:".to_string());
+            lines.push(format!("- channel: {}", contract.communication.channel));
+            lines.push(format!("- inbox: {}", contract.communication.inbox));
+            lines.push(format!("- outbox: {}", contract.communication.outbox));
+            lines.push(String::new());
+            lines.push("Launch this with the Subagent tool; workflow state is unchanged until the subagent reports an outcome.".to_string());
             lines.join("\n")
         }
         WorkflowNextAction::MissingActionContract {
@@ -999,11 +1118,28 @@ async fn evaluate_pending_check(
     }
 }
 
+fn subagent_action_for_runnable_step(
+    workflow_id: &str,
+    step_id: &str,
+    step: &WorkflowStep,
+    action: &WorkflowStepAction,
+    run_mode: WorkflowExecutionMode,
+) -> WorkflowNextAction {
+    let step_kind = format!("{:?}", step.kind).to_case();
+    WorkflowNextAction::SubagentAction {
+        step: step_id.to_string(),
+        step_kind: step_kind.clone(),
+        contract: agent_action_contract(workflow_id, step_id, &step_kind, action, run_mode),
+        input: workflow_subagent_input(workflow_id, step_id, action),
+    }
+}
+
 fn action_for_runnable_step(
     workflow_id: &str,
     step_id: &str,
     step: &WorkflowStep,
     doc: &WorkflowDocument,
+    run_mode: WorkflowExecutionMode,
 ) -> WorkflowNextAction {
     let step_kind = format!("{:?}", step.kind).to_case();
 
@@ -1011,7 +1147,7 @@ fn action_for_runnable_step(
         return WorkflowNextAction::AgentAction {
             step: step_id.to_string(),
             step_kind: step_kind.clone(),
-            contract: agent_action_contract(workflow_id, step_id, &step_kind, action),
+            contract: agent_action_contract(workflow_id, step_id, &step_kind, action, run_mode),
         };
     }
 
@@ -1052,6 +1188,7 @@ fn agent_action_contract(
     step_id: &str,
     step_kind: &str,
     action: &WorkflowStepAction,
+    run_mode: WorkflowExecutionMode,
 ) -> WorkflowAgentActionContract {
     let role = action.role.clone().unwrap_or_else(|| match action.kind {
         WorkflowStepActionKind::Agent => "coder".to_string(),
@@ -1063,7 +1200,13 @@ fn agent_action_contract(
         step_kind: step_kind.to_string(),
         role,
         objective: action.objective.clone(),
-        instructions: action.instructions.clone(),
+        instructions: {
+            let mut instructions = action.instructions.clone();
+            instructions.push(format!(
+                "When this step is complete, call workflow(action=\"complete_step\", id=\"{workflow_id}\", step=\"{step_id}\", reason=\"...\") to mark the step and its checks complete."
+            ));
+            instructions
+        },
         write_scope: action
             .write_scope
             .iter()
@@ -1077,6 +1220,35 @@ fn agent_action_contract(
             .map(|path| path.display().to_string())
             .collect(),
         worker: action.worker.clone(),
+        communication: workflow_communication_contract(workflow_id, step_id, run_mode),
+    }
+}
+
+fn workflow_communication_contract(
+    workflow_id: &str,
+    step_id: &str,
+    run_mode: WorkflowExecutionMode,
+) -> WorkflowCommunicationContract {
+    let base = format!(".imp/workflows/{workflow_id}/artifacts/communication/{step_id}");
+    let rules = match run_mode {
+        WorkflowExecutionMode::MainAgent => vec![
+            "The main agent owns this step and should update workflow status/checks when complete.".to_string(),
+            "If help is needed, record questions or blockers in the outbox before pausing.".to_string(),
+        ],
+        WorkflowExecutionMode::Subagents => vec![
+            "Subagents write progress, questions, blockers, and final outcomes to the outbox.".to_string(),
+            "The main agent watches the inbox/outbox, answers questions, merges outcomes, and updates workflow status/checks.".to_string(),
+            "Subagents must not write outside their declared write scope without main-agent approval.".to_string(),
+        ],
+    };
+    WorkflowCommunicationContract {
+        channel: match run_mode {
+            WorkflowExecutionMode::MainAgent => "main_agent_artifact_mailbox".to_string(),
+            WorkflowExecutionMode::Subagents => "subagent_artifact_mailbox".to_string(),
+        },
+        inbox: format!("{base}/inbox.md"),
+        outbox: format!("{base}/outbox.md"),
+        rules,
     }
 }
 
@@ -1188,6 +1360,142 @@ fn workflow_worker_instructions(
         );
     }
     instructions
+}
+
+fn complete_step_action(
+    workflows_root: &Path,
+    id: Option<&str>,
+    params: &serde_json::Value,
+    ctx: &ToolContext,
+) -> Result<ToolOutput> {
+    let id = id.ok_or_else(|| crate::error::Error::Tool("complete_step requires `id`".into()))?;
+    let step_id = params
+        .get("step")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| crate::error::Error::Tool("complete_step requires `step`".into()))?;
+    let reason = params
+        .get("reason")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| crate::error::Error::Tool("complete_step requires `reason`".into()))?;
+
+    let workflow_root = workflow_id_root(workflows_root, id)?;
+    let workflow_path = workflow_root.join("workflow.yaml");
+    let event_path = workflow_root.join("events.jsonl");
+    ctx.check_write_path(&workflow_path).map_err(|reason| {
+        crate::error::Error::Tool(format!("workflow complete_step denied: {reason}"))
+    })?;
+    ctx.check_write_path(&event_path).map_err(|reason| {
+        crate::error::Error::Tool(format!("workflow complete_step denied: {reason}"))
+    })?;
+
+    let raw = load_workflow_raw(&workflow_path).map_err(|error| {
+        crate::error::Error::Tool(format!(
+            "failed to read {}: {error}",
+            workflow_path.display()
+        ))
+    })?;
+    let mut yaml: serde_yaml::Value = serde_yaml::from_str(&raw).map_err(|error| {
+        crate::error::Error::Tool(format!(
+            "failed to parse {}: {error}",
+            workflow_path.display()
+        ))
+    })?;
+    let doc: WorkflowDocument = serde_yaml::from_str(&raw).map_err(|error| {
+        crate::error::Error::Tool(format!(
+            "failed to load workflow document {}: {error}",
+            workflow_path.display()
+        ))
+    })?;
+    let step = doc
+        .steps
+        .get(step_id)
+        .ok_or_else(|| crate::error::Error::Tool(format!("unknown workflow step `{step_id}`")))?;
+
+    let mut event_file = open_workflow_event_file(&event_path)?;
+    set_nested_mapping_string(&mut yaml, &["steps", step_id], "status", "done")?;
+    append_workflow_event(
+        &mut event_file,
+        &WorkflowUpdateEvent {
+            timestamp: Utc::now().to_rfc3339(),
+            action: "complete_step".to_string(),
+            path: format!("steps.{step_id}.status"),
+            value: serde_json::Value::String("done".to_string()),
+            reason: reason.to_string(),
+        },
+    )?;
+
+    let mut completed_checks = Vec::new();
+    for check_id in &step.checks {
+        if doc.checks.contains_key(check_id) {
+            set_nested_mapping_string(&mut yaml, &["checks", check_id], "status", "passed")?;
+            append_workflow_event(
+                &mut event_file,
+                &WorkflowUpdateEvent {
+                    timestamp: Utc::now().to_rfc3339(),
+                    action: "complete_step".to_string(),
+                    path: format!("checks.{check_id}.status"),
+                    value: serde_json::Value::String("passed".to_string()),
+                    reason: format!("step `{step_id}` completed: {reason}"),
+                },
+            )?;
+            completed_checks.push(check_id.clone());
+        }
+    }
+
+    let reconciled = reconcile_workflow_statuses(&mut yaml, &doc, &mut event_file)?;
+    let updated = serde_yaml::to_string(&yaml).map_err(|error| {
+        crate::error::Error::Tool(format!("failed to serialize workflow: {error}"))
+    })?;
+    let candidate: WorkflowDocument = serde_yaml::from_str(&updated).map_err(|error| {
+        crate::error::Error::Tool(format!(
+            "workflow complete_step would produce invalid YAML/schema: {error}"
+        ))
+    })?;
+    let diagnostics =
+        validate_workflow(&candidate, &ValidateOptions::strict(workflow_root.clone()));
+    if !diagnostics.is_empty() {
+        let rendered = diagnostics
+            .iter()
+            .map(|diagnostic| format!("{}: {}", diagnostic.path, diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(crate::error::Error::Tool(format!(
+            "workflow complete_step failed validation: {rendered}"
+        )));
+    }
+
+    let tmp_path = workflow_path.with_extension("yaml.tmp");
+    ctx.check_write_path(&tmp_path).map_err(|reason| {
+        crate::error::Error::Tool(format!("workflow complete_step denied: {reason}"))
+    })?;
+    fs::write(&tmp_path, updated).map_err(|error| {
+        crate::error::Error::Tool(format!("failed to write {}: {error}", tmp_path.display()))
+    })?;
+    fs::rename(&tmp_path, &workflow_path).map_err(|error| {
+        crate::error::Error::Tool(format!(
+            "failed to replace {} with {}: {error}",
+            workflow_path.display(),
+            tmp_path.display()
+        ))
+    })?;
+
+    let text = format!("Completed workflow `{id}` step `{step_id}`.");
+    Ok(ToolOutput {
+        content: vec![imp_llm::ContentBlock::Text { text }],
+        details: json!({
+            "action": "complete_step",
+            "id": id,
+            "step": step_id,
+            "checks": completed_checks,
+            "reconciled": reconciled,
+            "reason": reason,
+        }),
+        is_error: false,
+    })
 }
 
 fn update_action(
@@ -1639,6 +1947,7 @@ mod tests {
             &workflows_root,
             Some("implement-workflow-run-engine"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1700,6 +2009,7 @@ mod tests {
             &workflows_root,
             Some("command-check-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1744,6 +2054,7 @@ mod tests {
             &workflows_root,
             Some("presence-absence-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1783,6 +2094,7 @@ mod tests {
             &workflows_root,
             Some("changed-files-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1815,6 +2127,7 @@ mod tests {
             &workflows_root,
             Some("broad-only-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1845,6 +2158,7 @@ mod tests {
             &workflows_root,
             Some("command-check-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1885,6 +2199,7 @@ mod tests {
             &workflows_root,
             Some("implement-workflow-run-engine"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -1897,6 +2212,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_complete_step_marks_step_checks_and_workflow_done() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let workflows_root = write_agent_action_workflow(temp.path());
+        let ctx = test_ctx(temp.path());
+
+        let output = complete_step_action(
+            &workflows_root,
+            Some("agent-action-workflow"),
+            &json!({
+                "step": "inspect",
+                "reason": "inspection artifact written"
+            }),
+            &ctx,
+        )
+        .expect("complete step succeeds");
+
+        assert_eq!(output.details["action"], "complete_step");
+        assert_eq!(output.details["step"], "inspect");
+        let doc = load_workflow(&workflows_root.join("agent-action-workflow/workflow.yaml"))
+            .expect("updated workflow loads");
+        assert!(matches!(
+            doc.steps.get("inspect").expect("step exists").status,
+            StepStatus::Done
+        ));
+        assert!(matches!(
+            doc.checks.get("inspected").expect("check exists").status,
+            CheckStatus::Passed
+        ));
+        assert!(matches!(doc.status, crate::workflow::WorkflowStatus::Done));
+        assert!(matches!(
+            doc.spec
+                .acceptance
+                .get("inspected")
+                .expect("acceptance exists")
+                .status,
+            crate::workflow::AcceptanceStatus::Done
+        ));
+    }
+
+    #[tokio::test]
     async fn workflow_run_renders_agent_action_contract() {
         let temp = tempfile::TempDir::new().expect("tempdir");
         let workflows_root = write_agent_action_workflow(temp.path());
@@ -1906,13 +2261,14 @@ mod tests {
             &workflows_root,
             Some("agent-action-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
         .expect("run succeeds");
         let text = output.text_content().expect("text output");
         assert!(
-            text.contains("Workflow needs agent action: inspect [context]"),
+            text.contains("Workflow needs main agent action: inspect [context]"),
             "{text}"
         );
         assert!(text.contains("Role: coder"), "{text}");
@@ -1923,10 +2279,64 @@ mod tests {
         assert!(text.contains("Instructions:"), "{text}");
         assert!(text.contains("Allowed writes:"), "{text}");
         assert!(text.contains("Completion:"), "{text}");
+        assert!(text.contains("complete_step"), "{text}");
+        assert!(text.contains("Communication:"), "{text}");
+        assert!(text.contains("main_agent_artifact_mailbox"), "{text}");
+        assert!(
+            text.contains("artifacts/communication/inspect/inbox.md"),
+            "{text}"
+        );
         assert!(text.contains("- check: inspected"), "{text}");
         assert_eq!(
             output.details["result"]["next_action"]["kind"],
             "agent_action"
+        );
+        assert_eq!(output.details["action"], "run");
+        assert_eq!(output.details["id"], "agent-action-workflow");
+        assert_eq!(output.details["status"], "active");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_renders_subagent_action_contract() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let workflows_root = write_agent_action_workflow(temp.path());
+
+        let ctx = test_ctx(temp.path());
+        let output = run_action(
+            &workflows_root,
+            Some("agent-action-workflow"),
+            WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::Subagents,
+            &ctx,
+        )
+        .await
+        .expect("run succeeds");
+        let text = output.text_content().expect("text output");
+        assert!(
+            text.contains("Workflow recommends subagent action: inspect [context]"),
+            "{text}"
+        );
+        assert!(text.contains("subagent_artifact_mailbox"), "{text}");
+        assert!(
+            text.contains("workflow-agent-action-workflow-inspect"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Launch this with the Subagent tool"),
+            "{text}"
+        );
+        assert_eq!(output.details["result"]["execution_mode"], "subagents");
+        assert_eq!(
+            output.details["result"]["next_action"]["kind"],
+            "subagent_action"
+        );
+        assert_eq!(
+            output.details["result"]["next_action"]["contract"]["communication"]["channel"],
+            "subagent_artifact_mailbox"
+        );
+        assert_eq!(
+            output.details["result"]["next_action"]["input"]["child_run_id"],
+            "workflow-agent-action-workflow-inspect"
         );
     }
 
@@ -1940,6 +2350,7 @@ mod tests {
             &workflows_root,
             Some("missing-action-workflow"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -2008,6 +2419,7 @@ mod tests {
             &workflows_root,
             Some("implement-workflow-run-engine"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
@@ -2146,6 +2558,7 @@ mod tests {
             &workflows_root,
             Some("/tmp/implement-workflow-update-events"),
             WorkflowValidationModeParam::Strict,
+            WorkflowExecutionMode::MainAgent,
             &ctx,
         )
         .await
