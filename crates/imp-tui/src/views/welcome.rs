@@ -7,6 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Widget};
 
+use crate::app::WelcomeAuthMethod;
 use crate::theme::Theme;
 
 /// Which step of the welcome flow the user is on.
@@ -26,7 +27,6 @@ pub enum WelcomeStep {
 
 const STEPS: &[WelcomeStep] = &[
     WelcomeStep::Welcome,
-    WelcomeStep::ProviderAuth,
     WelcomeStep::ModelThinking,
     WelcomeStep::Done,
 ];
@@ -87,6 +87,12 @@ pub struct WelcomeState {
     pub auth_resolved: bool,
     /// Whether an OAuth login is in progress for the selected provider.
     pub oauth_pending: bool,
+    /// Last OAuth URL shown when browser launch fails or as a fallback.
+    pub oauth_url: Option<String>,
+    /// Human-readable OAuth status for the selected provider.
+    pub oauth_status: Option<String>,
+    /// Selected auth method for providers that support both OAuth and API keys.
+    pub auth_method: WelcomeAuthMethod,
     /// The resolved API key (if entered manually).
     pub resolved_key: Option<String>,
     /// Optional web search providers for the built-in `web` tool.
@@ -204,6 +210,9 @@ impl WelcomeState {
             thinking_level: ThinkingLevel::Medium,
             auth_resolved: false,
             oauth_pending: false,
+            oauth_url: None,
+            oauth_status: None,
+            auth_method: default_auth_method_for_provider(selected_id),
             resolved_key: None,
             web_providers,
             web_provider_selected,
@@ -240,14 +249,64 @@ impl WelcomeState {
             .is_some_and(setup_provider_supports_oauth)
     }
 
-    pub fn selected_provider_has_api_key_setup(&self) -> bool {
+    pub fn selected_provider_supports_api_key_setup(&self) -> bool {
         self.selected_provider_id()
             .is_some_and(setup_provider_supports_api_key)
     }
 
+    pub fn auth_method(&self) -> WelcomeAuthMethod {
+        if !self.selected_provider_supports_oauth() {
+            return WelcomeAuthMethod::ApiKey;
+        }
+        if !self.selected_provider_supports_api_key_setup() {
+            return WelcomeAuthMethod::OAuth;
+        }
+        self.auth_method
+    }
+
+    pub fn toggle_auth_method(&mut self) {
+        if self.selected_provider_supports_oauth()
+            && self.selected_provider_supports_api_key_setup()
+        {
+            self.auth_method = match self.auth_method {
+                WelcomeAuthMethod::OAuth => WelcomeAuthMethod::ApiKey,
+                WelcomeAuthMethod::ApiKey => WelcomeAuthMethod::OAuth,
+            };
+            self.key_error = None;
+        }
+    }
+
+    pub fn select_oauth_method(&mut self) {
+        if self.selected_provider_supports_oauth() {
+            self.auth_method = WelcomeAuthMethod::OAuth;
+            self.key_error = None;
+        }
+    }
+
+    pub fn select_api_key_method(&mut self) {
+        if self.selected_provider_supports_api_key_setup() {
+            self.auth_method = WelcomeAuthMethod::ApiKey;
+            self.key_error = None;
+        }
+    }
+
     pub fn mark_oauth_pending(&mut self) {
         self.oauth_pending = true;
+        self.oauth_url = None;
+        self.oauth_status = Some("Starting OAuth login...".into());
         self.key_error = None;
+    }
+
+    pub fn set_oauth_url(&mut self, provider: &str, url: String, browser_opened: bool) {
+        self.oauth_pending = true;
+        self.oauth_url = Some(url);
+        self.oauth_status = Some(if browser_opened {
+            "Browser opened. Complete login there. If nothing opened, copy the URL below.".into()
+        } else {
+            format!(
+                "Unable to open a browser here. Open this URL on your host machine, or run `imp login {provider}` in your shell."
+            )
+        });
     }
 
     /// Mark the selected provider as logged in after a successful OAuth flow.
@@ -257,6 +316,8 @@ impl WelcomeState {
         };
         self.mark_stored(&provider_id);
         self.oauth_pending = false;
+        self.oauth_url = None;
+        self.oauth_status = None;
         self.auth_resolved = true;
         self.resolved_key = None;
         self.key_input.clear();
@@ -265,8 +326,9 @@ impl WelcomeState {
     }
 
     pub fn set_key_error(&mut self, error: impl Into<String>) {
-        self.key_error = Some(error.into());
         self.oauth_pending = false;
+        self.oauth_status = Some(error.into());
+        self.key_error = self.oauth_status.clone();
     }
 
     pub fn paste_key(&mut self, text: &str) {
@@ -434,6 +496,14 @@ impl WelcomeState {
     fn on_provider_changed(&mut self) {
         self.key_input.clear();
         self.key_editing = false;
+        let new_provider_id = self
+            .selected_provider_id()
+            .unwrap_or("anthropic")
+            .to_string();
+        self.oauth_pending = false;
+        self.oauth_url = None;
+        self.oauth_status = None;
+        self.auth_method = default_auth_method_for_provider(&new_provider_id);
         self.auth_resolved = false;
         self.resolved_key = None;
     }
@@ -448,16 +518,27 @@ impl WelcomeState {
 fn is_setup_visible_provider(provider_id: &str) -> bool {
     matches!(
         provider_id,
-        "anthropic" | "openai" | "openai-codex" | "openrouter"
+        "anthropic" | "openai" | "openrouter" | "moonshot"
     )
 }
 
 fn setup_provider_supports_oauth(provider_id: &str) -> bool {
-    matches!(provider_id, "anthropic" | "openai" | "openai-codex")
+    matches!(provider_id, "anthropic" | "openai")
+}
+
+fn default_auth_method_for_provider(provider_id: &str) -> WelcomeAuthMethod {
+    if provider_id == "openai" {
+        WelcomeAuthMethod::OAuth
+    } else {
+        WelcomeAuthMethod::ApiKey
+    }
 }
 
 fn setup_provider_supports_api_key(provider_id: &str) -> bool {
-    matches!(provider_id, "anthropic" | "openai" | "openrouter")
+    matches!(
+        provider_id,
+        "anthropic" | "openai" | "openrouter" | "moonshot"
+    )
 }
 
 fn default_openrouter_model_meta() -> ModelMeta {
@@ -490,9 +571,6 @@ fn filter_models_for_provider(all_models: &[ModelMeta], provider_id: &str) -> Ve
 
     match provider_id {
         "openai" => append_missing_openai_setup_models(&mut models),
-        "openai-codex" if models.is_empty() => {
-            models = imp_llm::model::builtin_openai_codex_models();
-        }
         _ => {}
     }
 
@@ -570,7 +648,7 @@ impl Widget for WelcomeView<'_> {
 
         match self.state.current_step() {
             WelcomeStep::Welcome => self.render_welcome(inner, buf),
-            WelcomeStep::ProviderAuth => self.render_provider_auth(inner, buf),
+            WelcomeStep::ProviderAuth => self.render_provider_auth(inner, buf, false),
             WelcomeStep::ModelThinking => self.render_model_thinking(inner, buf),
             WelcomeStep::WebSearch => self.render_web_search(inner, buf),
             WelcomeStep::Done => self.render_done(inner, buf),
@@ -580,50 +658,20 @@ impl Widget for WelcomeView<'_> {
 
 impl WelcomeView<'_> {
     fn render_welcome(&self, area: Rect, buf: &mut Buffer) {
-        let mut row: u16 = 0;
-        let center_x = area.x;
-
-        let lines = [
-            (
-                "Welcome to imp — an AI coding agent.",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            ("", Style::default()),
-            (
-                "Sign in with OAuth or paste an API key to get started.",
-                self.theme.muted_style(),
-            ),
-        ];
-
-        for (text, style) in &lines {
-            if row >= area.height {
-                return;
-            }
-            let offset = area.width.saturating_sub(text.len() as u16) / 2;
-            let line = Line::from(Span::styled(*text, *style));
-            buf.set_line(center_x + offset, area.y + row, &line, area.width);
-            row += 1;
-        }
-
-        if area.height > row + 2 {
-            let footer_y = area.y + area.height - 1;
-            let footer = Line::from(vec![
-                Span::styled("  Enter ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled("Continue", self.theme.muted_style()),
-                Span::raw("    "),
-                Span::styled("Esc ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled("Skip", self.theme.muted_style()),
-            ]);
-            buf.set_line(center_x, footer_y, &footer, area.width);
-        }
+        self.render_provider_auth(area, buf, true);
     }
 
-    fn render_provider_auth(&self, area: Rect, buf: &mut Buffer) {
+    fn render_provider_auth(&self, area: Rect, buf: &mut Buffer, include_intro: bool) {
         let mut row: u16 = 0;
         let x = area.x;
 
+        let title_text = if include_intro {
+            "  Welcome to imp — choose how to sign in"
+        } else {
+            "  Choose your AI provider"
+        };
         let title = Line::from(Span::styled(
-            "  Choose your AI provider",
+            title_text,
             Style::default().add_modifier(Modifier::BOLD),
         ));
         buf.set_line(x, area.y + row, &title, area.width);
@@ -685,60 +733,112 @@ impl WelcomeView<'_> {
             ]);
             buf.set_line(x, area.y + row, &ready, area.width);
         } else {
-            if self.state.selected_provider_supports_oauth() {
-                let oauth = if self.state.oauth_pending {
-                    "  OAuth: waiting for browser login..."
+            let oauth_supported = self.state.selected_provider_supports_oauth();
+            let api_key_supported = self.state.selected_provider_supports_api_key_setup();
+            if oauth_supported && api_key_supported {
+                let oauth_style = if self.state.auth_method() == WelcomeAuthMethod::OAuth {
+                    self.theme.accent_style().add_modifier(Modifier::BOLD)
                 } else {
-                    "  OAuth: press O to sign in in your browser"
+                    self.theme.muted_style()
                 };
-                buf.set_line(
-                    x,
-                    area.y + row,
-                    &Line::from(Span::styled(oauth, self.theme.accent_style())),
-                    area.width,
-                );
+                let api_style = if self.state.auth_method() == WelcomeAuthMethod::ApiKey {
+                    self.theme.accent_style().add_modifier(Modifier::BOLD)
+                } else {
+                    self.theme.muted_style()
+                };
+                let tabs = Line::from(vec![
+                    Span::styled("  Auth: ", self.theme.muted_style()),
+                    Span::styled("[ OAuth ]", oauth_style),
+                    Span::raw("  "),
+                    Span::styled("[ API key ]", api_style),
+                    Span::styled("  Tab/←→ to switch", self.theme.muted_style()),
+                ]);
+                buf.set_line(x, area.y + row, &tabs, area.width);
                 row += 2;
             }
 
-            if self.state.selected_provider_has_api_key_setup() {
-                let prompt_line =
-                    Line::from(vec![Span::styled("  API Key: ", self.theme.muted_style())]);
-                buf.set_line(x, area.y + row, &prompt_line, area.width);
-                row += 1;
+            match self.state.auth_method() {
+                WelcomeAuthMethod::OAuth if oauth_supported => {
+                    if selected.meta.id == "anthropic" {
+                        let warning = Line::from(Span::styled(
+                            "  Anthropic OAuth is not supported. Proceed with caution.",
+                            self.theme.error_style(),
+                        ));
+                        buf.set_line(x, area.y + row, &warning, area.width);
+                        row += 1;
+                    }
 
-                let display_key = if self.state.key_input.is_empty() {
-                    "  ┌─ paste your key here ─────────────────┐".to_string()
-                } else {
-                    let masked: String = self
-                        .state
-                        .key_input
-                        .chars()
-                        .enumerate()
-                        .map(|(i, c)| if i < 6 { c } else { '•' })
-                        .collect();
-                    format!(
-                        "  ┌ {masked}▎{} ┐",
-                        " ".repeat(40usize.saturating_sub(masked.len() + 1))
-                    )
-                };
-                let key_style = if self.state.key_input.is_empty() {
-                    self.theme.muted_style()
-                } else {
-                    Style::default()
-                };
-                let key_line = Line::from(Span::styled(display_key, key_style));
-                buf.set_line(x, area.y + row, &key_line, area.width);
-                row += 1;
+                    let oauth = if self.state.oauth_pending {
+                        "  OAuth: waiting for browser login..."
+                    } else {
+                        "  OAuth: press Enter to sign in in your browser"
+                    };
+                    buf.set_line(
+                        x,
+                        area.y + row,
+                        &Line::from(Span::styled(oauth, self.theme.accent_style())),
+                        area.width,
+                    );
+                    row += 1;
 
-                let url_line = Line::from(vec![
-                    Span::styled("  Get a key: ", self.theme.muted_style()),
-                    Span::styled(
-                        selected.meta.docs_url,
-                        Style::default().fg(self.theme.accent),
-                    ),
-                ]);
-                buf.set_line(x, area.y + row, &url_line, area.width);
-                row += 1;
+                    if let Some(status) = self.state.oauth_status.as_deref() {
+                        let status_line = Line::from(Span::styled(
+                            format!("  {status}"),
+                            self.theme.muted_style(),
+                        ));
+                        buf.set_line(x, area.y + row, &status_line, area.width);
+                        row += 1;
+                    }
+                    if let Some(url) = self.state.oauth_url.as_deref() {
+                        let url_line = Line::from(vec![
+                            Span::styled("  URL: ", self.theme.muted_style()),
+                            Span::styled(url, Style::default().fg(self.theme.accent)),
+                        ]);
+                        buf.set_line(x, area.y + row, &url_line, area.width);
+                        row += 1;
+                    }
+                }
+                _ if api_key_supported => {
+                    let prompt_line =
+                        Line::from(vec![Span::styled("  API Key: ", self.theme.muted_style())]);
+                    buf.set_line(x, area.y + row, &prompt_line, area.width);
+                    row += 1;
+
+                    let display_key = if self.state.key_input.is_empty() {
+                        "  ┌─ paste your key here ─────────────────┐".to_string()
+                    } else {
+                        let masked: String = self
+                            .state
+                            .key_input
+                            .chars()
+                            .enumerate()
+                            .map(|(i, c)| if i < 6 { c } else { '•' })
+                            .collect();
+                        format!(
+                            "  ┌ {masked}▎{} ┐",
+                            " ".repeat(40usize.saturating_sub(masked.len() + 1))
+                        )
+                    };
+                    let key_style = if self.state.key_input.is_empty() {
+                        self.theme.muted_style()
+                    } else {
+                        Style::default()
+                    };
+                    let key_line = Line::from(Span::styled(display_key, key_style));
+                    buf.set_line(x, area.y + row, &key_line, area.width);
+                    row += 1;
+
+                    let url_line = Line::from(vec![
+                        Span::styled("  Get a key: ", self.theme.muted_style()),
+                        Span::styled(
+                            selected.meta.docs_url,
+                            Style::default().fg(self.theme.accent),
+                        ),
+                    ]);
+                    buf.set_line(x, area.y + row, &url_line, area.width);
+                    row += 1;
+                }
+                _ => {}
             }
 
             if let Some(ref error) = self.state.key_error {
