@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{Tool, ToolContext, ToolOutput};
 use crate::error::Result;
-use crate::ui::{SelectOption, UserInterface};
+use crate::ui::{SelectOption, SelectionAnswer, UserInterface};
 
 pub struct AskTool;
 
@@ -138,8 +138,23 @@ async fn execute_single_select(
     choices: &[SelectOption],
     allow_other: bool,
 ) -> Result<ToolOutput> {
-    match ui.select(question, choices).await {
-        Some(index) if allow_other && index == choices.len() - 1 => {
+    match ui
+        .select_or_input_with_context(question, "", choices, placeholder)
+        .await
+    {
+        Some(SelectionAnswer::Text(answer)) if allow_other => Ok(tool_text_with_details(
+            &answer,
+            json!({
+                "answered": true,
+                "skipped": false,
+                "answer": answer,
+                "answers": [answer],
+                "other": true,
+                "multi_select": false
+            }),
+        )),
+        Some(SelectionAnswer::Text(answer)) => Ok(answer_output(answer, true)),
+        Some(SelectionAnswer::Choice(index)) if allow_other && index == choices.len() - 1 => {
             match ui.input("Enter your answer:", placeholder).await {
                 Some(answer) => Ok(tool_text_with_details(
                     &answer,
@@ -155,7 +170,7 @@ async fn execute_single_select(
                 None => Ok(skipped_output(false)),
             }
         }
-        Some(index) if index < choices.len() => {
+        Some(SelectionAnswer::Choice(index)) if index < choices.len() => {
             let answer = choices[index].label.clone();
             Ok(tool_text_with_details(
                 &answer,

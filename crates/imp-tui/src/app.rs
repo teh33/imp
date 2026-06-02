@@ -82,6 +82,7 @@ use imp_core::runtime::{RuntimeStateAccumulator, RuntimeStateSnapshot};
 use imp_core::session::{SessionEntry, SessionInfo, SessionManager};
 use imp_core::tools::ToolRegistry;
 use imp_core::trust::{Provenance, RiskLabel, TrustLabel};
+use imp_core::ui::SelectionAnswer;
 use imp_core::workflow::{AutonomyMode, VerificationCloseoutEffect};
 use imp_core::Error as ImpCoreError;
 use imp_llm::auth::AuthStore;
@@ -180,6 +181,7 @@ impl QueuedMessage {
 #[allow(clippy::large_enum_variant)]
 pub enum AskReply {
     Select(tokio::sync::oneshot::Sender<Option<usize>>),
+    SelectOrInput(tokio::sync::oneshot::Sender<Option<imp_core::ui::SelectionAnswer>>),
     MultiSelect(tokio::sync::oneshot::Sender<Option<Vec<usize>>>),
     Input(tokio::sync::oneshot::Sender<Option<String>>),
 }
@@ -2260,6 +2262,26 @@ impl App {
                         "type to filter or answer freely…".into(),
                     ),
                     AskReply::Select(reply),
+                );
+            }
+            UiRequest::SelectOrInput {
+                title,
+                context,
+                options,
+                placeholder,
+                reply,
+            } => {
+                let ask_options: Vec<AskOption> = options
+                    .into_iter()
+                    .map(|o| AskOption {
+                        label: o.label,
+                        description: o.description,
+                        checked: false,
+                    })
+                    .collect();
+                self.begin_ask(
+                    AskState::with_placeholder(title, context, ask_options, false, placeholder),
+                    AskReply::SelectOrInput(reply),
                 );
             }
             UiRequest::MultiSelect {
@@ -6604,6 +6626,44 @@ impl App {
                     let _ = tx.send(None);
                 }
             }
+            (AskResult::Selected(indices), Some(AskReply::SelectOrInput(tx))) => {
+                let index = indices.first().copied();
+                if let Some(index) = index {
+                    if let Some(option) = state.options.get(index) {
+                        self.messages.push(DisplayMessage {
+                            role: MessageRole::User,
+                            content: option.label.clone(),
+                            thinking: None,
+                            tool_calls: Vec::new(),
+                            assistant_blocks: Vec::new(),
+                            is_streaming: false,
+                            timestamp: imp_llm::now(),
+                        });
+                    }
+                }
+                self.invalidate_chat_render_cache();
+                let _ = tx.send(index.map(SelectionAnswer::Choice));
+            }
+            (AskResult::Text(text), Some(AskReply::SelectOrInput(tx))) => {
+                let match_idx = state
+                    .options
+                    .iter()
+                    .position(|o| o.label.eq_ignore_ascii_case(text));
+                self.messages.push(DisplayMessage {
+                    role: MessageRole::User,
+                    content: text.clone(),
+                    thinking: None,
+                    tool_calls: Vec::new(),
+                    assistant_blocks: Vec::new(),
+                    is_streaming: false,
+                    timestamp: imp_llm::now(),
+                });
+                self.invalidate_chat_render_cache();
+                let answer = match_idx
+                    .map(SelectionAnswer::Choice)
+                    .unwrap_or_else(|| SelectionAnswer::Text(text.clone()));
+                let _ = tx.send(Some(answer));
+            }
             (AskResult::Selected(indices), Some(AskReply::MultiSelect(tx))) => {
                 let labels: Vec<String> = indices
                     .iter()
@@ -6735,6 +6795,9 @@ impl App {
         if let Some(reply) = self.ask_reply.take() {
             match reply {
                 AskReply::Select(tx) => {
+                    let _ = tx.send(None);
+                }
+                AskReply::SelectOrInput(tx) => {
                     let _ = tx.send(None);
                 }
                 AskReply::MultiSelect(tx) => {

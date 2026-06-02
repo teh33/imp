@@ -27,6 +27,21 @@ pub trait UserInterface: Send + Sync {
         options: &[SelectOption],
     ) -> Option<usize>;
 
+    /// Select from options, or return a custom typed answer when supported.
+    ///
+    /// Default implementations preserve the older select-only behavior.
+    async fn select_or_input_with_context(
+        &self,
+        title: &str,
+        context: &str,
+        options: &[SelectOption],
+        _placeholder: &str,
+    ) -> Option<SelectionAnswer> {
+        self.select_with_context(title, context, options)
+            .await
+            .map(SelectionAnswer::Choice)
+    }
+
     /// Select multiple options. Returns None if no UI or cancelled.
     async fn multi_select_with_context(
         &self,
@@ -73,6 +88,12 @@ pub enum NotifyLevel {
 pub struct SelectOption {
     pub label: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelectionAnswer {
+    Choice(usize),
+    Text(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use imp_core::ui::{ComponentSpec, NotifyLevel, SelectOption, UserInterface, WidgetContent};
+use imp_core::ui::{
+    ComponentSpec, NotifyLevel, SelectOption, SelectionAnswer, UserInterface, WidgetContent,
+};
 use tokio::sync::mpsc;
 
 /// Events sent from the TuiInterface to the main App event loop.
@@ -21,6 +23,13 @@ pub enum UiRequest {
         context: String,
         options: Vec<SelectOption>,
         reply: tokio::sync::oneshot::Sender<Option<usize>>,
+    },
+    SelectOrInput {
+        title: String,
+        context: String,
+        options: Vec<SelectOption>,
+        placeholder: String,
+        reply: tokio::sync::oneshot::Sender<Option<SelectionAnswer>>,
     },
     MultiSelect {
         title: String,
@@ -105,6 +114,27 @@ impl UserInterface for TuiInterface {
                 title: title.to_string(),
                 context: context.to_string(),
                 options: options.to_vec(),
+                reply: reply_tx,
+            })
+            .await;
+        reply_rx.await.ok().flatten()
+    }
+
+    async fn select_or_input_with_context(
+        &self,
+        title: &str,
+        context: &str,
+        options: &[SelectOption],
+        placeholder: &str,
+    ) -> Option<SelectionAnswer> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let _ = self
+            .tx
+            .send(UiRequest::SelectOrInput {
+                title: title.to_string(),
+                context: context.to_string(),
+                options: options.to_vec(),
+                placeholder: placeholder.to_string(),
                 reply: reply_tx,
             })
             .await;
