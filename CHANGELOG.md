@@ -6,6 +6,23 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-03
+
+### Changed
+
+- Improved workflow run readiness reporting with clearer blocked-step reasons and safe parallel subagent batch suggestions.
+- Updated TUI context reporting and compaction handling so active context usage is easier to understand.
+
+### Fixed
+
+- Surfaced pre-output agent/provider failures in the TUI instead of leaving chats idle with an empty assistant turn.
+- Added bounded recovery for pre-output context exhaustion by masking tool outputs and retrying once when safe.
+- Treated provider terminal errors as failed turns and avoided phantom workflow child runs.
+
+### Internal
+
+- Added cache-aware benchmark output for runtime usage analysis.
+
 ## [0.3.1] - 2026-06-02
 
 ### Changed
@@ -279,7 +296,8 @@ Initial crates.io release of the imp crate family.
 - Standardized published crates on MIT license metadata.
 - Added crates.io metadata and versioned internal dependencies for published crates.
 
-[Unreleased]: https://github.com/kfcafe/imp/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/kfcafe/imp/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/kfcafe/imp/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/kfcafe/imp/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/kfcafe/imp/compare/v0.2.9...v0.3.0
 [0.2.9]: https://github.com/kfcafe/imp/compare/v0.2.8...v0.2.9
