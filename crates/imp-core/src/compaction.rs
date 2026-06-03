@@ -179,7 +179,11 @@ pub fn prepare_messages_for_compaction(
         };
     }
 
-    let preserved_tail_start = groups[groups.len() - keep_recent_groups].range.start;
+    let preserved_tail_start = if keep_recent_groups == 0 {
+        messages.len()
+    } else {
+        groups[groups.len() - keep_recent_groups].range.start
+    };
 
     let summary_prefix = &messages[..preserved_tail_start];
     let preserved_tail_slice = &messages[preserved_tail_start..];
@@ -295,78 +299,174 @@ fn build_summary_prompt(messages: &[Message]) -> String {
     )
 }
 
-fn build_fallback_summary(messages: &[Message]) -> String {
-    const MAX_ITEMS: usize = 24;
-    const MAX_ITEM_CHARS: usize = 500;
+fn text_blocks(blocks: &[ContentBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty()).then_some(trimmed)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
-    let mut items = Vec::new();
+fn assistant_visible_parts(blocks: &[ContentBlock]) -> Vec<String> {
+    let mut parts = Vec::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Text { text } => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(truncate_for_display(trimmed, 900));
+                }
+            }
+            ContentBlock::ToolCall {
+                name, arguments, ..
+            } => {
+                let args = serde_json::to_string(arguments).unwrap_or_default();
+                parts.push(format!(
+                    "called {name}({})",
+                    truncate_for_display(&args, 220)
+                ));
+            }
+            // Thinking traces and non-text blocks are intentionally omitted from
+            // deterministic compaction. They are expensive and less valuable
+            // than user instructions, visible assistant output, and tool intent.
+            ContentBlock::Thinking { .. } | ContentBlock::Image { .. } => {}
+        }
+    }
+    parts
+}
+
+fn build_fallback_summary(messages: &[Message]) -> String {
+    const MAX_GOAL_LINES: usize = 10;
+    const MAX_DIGEST_CHARS: usize = 18_000;
+    const MAX_TOOL_LINES: usize = 40;
+
+    let mut goal_lines = Vec::new();
     for msg in messages {
-        if items.len() >= MAX_ITEMS {
+        if goal_lines.len() >= MAX_GOAL_LINES {
             break;
         }
+        let Message::User(user) = msg else {
+            continue;
+        };
+        let text = text_blocks(&user.content);
+        if text.is_empty() {
+            continue;
+        }
+        goal_lines.push(format!("- {}", truncate_for_display(&text, 700)));
+    }
 
-        let item = match msg {
-            Message::User(user) => user.content.iter().find_map(|b| match b {
-                ContentBlock::Text { text } => Some(format!(
-                    "- User requested: {}",
-                    truncate_for_display(text.trim(), MAX_ITEM_CHARS)
-                )),
-                _ => None,
-            }),
+    let mut chronological = Vec::new();
+    let mut chronological_chars = 0usize;
+    let mut omitted_older = 0usize;
+    for msg in messages.iter().rev() {
+        let line = match msg {
+            Message::User(user) => {
+                let text = text_blocks(&user.content);
+                (!text.is_empty()).then(|| format!("- User: {}", truncate_for_display(&text, 900)))
+            }
             Message::Assistant(assistant) => {
-                let mut parts = Vec::new();
-                for block in &assistant.content {
-                    match block {
-                        ContentBlock::Text { text } => {
-                            if !text.trim().is_empty() {
-                                parts.push(truncate_for_display(text.trim(), MAX_ITEM_CHARS));
-                            }
-                        }
-                        ContentBlock::ToolCall {
-                            name, arguments, ..
-                        } => {
-                            let args = serde_json::to_string(arguments).unwrap_or_default();
-                            parts.push(format!(
-                                "called {name}({})",
-                                truncate_for_display(&args, 160)
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
+                let parts = assistant_visible_parts(&assistant.content);
                 (!parts.is_empty()).then(|| format!("- Assistant: {}", parts.join("; ")))
             }
-            Message::ToolResult(result) => {
-                Some(format!("- Tool result from {} recorded.", result.tool_name))
-            }
+            Message::ToolResult(result) => Some(format!(
+                "- Tool result omitted: {} returned output{}.",
+                result.tool_name,
+                if result.is_error {
+                    " with an error"
+                } else {
+                    ""
+                }
+            )),
         };
 
-        if let Some(item) = item {
-            items.push(item);
+        let Some(line) = line else {
+            continue;
+        };
+        let line_chars = line.len() + 1;
+        if chronological_chars + line_chars > MAX_DIGEST_CHARS {
+            omitted_older += 1;
+            continue;
+        }
+        chronological_chars += line_chars;
+        chronological.push(line);
+    }
+    chronological.reverse();
+
+    let mut tool_lines = Vec::new();
+    for msg in messages.iter().rev() {
+        if tool_lines.len() >= MAX_TOOL_LINES {
+            break;
+        }
+        let Message::Assistant(assistant) = msg else {
+            continue;
+        };
+        for block in assistant.content.iter().rev() {
+            let ContentBlock::ToolCall {
+                name, arguments, ..
+            } = block
+            else {
+                continue;
+            };
+            let args = serde_json::to_string(arguments).unwrap_or_default();
+            tool_lines.push(format!("- {name}({})", truncate_for_display(&args, 260)));
+            if tool_lines.len() >= MAX_TOOL_LINES {
+                break;
+            }
         }
     }
+    tool_lines.reverse();
 
-    if messages.len() > items.len() {
-        items.push(format!(
-            "- Additional older context omitted during deterministic compaction: {} message(s).",
-            messages.len().saturating_sub(items.len())
+    let mut sections = Vec::new();
+    sections.push("## Goal And User Instructions".to_string());
+    if goal_lines.is_empty() {
+        sections.push("Continue the conversation using the compacted context below.".to_string());
+    } else {
+        sections.push(goal_lines.join("\n"));
+    }
+
+    sections.push("\n## Recent Working Context".to_string());
+    if omitted_older > 0 {
+        sections.push(format!(
+            "Earlier compactable message(s) omitted from this deterministic digest: {omitted_older}."
         ));
     }
-
-    if items.is_empty() {
-        "## Goal\nContinue the conversation.\n\n## Current State\nEarlier context was compacted deterministically because the summarizer was unavailable or the summary prompt was too large.\n\n## Next Step\nContinue from the preserved recent messages.".to_string()
+    if chronological.is_empty() {
+        sections.push("No text-bearing prior messages were available.".to_string());
     } else {
-        format!(
-            "## Goal\nContinue the conversation using this compacted older context plus the preserved recent messages.\n\n## Completed Work / Relevant Context\n{}\n\n## Current State\nEarlier context was compacted deterministically because the summarizer was unavailable or the summary prompt was too large.\n\n## Next Step\nContinue from the preserved recent messages.",
-            items.join("\n")
-        )
+        sections.push(chronological.join("\n"));
     }
+
+    if !tool_lines.is_empty() {
+        sections.push("\n## Recent Tool Calls".to_string());
+        sections.push(tool_lines.join("\n"));
+    }
+
+    sections.push("\n## Compaction Notes".to_string());
+    sections.push(
+        "This deterministic compaction retained user prompts, visible assistant output, and tool-call metadata. Tool result bodies, images, and thinking traces were intentionally omitted from active context. Use tools to reread files or artifacts when exact output is needed."
+            .to_string(),
+    );
+
+    sections.push("\n## Next Step".to_string());
+    sections.push("Continue from the recent working context above.".to_string());
+
+    sections.join("\n")
 }
 
 // ── Compaction executor ───────────────────────────────────────────────────
 
 /// Default number of recent assistant-action groups to preserve verbatim.
 pub const DEFAULT_KEEP_RECENT_GROUPS: usize = 4;
+
+/// Default for fast local `/compact`: retain all older value in a compact
+/// deterministic digest and avoid carrying raw tool outputs/thinking forward.
+pub const LOCAL_COMPACTION_KEEP_RECENT_GROUPS: usize = 0;
 
 /// Result of a successful compaction.
 #[derive(Debug, Clone)]
@@ -802,8 +902,9 @@ mod tests {
 
         assert!(result.is_some());
         let result = result.unwrap();
-        // The bounded fallback summarizes older context when the LLM summarizer is skipped.
-        assert!(result.summary.contains("deterministically"));
+        // The bounded fallback preserves high-value context when the LLM summarizer is skipped.
+        assert!(result.summary.contains("Goal And User Instructions"));
+        assert!(result.summary.contains("Recent Working Context"));
         assert!(result.summary.contains("prompt 0"));
     }
 

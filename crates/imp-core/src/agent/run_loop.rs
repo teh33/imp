@@ -316,9 +316,15 @@ impl Agent {
             }
 
             if usage.used >= usage.limit && usage.limit > 0 {
+                let budget = crate::context::context_budget(&self.model);
                 let message = format!(
-                    "Context full: estimated {} tokens exceeds the {} token window for {}. Run /compact or start a new chat to continue.",
-                    usage.used, usage.limit, self.model.meta.id
+                    "Context full: estimated {} tokens exceeds the {} token input budget for {} (provider {}, total window {}, reserved buffer {}). Run /compact or start a new chat to continue.",
+                    usage.used,
+                    usage.limit,
+                    self.model.meta.id,
+                    self.model.provider.id(),
+                    budget.total_window,
+                    budget.reserved_buffer
                 );
                 self.emit(AgentEvent::Error {
                     error: message.clone(),

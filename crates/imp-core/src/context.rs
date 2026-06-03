@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use imp_llm::{truncate_chars_with_suffix, ContentBlock, Message, Model};
+use imp_llm::{truncate_chars_with_suffix, ContentBlock, Message, Model, ModelMeta};
 
 fn truncate_for_display(text: &str, max_chars: usize) -> String {
     truncate_chars_with_suffix(text, max_chars, "...")
@@ -14,26 +14,166 @@ pub struct ContextUsage {
     pub ratio: f64,
 }
 
+/// Resolved budget used for context display and preflight checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBudget {
+    /// Provider/model maximum total context, including reserved response or
+    /// recovery room when known.
+    pub total_window: u32,
+    /// User-visible denominator and normal input budget.
+    pub display_window: u32,
+    /// Tokens intentionally held back for output, summarization, or recovery.
+    pub reserved_buffer: u32,
+}
+
+impl ContextBudget {
+    pub fn ratio_for_used(&self, used: u32) -> f64 {
+        if self.display_window > 0 {
+            used as f64 / self.display_window as f64
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Resolve the budget for a model metadata entry.
+pub fn context_budget_for_meta(meta: &imp_llm::ModelMeta) -> ContextBudget {
+    if meta.id == "gpt-5.5" {
+        return ContextBudget {
+            total_window: 1_050_000,
+            display_window: 1_000_000,
+            reserved_buffer: 50_000,
+        };
+    }
+
+    ContextBudget {
+        total_window: meta.context_window,
+        display_window: meta.context_window,
+        reserved_buffer: 0,
+    }
+}
+
+/// Resolve the budget for a runtime model.
+pub fn context_budget(model: &Model) -> ContextBudget {
+    context_budget_for_meta(&model.meta)
+}
+
 /// Fast approximate token counting (~4 chars per token for English).
 pub fn estimate_tokens(text: &str) -> u32 {
     (text.len() as u32) / 4
+}
+
+fn count_openai_tokens(text: &str, model_id: &str) -> Option<u32> {
+    let bpe = tiktoken_rs::bpe_for_model(model_id)
+        .or_else(|_| tiktoken_rs::bpe_for_model("gpt-5"))
+        .ok()?;
+    Some(bpe.encode_with_special_tokens(text).len() as u32)
+}
+
+fn model_uses_openai_tokenizer(meta: &ModelMeta) -> bool {
+    matches!(meta.provider.as_str(), "openai" | "openai-codex")
+        || meta.id.starts_with("gpt-")
+        || meta.id.starts_with('o')
+}
+
+/// Estimate text tokens, using OpenAI-family tokenizers when available.
+pub fn estimate_text_tokens_for_model(text: &str, meta: &ModelMeta) -> u32 {
+    if model_uses_openai_tokenizer(meta) {
+        return count_openai_tokens(text, &meta.id).unwrap_or_else(|| estimate_tokens(text));
+    }
+
+    estimate_tokens(text)
+}
+
+/// Estimate one message's contribution to provider request input.
+pub fn estimate_message_tokens_for_model(message: &Message, meta: &ModelMeta) -> u32 {
+    if model_uses_openai_tokenizer(meta) {
+        match message {
+            Message::User(user) => {
+                4 + user
+                    .content
+                    .iter()
+                    .map(|block| match block {
+                        ContentBlock::Text { text } => estimate_text_tokens_for_model(text, meta),
+                        ContentBlock::Thinking { text } => {
+                            estimate_text_tokens_for_model(text, meta)
+                        }
+                        ContentBlock::ToolCall {
+                            name, arguments, ..
+                        } => {
+                            8 + estimate_text_tokens_for_model(name, meta)
+                                + estimate_text_tokens_for_model(
+                                    &serde_json::to_string(arguments).unwrap_or_default(),
+                                    meta,
+                                )
+                        }
+                        ContentBlock::Image { data, .. } => estimate_tokens(data),
+                    })
+                    .sum::<u32>()
+            }
+            Message::Assistant(assistant) => {
+                4 + assistant
+                    .content
+                    .iter()
+                    .map(|block| match block {
+                        ContentBlock::Text { text } => estimate_text_tokens_for_model(text, meta),
+                        ContentBlock::Thinking { text } => {
+                            estimate_text_tokens_for_model(text, meta)
+                        }
+                        ContentBlock::ToolCall {
+                            name, arguments, ..
+                        } => {
+                            8 + estimate_text_tokens_for_model(name, meta)
+                                + estimate_text_tokens_for_model(
+                                    &serde_json::to_string(arguments).unwrap_or_default(),
+                                    meta,
+                                )
+                        }
+                        ContentBlock::Image { data, .. } => estimate_tokens(data),
+                    })
+                    .sum::<u32>()
+            }
+            Message::ToolResult(result) => {
+                6 + estimate_text_tokens_for_model(&result.tool_name, meta)
+                    + result
+                        .content
+                        .iter()
+                        .map(|block| match block {
+                            ContentBlock::Text { text } => {
+                                estimate_text_tokens_for_model(text, meta)
+                            }
+                            ContentBlock::Thinking { text } => {
+                                estimate_text_tokens_for_model(text, meta)
+                            }
+                            ContentBlock::ToolCall {
+                                name, arguments, ..
+                            } => {
+                                8 + estimate_text_tokens_for_model(name, meta)
+                                    + estimate_text_tokens_for_model(
+                                        &serde_json::to_string(arguments).unwrap_or_default(),
+                                        meta,
+                                    )
+                            }
+                            ContentBlock::Image { data, .. } => estimate_tokens(data),
+                        })
+                        .sum::<u32>()
+            }
+        }
+    } else {
+        let json = serde_json::to_string(message).unwrap_or_default();
+        estimate_tokens(&json)
+    }
 }
 
 /// Estimate total context usage for a message list.
 pub fn context_usage(messages: &[Message], model: &Model) -> ContextUsage {
     let used: u32 = messages
         .iter()
-        .map(|m| {
-            let json = serde_json::to_string(m).unwrap_or_default();
-            estimate_tokens(&json)
-        })
+        .map(|m| estimate_message_tokens_for_model(m, &model.meta))
         .sum();
-    let limit = model.meta.context_window;
-    let ratio = if limit > 0 {
-        used as f64 / limit as f64
-    } else {
-        0.0
-    };
+    let budget = context_budget(model);
+    let limit = budget.display_window;
+    let ratio = budget.ratio_for_used(used);
     ContextUsage { used, limit, ratio }
 }
 
@@ -476,6 +616,80 @@ mod tests {
             usage_before.used,
             usage_after.used
         );
+    }
+
+    #[test]
+    fn gpt_5_5_context_budget_uses_one_million_display_window_with_buffer() {
+        let mut model = test_model();
+        model.meta.id = "gpt-5.5".into();
+        model.meta.context_window = 1_050_000;
+
+        let budget = context_budget(&model);
+
+        assert_eq!(budget.total_window, 1_050_000);
+        assert_eq!(budget.display_window, 1_000_000);
+        assert_eq!(budget.reserved_buffer, 50_000);
+        assert_eq!(budget.ratio_for_used(390_000), 0.39);
+    }
+
+    #[test]
+    fn non_gpt_5_5_context_budget_uses_model_window_without_buffer() {
+        let model = test_model();
+
+        let budget = context_budget(&model);
+
+        assert_eq!(budget.total_window, 100_000);
+        assert_eq!(budget.display_window, 100_000);
+        assert_eq!(budget.reserved_buffer, 0);
+    }
+
+    #[test]
+    fn context_usage_uses_budget_display_window() {
+        let mut model = test_model();
+        model.meta.id = "gpt-5.5".into();
+        model.meta.context_window = 1_050_000;
+        let messages = vec![make_user(&"x".repeat(4_000))];
+
+        let usage = context_usage(&messages, &model);
+
+        assert_eq!(usage.limit, 1_000_000);
+        assert!(usage.used > 0);
+        assert_eq!(usage.ratio, usage.used as f64 / 1_000_000.0);
+    }
+
+    #[test]
+    fn openai_text_estimation_uses_tokenizer_for_gpt_models() {
+        let mut model = test_model();
+        model.meta.id = "gpt-5.5".into();
+        model.meta.provider = "openai-codex".into();
+
+        let text = "hello world";
+        let estimated = estimate_text_tokens_for_model(text, &model.meta);
+
+        assert_eq!(estimated, 2);
+    }
+
+    #[test]
+    fn non_openai_text_estimation_uses_rough_fallback() {
+        let model = test_model();
+        let text = "hello world";
+
+        assert_eq!(
+            estimate_text_tokens_for_model(text, &model.meta),
+            estimate_tokens(text)
+        );
+    }
+
+    #[test]
+    fn openai_message_estimation_includes_message_overhead() {
+        let mut model = test_model();
+        model.meta.id = "gpt-5.5".into();
+        model.meta.provider = "openai-codex".into();
+        let message = make_user("hello world");
+
+        let estimated = estimate_message_tokens_for_model(&message, &model.meta);
+
+        assert!(estimated > estimate_text_tokens_for_model("hello world", &model.meta));
     }
 
     // -- edge case tests --

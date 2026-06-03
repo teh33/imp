@@ -4,7 +4,7 @@ use imp_core::builder::AgentBuilder;
 use imp_core::compaction::{
     execute_compaction_with_retry, execute_manual_compaction, prepare_messages_for_compaction,
     select_compaction_strategy, CompactionCapabilities, CompactionStrategy,
-    COMPACTION_SUMMARY_PREFIX, DEFAULT_KEEP_RECENT_GROUPS,
+    COMPACTION_SUMMARY_PREFIX, DEFAULT_KEEP_RECENT_GROUPS, LOCAL_COMPACTION_KEEP_RECENT_GROUPS,
 };
 use imp_core::session::SessionManager;
 use imp_core::Error as ImpCoreError;
@@ -280,14 +280,18 @@ impl App {
     }
 
     pub(super) fn finish_manual_compaction(&mut self, summary: String) {
-        let result =
-            execute_manual_compaction(&mut self.session, DEFAULT_KEEP_RECENT_GROUPS, |_| {
-                if summary.trim().is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(summary.clone()))
-                }
-            });
+        let keep_recent_groups = if summary.trim().is_empty() {
+            LOCAL_COMPACTION_KEEP_RECENT_GROUPS
+        } else {
+            DEFAULT_KEEP_RECENT_GROUPS
+        };
+        let result = execute_manual_compaction(&mut self.session, keep_recent_groups, |_| {
+            if summary.trim().is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(summary.clone()))
+            }
+        });
 
         match result {
             Ok(Some(compaction)) => {

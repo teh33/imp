@@ -785,7 +785,7 @@ pub fn builtin_openai_codex_models() -> Vec<ModelMeta> {
         id: "gpt-5.5".into(),
         provider: "openai-codex".into(),
         name: "GPT-5.5".into(),
-        context_window: 1_000_000,
+        context_window: 1_050_000,
         max_output_tokens: 128_000,
         pricing: ModelPricing::default(),
         capabilities: Capabilities {
@@ -1007,6 +1007,19 @@ fn synthesize_openai_model_meta(model_id: &str) -> ModelMeta {
                 tool_use: true,
             },
         },
+        _ if model_id == "gpt-5.5" => ModelMeta {
+            id: model_id.into(),
+            provider: "openai".into(),
+            name: "GPT-5.5".into(),
+            context_window: 1_050_000,
+            max_output_tokens: 128_000,
+            pricing: ModelPricing::default(),
+            capabilities: Capabilities {
+                reasoning: true,
+                images: true,
+                tool_use: true,
+            },
+        },
         _ if model_id.starts_with("gpt-5") => ModelMeta {
             id: model_id.into(),
             provider: "openai".into(),
@@ -1171,7 +1184,18 @@ mod tests {
             .expect("gpt5.5 alias should synthesize");
         assert_eq!(model.id, "gpt-5.5");
         assert_eq!(model.provider, "openai");
-        assert_eq!(model.context_window, 1_000_000);
+        assert_eq!(model.context_window, 1_050_000);
+    }
+
+    #[test]
+    fn resolve_meta_respects_chatgpt_gpt_5_5_window_with_codex_hint() {
+        let reg = ModelRegistry::with_builtins();
+        let model = reg
+            .resolve_meta("gpt5.5", Some("openai-codex"))
+            .expect("gpt5.5 alias should synthesize for ChatGPT/Codex");
+        assert_eq!(model.id, "gpt-5.5");
+        assert_eq!(model.provider, "openai-codex");
+        assert_eq!(model.context_window, 1_050_000);
     }
 
     #[test]
@@ -1331,7 +1355,7 @@ mod tests {
             .iter()
             .find(|model| model.id == "gpt-5.5")
             .expect("OpenAI Codex model list should include GPT-5.5");
-        assert_eq!(gpt_5_5.context_window, 1_000_000);
+        assert_eq!(gpt_5_5.context_window, 1_050_000);
     }
 
     #[test]

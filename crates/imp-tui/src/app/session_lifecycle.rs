@@ -856,6 +856,20 @@ fn current_model_meta_for_persistence_is_cached_for_render_status() {
 }
 
 #[test]
+fn gpt_5_5_status_uses_one_million_context_display_budget() {
+    let mut app = make_app();
+    app.model_name = "gpt-5.5".into();
+    app.current_model_meta_for_persistence = app
+        .model_registry
+        .resolve_meta("gpt-5.5", Some("openai-codex"));
+    app.current_model_meta_for_persistence_model = app.model_name.clone();
+
+    let status = app.build_status_info();
+
+    assert_eq!(status.context_window, 1_000_000);
+}
+
+#[test]
 fn current_oauth_display_info_is_cached_for_render_status() {
     let mut app = make_app();
     let info = imp_llm::auth::OAuthDisplayInfo {
@@ -923,6 +937,63 @@ fn tui_integration_slash_compact_noops_with_short_history() {
         app.messages[0].content,
         "Not enough history to compact yet."
     );
+}
+
+#[test]
+fn tui_integration_slash_compact_drops_huge_recent_tool_output() {
+    let mut app = make_app();
+    let huge_output = "x".repeat(80_000);
+
+    for i in 0..6 {
+        let call_id = format!("call-{i}");
+        app.session
+            .append(SessionEntry::Message {
+                id: format!("u{i}"),
+                parent_id: None,
+                message: Message::user(format!("inspect important file crates/example_{i}.rs")),
+            })
+            .unwrap();
+        app.session
+            .append(SessionEntry::Message {
+                id: format!("a{i}"),
+                parent_id: None,
+                message: Message::Assistant(AssistantMessage {
+                    content: vec![ContentBlock::ToolCall {
+                        id: call_id.clone(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path": format!("crates/example_{i}.rs")}),
+                    }],
+                    usage: None,
+                    stop_reason: StopReason::ToolUse,
+                    timestamp: 0,
+                }),
+            })
+            .unwrap();
+        app.session
+            .append(SessionEntry::Message {
+                id: format!("t{i}"),
+                parent_id: None,
+                message: Message::ToolResult(imp_llm::ToolResultMessage {
+                    tool_call_id: call_id,
+                    tool_name: "read".into(),
+                    content: vec![ContentBlock::Text {
+                        text: huge_output.clone(),
+                    }],
+                    is_error: false,
+                    details: serde_json::Value::Null,
+                    timestamp: 0,
+                }),
+            })
+            .unwrap();
+    }
+
+    app.finish_manual_compaction(String::new());
+
+    let active_json = serde_json::to_string(&app.session.get_active_messages()).unwrap();
+    assert!(active_json.contains("CONTEXT COMPACTION"));
+    assert!(active_json.contains("crates/example_5.rs"));
+    assert!(!active_json.contains(&huge_output));
+    assert!(active_json.len() < 20_000);
 }
 
 #[test]

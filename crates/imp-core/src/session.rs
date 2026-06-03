@@ -794,6 +794,10 @@ impl SessionManager {
             active.push(Message::user(summary_text.to_string()));
         }
 
+        if first_kept_id.is_empty() {
+            return active;
+        }
+
         let mut keep = false;
         for entry in branch {
             if entry.id() == Some(first_kept_id) {

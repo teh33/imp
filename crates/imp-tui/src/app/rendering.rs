@@ -32,6 +32,12 @@ impl App {
             .sum()
     }
 
+    pub(super) fn active_context_window(&self) -> u32 {
+        self.current_model_meta_for_persistence()
+            .map(|meta| imp_core::context::context_budget_for_meta(&meta).display_window)
+            .unwrap_or(self.context_window)
+    }
+
     pub(super) fn current_activity_state(&self) -> AnimationState {
         let active_tools = self
             .messages
@@ -780,6 +786,7 @@ impl App {
         } else {
             let status_info = self.build_status_info();
             let git_label = self.cached_git_label();
+            let active_context_window = self.active_context_window();
             let editor = EditorView::new(&self.editor, &self.theme, self.thinking_level)
                 .summarize_paste(true)
                 .model(&self.model_name)
@@ -790,7 +797,7 @@ impl App {
                 .queued(self.queued_message_preview(area.width))
                 .context_usage(
                     self.estimated_active_context_tokens(),
-                    self.context_window,
+                    active_context_window,
                     self.config.ui.show_context_usage,
                 )
                 .tick(self.tick)
@@ -963,11 +970,13 @@ impl App {
         let total_input = self.accumulated_usage.input_tokens;
         let total_output = self.accumulated_usage.output_tokens;
         let current_context_tokens = self.estimated_active_context_tokens();
-        // Show the same local active-history estimate used by the runtime's
-        // preflight context-full check. Provider-reported usage is still kept
-        // separately for accumulated token/cost accounting.
-        let context_percent = if self.context_window > 0 {
-            current_context_tokens as f64 / self.context_window as f64
+        let context_window = self.active_context_window();
+        // Show the active-history estimate against the same display/input budget
+        // used by runtime preflight. GPT-5.5 intentionally displays x%/1.0M
+        // while reserving the remaining 50k of its 1.05M total window for
+        // output, summarization, or recovery.
+        let context_percent = if context_window > 0 {
+            current_context_tokens as f64 / context_window as f64
         } else {
             0.0
         };
@@ -1002,7 +1011,7 @@ impl App {
             current_context_tokens,
             cost: self.accumulated_cost.total,
             context_percent,
-            context_window: self.context_window,
+            context_window,
             show_cost: self.config.ui.show_cost,
             show_context_usage: self.config.ui.show_context_usage,
             peek: self.tools_expanded,

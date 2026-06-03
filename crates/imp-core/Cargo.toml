@@ -59,6 +59,7 @@ tree-sitter-scala.workspace = true
 tree-sitter-dart.workspace = true
 jsonschema = "0.45"
 rusqlite = { version = "0.39", features = ["bundled"] }
+tiktoken-rs = "0.12.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
