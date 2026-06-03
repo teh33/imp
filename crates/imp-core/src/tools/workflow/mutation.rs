@@ -4,9 +4,9 @@ use std::path::Path;
 use chrono::Utc;
 use serde_json::json;
 
-use super::workflow_checks::reconcile_workflow_statuses;
-use super::workflow_files::workflow_id_root;
-use super::workflow_status::{
+use super::checks::reconcile_workflow_statuses;
+use super::files::workflow_id_root;
+use super::status::{
     append_workflow_event, apply_status_update, open_workflow_event_file, set_nested_mapping_string,
 };
 use super::{ToolContext, ToolOutput, WorkflowUpdateEvent};

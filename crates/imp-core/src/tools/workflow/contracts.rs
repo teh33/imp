@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::workflow_render::CaseExt;
+use super::render::CaseExt;
 use super::{
     WorkflowAgentActionContract, WorkflowCommunicationContract, WorkflowExecutionMode,
     WorkflowHeldBackStep, WorkflowNextAction, WorkflowSubagentBatchAssignment,

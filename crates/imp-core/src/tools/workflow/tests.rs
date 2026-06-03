@@ -1,8 +1,8 @@
 use super::*;
 use crate::workflow::{load_workflow, validate_workflow, CheckStatus, StepStatus};
+use files::load_selected_workflow;
 use std::path::Path;
 use std::sync::Arc;
-use workflow_files::load_selected_workflow;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")

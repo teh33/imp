@@ -4,8 +4,8 @@ use std::path::Path;
 use chrono::Utc;
 use serde::Serialize;
 
-use super::workflow_render::CaseExt;
-use super::workflow_status::{
+use super::render::CaseExt;
+use super::status::{
     append_workflow_event, open_workflow_event_file, set_mapping_string, set_nested_mapping_string,
 };
 use super::ToolContext;

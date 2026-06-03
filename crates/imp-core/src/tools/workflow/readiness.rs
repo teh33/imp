@@ -1,4 +1,4 @@
-use super::workflow_render::CaseExt;
+use super::render::CaseExt;
 use super::{WorkflowBlockedStep, WorkflowBlockedStepReason, WorkflowReadinessSummary};
 use crate::workflow::{
     workflow_step_readiness, WorkflowDocument, WorkflowReadinessReasonKind, WorkflowReadinessState,

@@ -2,13 +2,13 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::workflow_checks::{run_command_checks, WorkflowCommandStepRun};
-use super::workflow_contracts::{
+use super::checks::{run_command_checks, WorkflowCommandStepRun};
+use super::contracts::{
     action_for_runnable_step, subagent_action_for_runnable_step, subagent_batch_for_runnable_steps,
 };
-use super::workflow_files::load_selected_workflow;
-use super::workflow_readiness::blocked_steps;
-use super::workflow_render::{render_run_result, CaseExt};
+use super::files::load_selected_workflow;
+use super::readiness::blocked_steps;
+use super::render::{render_run_result, CaseExt};
 use super::{
     ToolContext, ToolOutput, WorkflowDiagnosticView, WorkflowExecutionMode, WorkflowNextAction,
     WorkflowRunResult, WorkflowValidationModeParam,

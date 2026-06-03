@@ -9,28 +9,19 @@ use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{ValidateOptions, ValidationMode};
 
-#[path = "workflow_checks.rs"]
-mod workflow_checks;
-#[path = "workflow_contracts.rs"]
-mod workflow_contracts;
-#[path = "workflow_files.rs"]
-mod workflow_files;
-#[path = "workflow_mutation.rs"]
-mod workflow_mutation;
-#[path = "workflow_query.rs"]
-mod workflow_query;
-#[path = "workflow_readiness.rs"]
-mod workflow_readiness;
-#[path = "workflow_render.rs"]
-mod workflow_render;
-#[path = "workflow_run.rs"]
-mod workflow_run;
-#[path = "workflow_status.rs"]
-mod workflow_status;
-use workflow_checks::WorkflowCommandStepRun;
-use workflow_mutation::{complete_step_action, update_action};
-use workflow_query::{list_action, show_action, validate_action, workflows_root};
-use workflow_run::run_action;
+mod checks;
+mod contracts;
+mod files;
+mod mutation;
+mod query;
+mod readiness;
+mod render;
+mod run;
+mod status;
+use checks::WorkflowCommandStepRun;
+use mutation::{complete_step_action, update_action};
+use query::{list_action, show_action, validate_action, workflows_root};
+use run::run_action;
 
 pub struct WorkflowTool;
 
@@ -411,5 +402,4 @@ impl Tool for WorkflowTool {
 }
 
 #[cfg(test)]
-#[path = "workflow_tests.rs"]
 mod tests;

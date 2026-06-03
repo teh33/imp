@@ -2,10 +2,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use super::workflow_files::{
+use super::files::{
     load_selected_workflow, load_workflow_items, validate_loaded_workflow, workflow_paths,
 };
-use super::workflow_render::render_workflow;
+use super::render::render_workflow;
 use super::{ToolOutput, WorkflowDiagnosticView, WorkflowListItem, WorkflowValidationModeParam};
 use crate::error::Result;
 use crate::workflow::{load_workflow, validate_workflow};
