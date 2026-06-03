@@ -748,7 +748,14 @@ fn tui_integration_slash_new_resets_rendered_context_percent() {
         cache_read_tokens: 0,
         cache_write_tokens: 0,
     };
-    app.current_context_tokens = 50_000;
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    app.session
+        .append(SessionEntry::Message {
+            id: msg_id,
+            parent_id: None,
+            message: Message::user("x".repeat(200_000)),
+        })
+        .unwrap();
 
     let before = app.build_status_info();
     let before_render = render_status_to_string(&before, 120);

@@ -21,6 +21,17 @@ use super::*;
 impl App {
     // ── Rendering ───────────────────────────────────────────────
 
+    pub(super) fn estimated_active_context_tokens(&self) -> u32 {
+        self.session
+            .get_active_messages()
+            .iter()
+            .map(|message| {
+                let json = serde_json::to_string(message).unwrap_or_default();
+                imp_core::context::estimate_tokens(&json)
+            })
+            .sum()
+    }
+
     pub(super) fn current_activity_state(&self) -> AnimationState {
         let active_tools = self
             .messages
@@ -778,7 +789,7 @@ impl App {
                 .streaming(self.is_streaming)
                 .queued(self.queued_message_preview(area.width))
                 .context_usage(
-                    self.current_context_tokens,
+                    self.estimated_active_context_tokens(),
                     self.context_window,
                     self.config.ui.show_context_usage,
                 )
@@ -951,12 +962,12 @@ impl App {
 
         let total_input = self.accumulated_usage.input_tokens;
         let total_output = self.accumulated_usage.output_tokens;
-        let current_context_tokens = self.current_context_tokens;
-        // Use last turn's input_tokens as the actual context size rather than
-        // accumulating across turns, which grows without bound and misrepresents
-        // compacted conversations.
+        let current_context_tokens = self.estimated_active_context_tokens();
+        // Show the same local active-history estimate used by the runtime's
+        // preflight context-full check. Provider-reported usage is still kept
+        // separately for accumulated token/cost accounting.
         let context_percent = if self.context_window > 0 {
-            self.current_context_tokens as f64 / self.context_window as f64
+            current_context_tokens as f64 / self.context_window as f64
         } else {
             0.0
         };

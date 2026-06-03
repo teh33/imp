@@ -17,7 +17,7 @@ use crate::views::chat::{DisplayMessage, MessageRole};
 use super::{resolve_provider_api_key, should_use_chatgpt_provider, App};
 
 impl App {
-    pub(super) fn run_manual_compaction(&mut self) {
+    pub(super) fn run_manual_compaction(&mut self, summarize: bool) {
         if self.is_streaming {
             self.push_error_msg("Cannot compact while the agent is actively streaming.");
             return;
@@ -32,6 +32,11 @@ impl App {
             prepare_messages_for_compaction(&active_messages, DEFAULT_KEEP_RECENT_GROUPS);
         if !prepared.should_compact() {
             self.push_system_msg("Not enough history to compact yet.");
+            return;
+        }
+
+        if !summarize {
+            self.finish_manual_compaction(String::new());
             return;
         }
 
@@ -217,7 +222,7 @@ impl App {
                             Ok(Ok(())) => {}
                             Ok(Err(error)) => return Err(error),
                             Err(_) => {
-                                return Err("Compaction timed out after 180 seconds".to_string());
+                                return Ok(None);
                             }
                         }
 
@@ -227,12 +232,11 @@ impl App {
                             message_end_text.unwrap_or_default()
                         };
                         if final_text.trim().is_empty() {
-                            Err("Compaction summary was empty".to_string())
+                            Ok(None)
                         } else {
-                            Ok(final_text)
+                            Ok(Some(final_text))
                         }
                     })
-                    .map(Some)
                     .map_err(|error| ImpCoreError::Llm(imp_llm::Error::Provider(error)))
                 },
             )
@@ -278,7 +282,11 @@ impl App {
     pub(super) fn finish_manual_compaction(&mut self, summary: String) {
         let result =
             execute_manual_compaction(&mut self.session, DEFAULT_KEEP_RECENT_GROUPS, |_| {
-                Ok(Some(summary.clone()))
+                if summary.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(summary.clone()))
+                }
             });
 
         match result {

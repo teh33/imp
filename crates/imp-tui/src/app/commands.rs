@@ -611,7 +611,7 @@ impl App {
                 self.current_context_tokens = 0;
             }
             "compact" => {
-                self.run_manual_compaction();
+                self.run_manual_compaction(matches!(args, "summarize" | "summary"));
             }
             "hotkeys" => {
                 self.push_system_msg(
