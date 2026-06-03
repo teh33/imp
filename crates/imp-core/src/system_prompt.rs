@@ -209,7 +209,7 @@ fn identity_layer(
     }
 
     s.push_str("\nTool routing:\n");
-    s.push_str("- Use `bash` for shell-native search, file discovery, builds, tests, scripts, and package managers; prefer `scan` when code structure or symbols matter.\n");
+    s.push_str("- For code lookup, use `scan` for structure and `rg` for raw text; avoid unpruned `find`. Use `bash` for builds, tests, scripts, and package managers.\n");
     if defs.iter().any(|def| def.name == "git") {
         s.push_str("- Use `git` for local repo/worktree operations; use `bash` for uncovered git commands.\n");
     }
