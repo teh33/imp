@@ -41,8 +41,8 @@ pub fn context_budget_for_meta(meta: &imp_llm::ModelMeta) -> ContextBudget {
     if meta.id == "gpt-5.5" {
         return ContextBudget {
             total_window: 1_050_000,
-            display_window: 1_000_000,
-            reserved_buffer: 50_000,
+            display_window: 922_000,
+            reserved_buffer: 128_000,
         };
     }
 
@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn gpt_5_5_context_budget_uses_one_million_display_window_with_buffer() {
+    fn gpt_5_5_context_budget_uses_input_window_with_output_reserve() {
         let mut model = test_model();
         model.meta.id = "gpt-5.5".into();
         model.meta.context_window = 1_050_000;
@@ -627,9 +627,9 @@ mod tests {
         let budget = context_budget(&model);
 
         assert_eq!(budget.total_window, 1_050_000);
-        assert_eq!(budget.display_window, 1_000_000);
-        assert_eq!(budget.reserved_buffer, 50_000);
-        assert_eq!(budget.ratio_for_used(390_000), 0.39);
+        assert_eq!(budget.display_window, 922_000);
+        assert_eq!(budget.reserved_buffer, 128_000);
+        assert_eq!(budget.ratio_for_used(461_000), 0.5);
     }
 
     #[test]
@@ -652,9 +652,9 @@ mod tests {
 
         let usage = context_usage(&messages, &model);
 
-        assert_eq!(usage.limit, 1_000_000);
+        assert_eq!(usage.limit, 922_000);
         assert!(usage.used > 0);
-        assert_eq!(usage.ratio, usage.used as f64 / 1_000_000.0);
+        assert_eq!(usage.ratio, usage.used as f64 / 922_000.0);
     }
 
     #[test]

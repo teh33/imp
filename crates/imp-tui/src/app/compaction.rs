@@ -302,6 +302,7 @@ impl App {
 
         match result {
             Ok(Some(compaction)) => {
+                self.current_context_tokens = compaction.tokens_after;
                 self.load_session_messages();
                 self.messages.push(DisplayMessage {
                     role: MessageRole::Compaction,

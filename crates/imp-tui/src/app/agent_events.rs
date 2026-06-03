@@ -378,9 +378,12 @@ impl App {
                 workflow_review: _,
             } => {
                 self.completed_turns_in_run += 1;
-                // Update context tracking from this turn's usage
+                // Use the provider's latest active context accounting as the
+                // canonical display baseline. OpenAI reports cached tokens as a
+                // subset of input tokens, so adding cache_read_tokens would
+                // double-count them and diverge from the provider window.
                 if let Some(ref usage) = message.usage {
-                    self.current_context_tokens = usage.input_tokens + usage.cache_read_tokens;
+                    self.current_context_tokens = usage.raw_total_tokens();
                     self.accumulated_usage.add(usage);
                 }
 

@@ -22,14 +22,28 @@ impl App {
     // ── Rendering ───────────────────────────────────────────────
 
     pub(super) fn estimated_active_context_tokens(&self) -> u32 {
+        let Some(meta) = self.current_model_meta_for_persistence() else {
+            return self
+                .session
+                .get_active_messages()
+                .iter()
+                .map(|message| {
+                    let json = serde_json::to_string(message).unwrap_or_default();
+                    imp_core::context::estimate_tokens(&json)
+                })
+                .sum();
+        };
+
         self.session
             .get_active_messages()
             .iter()
-            .map(|message| {
-                let json = serde_json::to_string(message).unwrap_or_default();
-                imp_core::context::estimate_tokens(&json)
-            })
+            .map(|message| imp_core::context::estimate_message_tokens_for_model(message, &meta))
             .sum()
+    }
+
+    pub(super) fn display_context_tokens(&self) -> u32 {
+        self.current_context_tokens
+            .max(self.estimated_active_context_tokens())
     }
 
     pub(super) fn active_context_window(&self) -> u32 {
@@ -969,12 +983,12 @@ impl App {
 
         let total_input = self.accumulated_usage.input_tokens;
         let total_output = self.accumulated_usage.output_tokens;
-        let current_context_tokens = self.estimated_active_context_tokens();
+        let current_context_tokens = self.display_context_tokens();
         let context_window = self.active_context_window();
         // Show the active-history estimate against the same display/input budget
-        // used by runtime preflight. GPT-5.5 intentionally displays x%/1.0M
-        // while reserving the remaining 50k of its 1.05M total window for
-        // output, summarization, or recovery.
+        // used by runtime preflight. GPT-5.5 uses its published 922k input
+        // budget and reserves the remaining 128k of its 1.05M total window for
+        // output.
         let context_percent = if context_window > 0 {
             current_context_tokens as f64 / context_window as f64
         } else {
