@@ -839,15 +839,75 @@ pub enum AutoCompactionMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutoCompactionConfig {
-    /// Placeholder mode selection for future auto-compaction design.
+    /// Mode selection for automatic context compaction.
     #[serde(default)]
     pub mode: AutoCompactionMode,
+
+    /// Trigger ratio for near-threshold auto-compaction. Defaults to 0.90.
+    #[serde(default = "default_auto_compaction_trigger_ratio")]
+    pub trigger_ratio: f64,
+
+    /// Target ratio after auto-compaction. Defaults to 0.70.
+    #[serde(default = "default_auto_compaction_target_ratio")]
+    pub target_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SummarizerConfig {
+    /// Summarizer model. `default` means use the active conversation model.
+    #[serde(default = "default_summarizer_model")]
+    pub model: String,
+
+    /// Reserved token budget for summarization/recovery prompts.
+    #[serde(default = "default_summarizer_reserve_tokens")]
+    pub reserve_tokens: u32,
+
+    /// Target size for generated summaries.
+    #[serde(default = "default_summarizer_target_summary_tokens")]
+    pub target_summary_tokens: u32,
+
+    /// Fully replaces imp's built-in summarization prompt when set.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+fn default_auto_compaction_trigger_ratio() -> f64 {
+    0.90
+}
+
+fn default_auto_compaction_target_ratio() -> f64 {
+    0.70
+}
+
+fn default_summarizer_model() -> String {
+    "default".to_string()
+}
+
+fn default_summarizer_reserve_tokens() -> u32 {
+    50_000
+}
+
+fn default_summarizer_target_summary_tokens() -> u32 {
+    40_000
 }
 
 impl Default for AutoCompactionConfig {
     fn default() -> Self {
         Self {
-            mode: AutoCompactionMode::Disabled,
+            mode: AutoCompactionMode::NearThreshold,
+            trigger_ratio: default_auto_compaction_trigger_ratio(),
+            target_ratio: default_auto_compaction_target_ratio(),
+        }
+    }
+}
+
+impl Default for SummarizerConfig {
+    fn default() -> Self {
+        Self {
+            model: default_summarizer_model(),
+            reserve_tokens: default_summarizer_reserve_tokens(),
+            target_summary_tokens: default_summarizer_target_summary_tokens(),
+            prompt: None,
         }
     }
 }
@@ -860,9 +920,13 @@ pub struct ContextConfig {
     /// Keep last N turns unmasked (default: 10).
     pub mask_window: usize,
 
-    /// Placeholder auto-compaction settings. Disabled by default.
+    /// Auto-compaction settings. Enabled by default.
     #[serde(default)]
     pub auto_compaction: AutoCompactionConfig,
+
+    /// Summarizer settings for semantic context compaction.
+    #[serde(default)]
+    pub summarizer: SummarizerConfig,
 }
 
 impl Default for ContextConfig {
@@ -871,6 +935,7 @@ impl Default for ContextConfig {
             observation_mask_threshold: 0.6,
             mask_window: 10,
             auto_compaction: AutoCompactionConfig::default(),
+            summarizer: SummarizerConfig::default(),
         }
     }
 }
@@ -1067,7 +1132,7 @@ mod tests {
         assert_eq!(config.context.mask_window, 10);
         assert_eq!(
             config.context.auto_compaction.mode,
-            AutoCompactionMode::Disabled
+            AutoCompactionMode::NearThreshold
         );
         assert_eq!(config.guardrails, GuardrailConfig::default());
     }
@@ -1147,7 +1212,7 @@ search_provider = "exa"
         assert_eq!(config.context.mask_window, 5);
         assert_eq!(
             config.context.auto_compaction.mode,
-            AutoCompactionMode::Disabled
+            AutoCompactionMode::NearThreshold
         );
     }
 
@@ -1330,7 +1395,9 @@ role = "assistant"
                 mask_window: 5,
                 auto_compaction: AutoCompactionConfig {
                     mode: AutoCompactionMode::NearThreshold,
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         };

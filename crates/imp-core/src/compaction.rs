@@ -211,8 +211,21 @@ pub const COMPACTION_SUMMARY_PREFIX: &str = "[CONTEXT COMPACTION] Earlier turns 
 Use the summary below plus the preserved recent messages to continue. \
 Avoid repeating completed work:\n";
 
-/// Build the structured summarization prompt fed to the LLM.
-fn build_summary_prompt(messages: &[Message]) -> String {
+/// Options for building the LLM summarization prompt.
+#[derive(Debug, Clone, Default)]
+pub struct SummaryPromptOptions {
+    /// Fully replaces imp's built-in summarization instructions when set.
+    pub prompt: Option<String>,
+    /// Target size for the generated summary.
+    pub target_summary_tokens: Option<u32>,
+}
+
+/// Build the structured summarization prompt fed to the LLM using optional
+/// user-configured summarizer instructions.
+pub fn build_summary_prompt_with_options(
+    messages: &[Message],
+    options: &SummaryPromptOptions,
+) -> String {
     let mut serialized = String::new();
     for msg in messages {
         match msg {
@@ -275,6 +288,23 @@ fn build_summary_prompt(messages: &[Message]) -> String {
         }
     }
 
+    if let Some(custom_prompt) = options
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        let target = options.target_summary_tokens.unwrap_or(40_000);
+        return format!(
+            "{custom_prompt}\n\nTURNS TO SUMMARIZE:\n{serialized}\n\nTarget summary size: ~{target} tokens. Write only the summary body."
+        );
+    }
+
+    let target = options
+        .target_summary_tokens
+        .map(|tokens| format!("Target about {tokens} tokens unless the history is tiny."))
+        .unwrap_or_else(|| "Target 800-1600 words unless the history is tiny.".to_string());
+
     format!(
         "Create a compact, high-signal handoff summary for a later assistant that will \
          continue this conversation after earlier turns are compacted. Treat this as \
@@ -294,7 +324,7 @@ fn build_summary_prompt(messages: &[Message]) -> String {
          - Preserve explicit user instructions and corrections verbatim when short.\n\
          - Preserve references to truncated-output artifact files; do not summarize them away.\n\
          - Omit chatter, repeated attempts, and obsolete plans unless they explain current state.\n\
-         - Be concise but complete. Target 800-1600 words unless the history is tiny.\n\
+         - Be concise but complete. {target}\n\
          - Do not include any preamble or prefix. Write only the summary body."
     )
 }
@@ -461,6 +491,193 @@ fn build_fallback_summary(messages: &[Message]) -> String {
 
 // ── Compaction executor ───────────────────────────────────────────────────
 
+/// Default token budget for recent context preserved by automatic compaction.
+pub const AUTO_COMPACTION_RECENT_TAIL_TOKENS: u32 = 150_000;
+
+/// Result of deterministic in-memory auto-compaction.
+#[derive(Debug, Clone)]
+pub struct AutoCompactionResult {
+    pub messages: Vec<Message>,
+    pub tokens_before: u32,
+    pub tokens_after: u32,
+}
+
+fn sanitize_message_for_auto_compaction(message: &Message) -> Option<Message> {
+    match message {
+        Message::User(user) => {
+            let content = user
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } if !text.trim().is_empty() => {
+                        Some(ContentBlock::Text { text: text.clone() })
+                    }
+                    ContentBlock::Image { media_type, data } => Some(ContentBlock::Text {
+                        text: format!(
+                            "[Image omitted during auto-compaction: {media_type}, {} bytes]",
+                            data.len()
+                        ),
+                    }),
+                    ContentBlock::Thinking { .. } | ContentBlock::ToolCall { .. } => None,
+                    ContentBlock::Text { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            (!content.is_empty()).then(|| {
+                Message::User(imp_llm::UserMessage {
+                    content,
+                    timestamp: user.timestamp,
+                })
+            })
+        }
+        Message::Assistant(assistant) => {
+            let content = assistant
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } if !text.trim().is_empty() => {
+                        Some(ContentBlock::Text {
+                            text: truncate_for_display(text, 2_000),
+                        })
+                    }
+                    ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } => Some(ContentBlock::ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: truncate_tool_arguments(arguments),
+                    }),
+                    ContentBlock::Image { media_type, data } => Some(ContentBlock::Text {
+                        text: format!(
+                            "[Image omitted during auto-compaction: {media_type}, {} bytes]",
+                            data.len()
+                        ),
+                    }),
+                    ContentBlock::Thinking { .. } | ContentBlock::Text { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            (!content.is_empty()).then(|| {
+                Message::Assistant(imp_llm::AssistantMessage {
+                    content,
+                    usage: assistant.usage.clone(),
+                    stop_reason: assistant.stop_reason.clone(),
+                    timestamp: assistant.timestamp,
+                })
+            })
+        }
+        Message::ToolResult(result) => Some(Message::ToolResult(imp_llm::ToolResultMessage {
+            tool_call_id: result.tool_call_id.clone(),
+            tool_name: result.tool_name.clone(),
+            content: vec![ContentBlock::Text {
+                text: format!(
+                    "[Tool output omitted during auto-compaction: {}{}]",
+                    result.tool_name,
+                    if result.is_error {
+                        " returned an error"
+                    } else {
+                        " succeeded"
+                    }
+                ),
+            }],
+            is_error: result.is_error,
+            details: result.details.clone(),
+            timestamp: result.timestamp,
+        })),
+    }
+}
+
+fn truncate_tool_arguments(arguments: &serde_json::Value) -> serde_json::Value {
+    match arguments {
+        serde_json::Value::String(text) if text.len() > 1_000 => {
+            serde_json::Value::String(truncate_for_display(text, 1_000))
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(truncate_tool_arguments)
+                .collect::<Vec<_>>(),
+        ),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), truncate_tool_arguments(value)))
+                .collect(),
+        ),
+        _ => arguments.clone(),
+    }
+}
+
+fn auto_tail_start(messages: &[Message], model: &imp_llm::Model, tail_tokens: u32) -> usize {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    for (idx, msg) in messages.iter().enumerate() {
+        if idx > start && msg.is_user() {
+            groups.push(start..idx);
+            start = idx;
+        }
+    }
+    if start < messages.len() {
+        groups.push(start..messages.len());
+    }
+
+    let mut used = 0u32;
+    let mut tail_start = messages.len();
+    for group in groups.iter().rev() {
+        let group_tokens: u32 = messages[group.clone()]
+            .iter()
+            .map(|message| crate::context::estimate_message_tokens_for_model(message, &model.meta))
+            .sum();
+        if used > 0 && used.saturating_add(group_tokens) > tail_tokens {
+            break;
+        }
+        used = used.saturating_add(group_tokens);
+        tail_start = group.start;
+    }
+    tail_start
+}
+
+/// Deterministically compact active messages before a provider request.
+pub fn compact_messages_for_auto_compaction(
+    messages: &[Message],
+    model: &imp_llm::Model,
+    recent_tail_tokens: u32,
+) -> Option<AutoCompactionResult> {
+    if messages.len() < 4 {
+        return None;
+    }
+
+    let tokens_before = crate::context::context_usage(messages, model).used;
+    let tail_start = auto_tail_start(messages, model, recent_tail_tokens);
+    if tail_start == 0 || tail_start >= messages.len() {
+        return None;
+    }
+
+    let summary_input = messages[..tail_start]
+        .iter()
+        .filter_map(sanitize_message_for_auto_compaction)
+        .collect::<Vec<_>>();
+    let preserved_tail = messages[tail_start..]
+        .iter()
+        .filter_map(sanitize_message_for_auto_compaction)
+        .collect::<Vec<_>>();
+    if summary_input.is_empty() || preserved_tail.is_empty() {
+        return None;
+    }
+
+    let summary_body = build_fallback_summary(&summary_input);
+    let mut compacted = vec![Message::user(format!(
+        "{COMPACTION_SUMMARY_PREFIX}{summary_body}"
+    ))];
+    compacted.extend(preserved_tail);
+
+    let tokens_after = crate::context::context_usage(&compacted, model).used;
+    (tokens_after < tokens_before).then_some(AutoCompactionResult {
+        messages: compacted,
+        tokens_before,
+        tokens_after,
+    })
+}
+
 /// Default number of recent assistant-action groups to preserve verbatim.
 pub const DEFAULT_KEEP_RECENT_GROUPS: usize = 4;
 
@@ -499,6 +716,24 @@ pub fn execute_manual_compaction<F>(
 where
     F: FnOnce(&str) -> Result<Option<String>>,
 {
+    execute_manual_compaction_with_prompt_options(
+        session,
+        keep_recent_groups,
+        &SummaryPromptOptions::default(),
+        generate_summary,
+    )
+}
+
+/// Execute manual compaction with explicit summarization prompt options.
+pub fn execute_manual_compaction_with_prompt_options<F>(
+    session: &mut SessionManager,
+    keep_recent_groups: usize,
+    prompt_options: &SummaryPromptOptions,
+    generate_summary: F,
+) -> Result<Option<CompactionResult>>
+where
+    F: FnOnce(&str) -> Result<Option<String>>,
+{
     let raw_messages = session.get_active_messages();
     let tokens_before = raw_messages
         .iter()
@@ -514,7 +749,7 @@ where
     }
 
     // Build the summarization prompt from the shrunk older prefix.
-    let prompt = build_summary_prompt(&prepared.summary_input);
+    let prompt = build_summary_prompt_with_options(&prepared.summary_input, prompt_options);
 
     // Call the provided summarizer. If it returns Ok(None), use a bounded deterministic fallback.
     let summary_body = generate_summary(&prompt)?
@@ -576,25 +811,42 @@ where
     }))
 }
 
-// ── Convenience: compaction with overflow retry ───────────────────────────
-
-/// Execute manual compaction with overflow retry.
-///
-/// If the `generate_summary` closure returns `Ok(None)` (indicating the
-/// summarizer should be skipped or could not handle the input), this function
-/// increases `keep_recent_groups` by 2 each retry, shrinking the summarization
-/// target, up to `max_retries` times. Provider errors are returned immediately.
 pub fn execute_compaction_with_retry<F>(
+    session: &mut SessionManager,
+    keep_recent_groups: usize,
+    max_retries: u32,
+    generate_summary: F,
+) -> Result<Option<CompactionResult>>
+where
+    F: FnMut(&str) -> Result<Option<String>>,
+{
+    execute_compaction_with_retry_and_prompt_options(
+        session,
+        keep_recent_groups,
+        max_retries,
+        &SummaryPromptOptions::default(),
+        generate_summary,
+    )
+}
+
+/// Execute manual compaction with overflow retry and explicit prompt options.
+pub fn execute_compaction_with_retry_and_prompt_options<F>(
     session: &mut SessionManager,
     mut keep_recent_groups: usize,
     max_retries: u32,
+    prompt_options: &SummaryPromptOptions,
     mut generate_summary: F,
 ) -> Result<Option<CompactionResult>>
 where
     F: FnMut(&str) -> Result<Option<String>>,
 {
     for attempt in 0..=max_retries {
-        let result = execute_manual_compaction(session, keep_recent_groups, &mut generate_summary)?;
+        let result = execute_manual_compaction_with_prompt_options(
+            session,
+            keep_recent_groups,
+            prompt_options,
+            &mut generate_summary,
+        )?;
         match result {
             Some(result) => return Ok(Some(result)),
             None if attempt < max_retries => {
@@ -610,7 +862,15 @@ where
 mod tests {
     use super::*;
     use crate::session::SessionManager;
-    use imp_llm::{AssistantMessage, StopReason, ToolResultMessage};
+    use async_trait::async_trait;
+    use futures_core::Stream;
+    use imp_llm::model::{Capabilities, ModelMeta, ModelPricing};
+    use imp_llm::provider::Provider;
+    use imp_llm::{
+        AssistantMessage, Model, RequestOptions, StopReason, StreamEvent, ToolResultMessage,
+    };
+    use std::pin::Pin;
+    use std::sync::Arc;
 
     #[test]
     fn compaction_strategy_defaults_to_local() {
@@ -655,6 +915,51 @@ mod tests {
         assert_eq!(select_compaction_strategy(&caps), CompactionStrategy::Local);
     }
 
+    struct NullProvider;
+
+    #[async_trait]
+    impl Provider for NullProvider {
+        fn stream(
+            &self,
+            _model: &Model,
+            _context: imp_llm::Context,
+            _options: RequestOptions,
+            _api_key: &str,
+        ) -> Pin<Box<dyn Stream<Item = imp_llm::Result<StreamEvent>> + Send>> {
+            Box::pin(futures::stream::empty())
+        }
+
+        async fn resolve_auth(
+            &self,
+            _auth: &imp_llm::auth::AuthStore,
+        ) -> imp_llm::Result<imp_llm::auth::ApiKey> {
+            Ok("test".into())
+        }
+
+        fn id(&self) -> &str {
+            "null"
+        }
+
+        fn models(&self) -> &[ModelMeta] {
+            &[]
+        }
+    }
+
+    fn test_model() -> Model {
+        Model {
+            meta: ModelMeta {
+                id: "test".into(),
+                provider: "test".into(),
+                name: "Test".into(),
+                context_window: 100_000,
+                max_output_tokens: 4096,
+                pricing: ModelPricing::default(),
+                capabilities: Capabilities::default(),
+            },
+            provider: Arc::new(NullProvider),
+        }
+    }
+
     fn make_user(text: &str) -> Message {
         Message::user(text)
     }
@@ -696,6 +1001,77 @@ mod tests {
             details: serde_json::Value::Null,
             timestamp: 1000,
         })
+    }
+
+    #[test]
+    fn summary_prompt_options_use_custom_prompt_and_target_tokens() {
+        let messages = vec![
+            make_user("Please preserve src/main.rs and the failing cargo test."),
+            make_assistant_tool_call(
+                "c1",
+                "bash",
+                serde_json::json!({"command": "cargo test -p imp-core"}),
+            ),
+            make_tool_result("c1", "bash", "error[E0425]: cannot find value"),
+        ];
+        let prompt = build_summary_prompt_with_options(
+            &messages,
+            &SummaryPromptOptions {
+                prompt: Some("CUSTOM HANDOFF TEMPLATE".into()),
+                target_summary_tokens: Some(12_345),
+            },
+        );
+
+        assert!(prompt.starts_with("CUSTOM HANDOFF TEMPLATE"));
+        assert!(prompt.contains("TURNS TO SUMMARIZE"));
+        assert!(prompt.contains("src/main.rs"));
+        assert!(prompt.contains("cargo test -p imp-core"));
+        assert!(prompt.contains("Target summary size: ~12345 tokens"));
+    }
+
+    #[test]
+    fn summary_prompt_options_fall_back_to_builtin_for_blank_custom_prompt() {
+        let messages = vec![make_user("preserve this goal")];
+        let prompt = build_summary_prompt_with_options(
+            &messages,
+            &SummaryPromptOptions {
+                prompt: Some("   \n\t".into()),
+                target_summary_tokens: Some(777),
+            },
+        );
+
+        assert!(prompt.contains("Create a compact, high-signal handoff summary"));
+        assert!(prompt.contains("Target about 777 tokens"));
+        assert!(prompt.contains("preserve this goal"));
+    }
+
+    #[test]
+    fn auto_compaction_preserves_token_tail_and_drops_huge_tool_output() {
+        let model = test_model();
+        let huge_output = "x".repeat(80_000);
+        let mut messages = Vec::new();
+        for idx in 0..8 {
+            let call_id = format!("call-{idx}");
+            messages.push(make_user(&format!("inspect src/file_{idx}.rs")));
+            messages.push(make_assistant_tool_call(
+                &call_id,
+                "read",
+                serde_json::json!({"path": format!("src/file_{idx}.rs")}),
+            ));
+            messages.push(make_tool_result(&call_id, "read", &huge_output));
+        }
+        messages.push(make_user("continue with the latest file"));
+
+        let result = compact_messages_for_auto_compaction(&messages, &model, 4_000)
+            .expect("tool-heavy context should compact");
+
+        assert!(result.tokens_after < result.tokens_before);
+        let compacted_json = serde_json::to_string(&result.messages).unwrap();
+        assert!(compacted_json.contains("CONTEXT COMPACTION"));
+        assert!(compacted_json.contains("src/file_7.rs"));
+        assert!(compacted_json.contains("continue with the latest file"));
+        assert!(!compacted_json.contains(&huge_output));
+        assert!(compacted_json.contains("Tool result omitted"));
     }
 
     #[test]
@@ -808,6 +1184,45 @@ mod tests {
             parent_id: None,
             message: msg,
         }
+    }
+
+    #[test]
+    fn compact_executor_passes_prompt_options_to_summarizer() {
+        let mut mgr = SessionManager::in_memory();
+        for idx in 0..6 {
+            mgr.append(SessionEntry::Message {
+                id: format!("u{idx}"),
+                parent_id: None,
+                message: make_user(&format!("preserve custom prompt path src/{idx}.rs")),
+            })
+            .unwrap();
+            mgr.append(SessionEntry::Message {
+                id: format!("a{idx}"),
+                parent_id: None,
+                message: make_assistant_text("ack"),
+            })
+            .unwrap();
+        }
+
+        let mut seen_prompt = String::new();
+        let result = execute_manual_compaction_with_prompt_options(
+            &mut mgr,
+            2,
+            &SummaryPromptOptions {
+                prompt: Some("CUSTOM EXECUTOR PROMPT".into()),
+                target_summary_tokens: Some(9_999),
+            },
+            |prompt| {
+                seen_prompt = prompt.to_string();
+                Ok(Some("executor summary".into()))
+            },
+        )
+        .unwrap();
+
+        assert!(result.is_some());
+        assert!(seen_prompt.starts_with("CUSTOM EXECUTOR PROMPT"));
+        assert!(seen_prompt.contains("Target summary size: ~9999 tokens"));
+        assert!(seen_prompt.contains("src/0.rs"));
     }
 
     #[test]

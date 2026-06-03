@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use imp_core::builder::AgentBuilder;
 use imp_core::compaction::{
-    execute_compaction_with_retry, execute_manual_compaction, prepare_messages_for_compaction,
-    select_compaction_strategy, CompactionCapabilities, CompactionStrategy,
-    COMPACTION_SUMMARY_PREFIX, DEFAULT_KEEP_RECENT_GROUPS, LOCAL_COMPACTION_KEEP_RECENT_GROUPS,
+    execute_compaction_with_retry_and_prompt_options, execute_manual_compaction,
+    prepare_messages_for_compaction, select_compaction_strategy, CompactionCapabilities,
+    CompactionStrategy, SummaryPromptOptions, COMPACTION_SUMMARY_PREFIX,
+    DEFAULT_KEEP_RECENT_GROUPS, LOCAL_COMPACTION_KEEP_RECENT_GROUPS,
 };
 use imp_core::session::SessionManager;
 use imp_core::Error as ImpCoreError;
@@ -84,6 +85,13 @@ impl App {
         let mut config = self.config.clone();
         config.thinking = Some(thinking_level);
 
+        let summarizer_config = config.context.summarizer.clone();
+        let prompt_options = SummaryPromptOptions {
+            prompt: summarizer_config.prompt.clone(),
+            target_summary_tokens: Some(summarizer_config.target_summary_tokens),
+        };
+        let prompt_reserve_tokens = summarizer_config.reserve_tokens.max(1);
+
         let strategy = select_compaction_strategy(&CompactionCapabilities {
             provider_id: &provider_name,
             model_id: &model_id,
@@ -129,10 +137,11 @@ impl App {
 
             let system_prompt = agent.system_prompt.clone();
             let retry_policy = agent.retry_policy.clone();
-            execute_compaction_with_retry(
+            execute_compaction_with_retry_and_prompt_options(
                 &mut SessionManager::in_memory_with_messages(active_messages),
                 DEFAULT_KEEP_RECENT_GROUPS,
                 2,
+                &prompt_options,
                 |prompt| {
                     use futures::StreamExt;
                     use imp_llm::provider::{CacheOptions, Context as LlmContext, RequestOptions};
@@ -144,9 +153,7 @@ impl App {
                     let prompt = prompt.to_string();
                     let retry_policy = retry_policy.clone();
                     let prompt_tokens = imp_core::context::estimate_tokens(&prompt);
-                    let prompt_limit =
-                        ((model_meta.context_window as f64) * 0.6).floor().max(1.0) as u32;
-                    if prompt_tokens > prompt_limit {
+                    if prompt_tokens > prompt_reserve_tokens {
                         return Ok(None);
                     }
 

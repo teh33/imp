@@ -12,6 +12,7 @@ use crate::agent::{
     Agent, AgentCommand, AgentEvent, LoopDecision, RecoveryCheckpointKind, RunFinalStatus,
     StopReason as AgentStopReason, TimingEvent, TimingStage, TurnPhase, TurnState,
 };
+use crate::config::AutoCompactionMode;
 use crate::error::Result;
 use crate::hooks::HookEvent;
 use crate::ui::NotifyLevel;
@@ -45,6 +46,26 @@ fn recoverable_stream_failure_message(error: &str) -> Option<String> {
 fn recoverable_context_failure(error: &imp_llm::Error) -> bool {
     matches!(error, imp_llm::Error::ContextTooLong { .. })
         || matches!(error, imp_llm::Error::Provider(message) if crate::error_display::format_error_for_display(message).starts_with("Context full:"))
+}
+
+fn auto_compaction_should_run(
+    mode: AutoCompactionMode,
+    usage: &crate::context::ContextUsage,
+    trigger_ratio: f64,
+) -> bool {
+    if usage.limit == 0 {
+        return false;
+    }
+    let trigger_ratio = if trigger_ratio.is_finite() && trigger_ratio > 0.0 {
+        trigger_ratio
+    } else {
+        0.90
+    };
+    match mode {
+        AutoCompactionMode::Disabled => false,
+        AutoCompactionMode::NearThreshold => usage.ratio >= trigger_ratio,
+        AutoCompactionMode::Aggressive => usage.ratio >= trigger_ratio.min(0.75),
+    }
 }
 
 fn mask_all_observations_for_recovery(
@@ -296,6 +317,29 @@ impl Agent {
                 // Masking can materially reduce context size, so any subsequent
                 // logic must use fresh usage rather than the pre-masking snapshot.
                 usage = crate::context::context_usage(&self.messages, &self.model);
+            }
+
+            if auto_compaction_should_run(
+                self.context_config.auto_compaction.mode,
+                &usage,
+                self.context_config.auto_compaction.trigger_ratio,
+            ) {
+                if let Some(compaction) = crate::compaction::compact_messages_for_auto_compaction(
+                    &self.messages,
+                    &self.model,
+                    crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS,
+                ) {
+                    self.messages = compaction.messages;
+                    self.emit(AgentEvent::Warning {
+                        message: format!(
+                            "Auto-compacted older tool output and file dumps before the provider request ({} -> {} estimated tokens). Exact old output may need to be reread.",
+                            compaction.tokens_before,
+                            compaction.tokens_after
+                        ),
+                    })
+                    .await;
+                    usage = crate::context::context_usage(&self.messages, &self.model);
+                }
             }
 
             if usage.used >= usage.limit && usage.limit > 0 {

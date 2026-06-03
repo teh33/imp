@@ -4321,6 +4321,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_auto_compacts_tool_heavy_context_before_provider_request() {
+        let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
+        let huge_output = "x".repeat(80_000);
+
+        let mut seeded_messages = Vec::new();
+        for index in 0..8 {
+            let call_id = format!("call_{index}");
+            seeded_messages.push(Message::user(format!("inspect src/file_{index}.rs")));
+            seeded_messages.push(make_assistant_tool_call(
+                &call_id,
+                "read",
+                serde_json::json!({"path": format!("src/file_{index}.rs")}),
+            ));
+            seeded_messages.push(make_tool_result(&call_id, "read", &huge_output));
+        }
+
+        let mut usage_messages = seeded_messages.clone();
+        usage_messages.push(Message::user("continue"));
+        let provisional_model = test_model(provider.clone());
+        let usage = crate::context::context_usage(&usage_messages, &provisional_model);
+        let context_window = ((usage.used as f64) / 0.5).ceil() as u32;
+
+        let model = test_model_with_context_window(provider, context_window.max(1));
+        let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+        let events_task = tokio::spawn(collect_events(handle));
+        agent.context_config.observation_mask_threshold = 2.0;
+        agent.context_config.auto_compaction.mode =
+            crate::config::AutoCompactionMode::NearThreshold;
+        agent.context_config.auto_compaction.trigger_ratio = 0.40;
+        agent.messages = seeded_messages;
+
+        agent.run("continue".to_string()).await.unwrap();
+        drop(agent);
+
+        let events = events_task.await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Warning { message }
+                if message.contains("Auto-compacted older tool output")
+        )));
+    }
+
+    #[tokio::test]
     async fn agent_masks_observations_when_context_is_tight() {
         let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
 
