@@ -92,8 +92,10 @@ Use this table when deciding where new behavior belongs.
 | Top-level `imp` binary mode dispatch | `imp-bin` | Compose TUI, CLI, Lua, runtime, and feature profiles here. |
 | One-shot prompt, RPC, login/setup commands | `imp-cli` | Avoid direct TUI dependency for headless paths. |
 | Terminal rendering, input, overlays, app view state | `imp-tui` | TUI should consume runtime events rather than own agent logic. |
-| Turn loop, cancellation, retries, tool scheduling, runtime events | `imp-runtime` once seam is clear | Extract only when it avoids cycles and vague trait indirection. |
+| Turn loop, cancellation, retries, tool scheduling, runtime events | `imp-agent` or `imp-runtime` once seam is clear | Prefer `imp-agent` if the crate is mostly turn-loop execution; use `imp-runtime` only if the boundary truly owns broader host/runtime orchestration. |
+| Stable wire/event DTOs shared by CLI, TUI, RPC, sessions, and tests | `imp-protocol`, if protocol churn becomes painful | Keep this narrow. It should own serialized boundary contracts, not become a generic `imp-types` dumping ground. |
 | Domain config, policy concepts, SDK façade, workflow domain | `imp-core` | Keep core intentional and avoid heavy implementation dependencies. |
+| Workflow schema, validation, readiness, and durable workflow event primitives | `imp-workflow`, if workflow continues to grow as an independent domain | Keep the model-facing `workflow` tool in `imp-tools`; move pure workflow domain/validation machinery only when the seam is clear. |
 | Native model-facing tools and registry | `imp-tools` | Keep `scan`, `workflow`, `read`, `write`, `edit`, `bash`, etc. cohesive. |
 | Tree-sitter parsing, symbol extraction, code search engine | `imp-codeintel` | `scan` remains a tool; code intelligence is the engine underneath. |
 | Sessions, indexes, SQLite, memory, traces, evidence | `imp-state` | Own durable formats and migrations/compatibility. |
@@ -115,7 +117,9 @@ imp-bin
     └── imp-codeintel
 ```
 
-This is intentionally less spread than a maximal split. In particular, there is no immediate `imp-policy`, `imp-web`, `imp-workflow`, `imp-tool-api`, or `imp-types` crate unless later pressure proves they are needed.
+This is intentionally less spread than a maximal split. In particular, there is no immediate `imp-policy`, `imp-web`, `imp-tool-api`, or `imp-types` crate unless later pressure proves they are needed.
+
+`imp-protocol` and `imp-workflow` are explicit decision-point candidates rather than committed first-wave crates. Add `imp-protocol` if serialized runtime/RPC/JSONL event contracts keep spreading across CLI, TUI, sessions, and tests. Add `imp-workflow` if workflow schema, validation, readiness, and durable event primitives continue to grow independently from the model-facing workflow tool.
 
 ## Crate responsibilities
 
