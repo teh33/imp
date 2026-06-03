@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "imp-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "clap",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "imp-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2625,7 +2625,7 @@ dependencies = [
 
 [[package]]
 name = "imp-gui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "eframe",
  "egui",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "imp-install"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "imp-cli",
  "tokio",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "imp-llm"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "imp-lua"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "imp-core",
@@ -2683,7 +2683,7 @@ dependencies = [
 
 [[package]]
 name = "imp-tui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "crossterm 0.28.1",
@@ -3118,7 +3118,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-shim"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "memchr"

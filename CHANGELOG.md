@@ -6,6 +6,17 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-03
+
+### Added
+
+- Added a technical reference for the native `scan` tool and linked it from the docs index.
+
+### Changed
+
+- Removed the unused personality profile/slider system while preserving authored soul customization and the fixed professional default identity.
+- Simplified imp-specific agent instructions and removed stale mana/Tower architecture guidance.
+
 ## [0.3.2] - 2026-06-03
 
 ### Changed
