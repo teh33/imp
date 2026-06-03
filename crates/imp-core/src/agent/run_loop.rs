@@ -27,6 +27,7 @@ use super::{
 
 const STREAM_RECOVERY_FOLLOW_UP: &str = "The provider stream failed before completing the previous assistant message. Continue from the last completed conversation state. Do not repeat already completed tool side effects; if you need to retry, first inspect current state and proceed safely.";
 const MAX_STREAM_RECOVERY_ATTEMPTS: u32 = 2;
+const MAX_CONTEXT_RECOVERY_ATTEMPTS: u32 = 1;
 
 fn recoverable_stream_failure_message(error: &str) -> Option<String> {
     if error.contains("Provider stream failed after partial output")
@@ -39,6 +40,21 @@ fn recoverable_stream_failure_message(error: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn recoverable_context_failure(error: &imp_llm::Error) -> bool {
+    matches!(error, imp_llm::Error::ContextTooLong { .. })
+        || matches!(error, imp_llm::Error::Provider(message) if crate::error_display::format_error_for_display(message).starts_with("Context full:"))
+}
+
+fn mask_all_observations_for_recovery(
+    messages: &mut [Message],
+    model: &imp_llm::Model,
+) -> Option<(u32, u32)> {
+    let before = crate::context::context_usage(messages, model).used;
+    crate::context::mask_observations(messages, 0);
+    let after = crate::context::context_usage(messages, model).used;
+    (after < before).then_some((before, after))
 }
 
 impl Agent {
@@ -197,6 +213,7 @@ impl Agent {
         let mut queued_pre_turn_follow_ups: std::collections::VecDeque<String> =
             std::collections::VecDeque::new();
         let mut stream_recovery_attempts: u32 = 0;
+        let mut context_recovery_attempts: u32 = 0;
         trace_run("init_loop_state", phase_started);
 
         if let Some(nudge) = self.workflow_pre_turn_follow_up_hint(&prompt, !self.tools.is_empty())
@@ -279,6 +296,23 @@ impl Agent {
                 // Masking can materially reduce context size, so any subsequent
                 // logic must use fresh usage rather than the pre-masking snapshot.
                 usage = crate::context::context_usage(&self.messages, &self.model);
+            }
+
+            if usage.used >= usage.limit && usage.limit > 0 {
+                if context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS {
+                    if let Some((before, after)) =
+                        mask_all_observations_for_recovery(&mut self.messages, &self.model)
+                    {
+                        context_recovery_attempts += 1;
+                        self.emit(AgentEvent::Warning {
+                            message: format!(
+                                "Context recovery masked tool outputs before the provider request ({before} -> {after} estimated tokens)."
+                            ),
+                        })
+                        .await;
+                        usage = crate::context::context_usage(&self.messages, &self.model);
+                    }
+                }
             }
 
             if usage.used >= usage.limit && usage.limit > 0 {
@@ -586,6 +620,26 @@ impl Agent {
                             error: error.clone(),
                         })
                         .await;
+                        if !had_partial_output
+                            && recoverable_context_failure(&e)
+                            && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
+                        {
+                            if let Some((before, after)) =
+                                mask_all_observations_for_recovery(&mut self.messages, &self.model)
+                            {
+                                context_recovery_attempts += 1;
+                                self.emit(AgentEvent::Warning {
+                                    message: format!(
+                                        "Provider reported context exhaustion before output; masked tool outputs and retrying ({before} -> {after} estimated tokens)."
+                                    ),
+                                })
+                                .await;
+                                turn_state
+                                    .record_continue(super::ContinueReason::QueuedUserFollowUp);
+                                turn += 1;
+                                continue 'turns;
+                            }
+                        }
                         if let Some(follow_up) = recoverable_stream_failure_message(&error) {
                             if stream_recovery_attempts < MAX_STREAM_RECOVERY_ATTEMPTS {
                                 stream_recovery_attempts += 1;

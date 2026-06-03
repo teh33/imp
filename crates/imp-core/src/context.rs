@@ -42,7 +42,8 @@ pub fn context_usage(messages: &[Message], model: &Model) -> ContextUsage {
 /// A "turn" is one assistant message plus its following tool results.
 /// Keeps the last `keep_recent_turns` turns fully intact. For older turns,
 /// tool result content is replaced with a summary placeholder preserving
-/// the tool name, a truncated summary of args, and the byte count.
+/// the tool name, a truncated summary of args, and the byte count. Passing
+/// `keep_recent_turns = 0` masks all observed tool results.
 pub fn mask_observations(messages: &mut [Message], keep_recent_turns: usize) {
     // Identify turn boundaries — each assistant message starts a new turn.
     let turn_starts: Vec<usize> = messages
@@ -57,8 +58,12 @@ pub fn mask_observations(messages: &mut [Message], keep_recent_turns: usize) {
     }
 
     // Everything before this message index gets masked.
-    let cutoff_turn = turn_starts.len() - keep_recent_turns;
-    let cutoff_msg_idx = turn_starts[cutoff_turn];
+    let cutoff_msg_idx = if keep_recent_turns == 0 {
+        messages.len()
+    } else {
+        let cutoff_turn = turn_starts.len() - keep_recent_turns;
+        turn_starts[cutoff_turn]
+    };
 
     // Build a map of tool_call_id → args summary from assistant ToolCall blocks
     // in the region we're about to mask.
