@@ -3,9 +3,9 @@ use std::fmt;
 use crate::config::AgentMode;
 use crate::context::estimate_tokens;
 use crate::guardrails::{self, GuardrailProfile};
-use crate::personality::{soul_identity_text, PersonalityBand, PersonalityProfile};
 use crate::resources::{AgentsMd, Skill, SoulDoc};
 use crate::roles::Role;
+use crate::soul::{soul_identity_text, DEFAULT_IDENTITY};
 use crate::tools::ToolRegistry;
 
 /// A project fact from durable project context.
@@ -69,7 +69,6 @@ pub struct AssembleParams<'a> {
     pub skills: &'a [Skill],
     pub facts: &'a [Fact],
     pub project_memory_status: Option<&'a str>,
-    pub personality: Option<&'a PersonalityProfile>,
     pub soul: Option<&'a SoulDoc>,
     pub task: Option<&'a TaskContext>,
     pub role: Option<&'a Role>,
@@ -108,7 +107,6 @@ fn assemble_inner(p: &AssembleParams<'_>) -> AssembledPrompt {
         p.role,
         p.mode,
         p.learning_enabled,
-        p.personality,
         p.soul,
     ));
 
@@ -185,16 +183,13 @@ fn identity_layer(
     role: Option<&Role>,
     mode: &AgentMode,
     learning_enabled: bool,
-    personality: Option<&PersonalityProfile>,
     soul: Option<&SoulDoc>,
 ) -> String {
     let mut s = String::new();
     if let Some(soul) = soul {
         s.push_str(&soul_identity_text(&soul.content));
-    } else if let Some(personality) = personality {
-        s.push_str(&personality.identity.render_sentence());
     } else {
-        s.push_str("You are imp, a coding agent.");
+        s.push_str(DEFAULT_IDENTITY);
     }
     s.push_str("\n\nAvailable tools:\n");
 
@@ -211,16 +206,6 @@ fn identity_layer(
         s.push_str("\n\nSoul:\n");
         s.push_str(&soul.content);
         s.push('\n');
-    } else if let Some(personality) = personality {
-        let working_style = working_style_lines(&personality.sliders);
-        if !working_style.is_empty() {
-            s.push_str("\nWorking style:\n");
-            for line in working_style {
-                s.push_str("- ");
-                s.push_str(line);
-                s.push('\n');
-            }
-        }
     }
 
     s.push_str("\nTool routing:\n");
@@ -303,93 +288,6 @@ fn identity_layer(
 
 fn execution_policy_layer() -> String {
     String::new()
-}
-
-fn working_style_lines(sliders: &crate::personality::PersonalitySliders) -> Vec<&'static str> {
-    vec![
-        autonomy_line(sliders.autonomy),
-        verbosity_line(sliders.verbosity),
-        caution_line(sliders.caution),
-        warmth_line(sliders.warmth),
-        planning_depth_line(sliders.planning_depth),
-        "If you find yourself repeating the same action without progress, step back and try a different approach or ask the user for guidance.",
-    ]
-}
-
-pub(crate) fn autonomy_line(band: PersonalityBand) -> &'static str {
-    match band {
-        PersonalityBand::VeryLow => {
-            "Ask for confirmation before making consequential decisions or larger changes."
-        }
-        PersonalityBand::Low => {
-            "Prefer confirmation before acting when requirements or consequences are unclear."
-        }
-        PersonalityBand::Medium => {
-            "Act on clear next steps, but ask when requirements are ambiguous."
-        }
-        PersonalityBand::High => {
-            "Act independently by default and ask when blocked, uncertain, or facing a consequential decision. Keep working until the task is fully resolved before yielding."
-        }
-        PersonalityBand::VeryHigh => {
-            "Take initiative aggressively on clear work and only ask when blocked or genuinely uncertain. Keep working until the task is fully resolved before yielding."
-        }
-    }
-}
-
-pub(crate) fn verbosity_line(band: PersonalityBand) -> &'static str {
-    match band {
-        PersonalityBand::VeryLow => "Keep responses terse and strongly action-oriented.",
-        PersonalityBand::Low => "Keep responses brief and focused on progress.",
-        PersonalityBand::Medium => {
-            "Be concise by default, but explain important tradeoffs when useful."
-        }
-        PersonalityBand::High => {
-            "Explain reasoning and tradeoffs when they help the user follow the work."
-        }
-        PersonalityBand::VeryHigh => {
-            "Give fuller explanations of reasoning, tradeoffs, and next steps."
-        }
-    }
-}
-
-pub(crate) fn caution_line(band: PersonalityBand) -> &'static str {
-    match band {
-        PersonalityBand::VeryLow => {
-            "Move forward with reasonable assumptions when the path is clear."
-        }
-        PersonalityBand::Low => "Favor progress over caution when risks are limited and local.",
-        PersonalityBand::Medium => "Balance steady progress with avoiding avoidable risk.",
-        PersonalityBand::High => {
-            "Prefer small, reversible changes and verify assumptions before riskier actions."
-        }
-        PersonalityBand::VeryHigh => {
-            "Be highly conservative with risky changes: verify assumptions and avoid acting on weak evidence."
-        }
-    }
-}
-
-pub(crate) fn warmth_line(band: PersonalityBand) -> &'static str {
-    match band {
-        PersonalityBand::VeryLow => "Use a direct, neutral tone.",
-        PersonalityBand::Low => "Use a clear, matter-of-fact tone.",
-        PersonalityBand::Medium => "Use a clear and calm tone.",
-        PersonalityBand::High => "Use a warm, supportive tone without becoming verbose.",
-        PersonalityBand::VeryHigh => {
-            "Use a notably warm, encouraging tone while staying useful and grounded."
-        }
-    }
-}
-
-pub(crate) fn planning_depth_line(band: PersonalityBand) -> &'static str {
-    match band {
-        PersonalityBand::VeryLow => "Favor immediate execution on the most obvious next step.",
-        PersonalityBand::Low => "Plan lightly, then move quickly into execution.",
-        PersonalityBand::Medium => "Plan briefly, then execute.",
-        PersonalityBand::High => "Think through structure and likely consequences before acting.",
-        PersonalityBand::VeryHigh => {
-            "Be methodical: think through structure, dependencies, and consequences before acting."
-        }
-    }
 }
 
 fn environment_layer(cwd: Option<&std::path::Path>) -> String {
@@ -600,11 +498,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use crate::personality::{
-        PersonaFocus, PersonaRole, PersonalityBand, PersonalityIdentity, PersonalityProfile,
-        PersonalitySliders, VoiceWord, WorkStyleWord,
-    };
-    use crate::resources::SoulDoc;
     use crate::tools::{Tool, ToolContext, ToolOutput};
     use async_trait::async_trait;
 
@@ -698,32 +591,12 @@ mod tests {
         Role::from_def("worker", &crate::roles::RoleDef::default())
     }
 
-    fn make_personality() -> PersonalityProfile {
-        PersonalityProfile {
-            identity: PersonalityIdentity {
-                name: "Nova".into(),
-                work_style: WorkStyleWord::Careful,
-                voice: VoiceWord::Direct,
-                focus: PersonaFocus::Research,
-                role: PersonaRole::Assistant,
-            },
-            sliders: PersonalitySliders {
-                autonomy: PersonalityBand::Low,
-                verbosity: PersonalityBand::Medium,
-                caution: PersonalityBand::VeryHigh,
-                warmth: PersonalityBand::High,
-                planning_depth: PersonalityBand::VeryLow,
-            },
-        }
-    }
-
     /// Test helper: shorthand for assemble() with no memory/user_profile.
     fn test_assemble(
         tools: &ToolRegistry,
         agents_md: &[AgentsMd],
         skills: &[Skill],
         facts: &[Fact],
-        personality: Option<&PersonalityProfile>,
         task: Option<&TaskContext>,
         role: Option<&Role>,
     ) -> AssembledPrompt {
@@ -733,7 +606,6 @@ mod tests {
             skills,
             facts,
             project_memory_status: None,
-            personality,
             soul: None,
             task,
             role,
@@ -752,7 +624,7 @@ mod tests {
     #[test]
     fn system_prompt_omits_generated_operating_rules() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("Operating rules:"));
         assert!(!result.text.contains(
             "Ground repository claims in files or tool output inspected in this session"
@@ -765,7 +637,7 @@ mod tests {
     #[test]
     fn system_prompt_omits_clarification_and_natural_closeout_guidance() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains(
             "Ask a focused clarification before continuing when the user asks to continue a plan"
         ));
@@ -780,7 +652,7 @@ mod tests {
     #[test]
     fn system_prompt_omits_conversation_time_workflow_planning_doctrine() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("For durable project work"));
         assert!(!result.text.contains("tied to an adopted goal"));
         assert!(!result
@@ -805,8 +677,10 @@ mod tests {
     #[test]
     fn system_prompt_identity_includes_all_tools() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
-        assert!(result.text.contains("You are imp, a coding agent."));
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
+        assert!(result
+            .text
+            .contains("You are imp, a professional coding agent."));
         assert!(result.text.contains("- read: Read file contents"));
         assert!(result.text.contains("- write: Write content to a file"));
         assert!(result
@@ -824,7 +698,7 @@ mod tests {
             readonly: false,
         }));
 
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(result
             .text
             .contains("Use `workflow` for durable project plans"));
@@ -837,7 +711,7 @@ mod tests {
     #[test]
     fn system_prompt_workflow_guidance_omitted_without_workflow_tool() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result
             .text
             .contains("Use `workflow` for durable project plans"));
@@ -859,7 +733,7 @@ mod tests {
             readonly: false,
         }));
 
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(
             !result.text.contains("Workflow guidance:"),
             "workflow guidance block should not appear in system prompt"
@@ -873,7 +747,7 @@ mod tests {
     #[test]
     fn system_prompt_identity_only_when_all_layers_empty() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         // Should have identity but no section headers for missing layers
         assert!(result.text.contains("You are imp"));
         assert!(!result.text.contains("# Project Context"));
@@ -883,87 +757,10 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_uses_personality_identity_sentence() {
-        let reg = make_registry();
-        let personality = make_personality();
-        let result = test_assemble(&reg, &[], &[], &[], Some(&personality), None, None);
-        assert!(result
-            .text
-            .contains("You are Nova, a careful, direct, research assistant."));
-    }
-
-    #[test]
-    fn system_prompt_renders_personality_working_style_block() {
-        let reg = make_registry();
-        let personality = make_personality();
-        let result = test_assemble(&reg, &[], &[], &[], Some(&personality), None, None);
-        assert!(result.text.contains("Working style:"));
-        assert!(result.text.contains(
-            "Prefer confirmation before acting when requirements or consequences are unclear."
-        ));
-        assert!(result
-            .text
-            .contains("Be concise by default, but explain important tradeoffs when useful."));
-        assert!(result.text.contains(
-            "Be highly conservative with risky changes: verify assumptions and avoid acting on weak evidence."
-        ));
-        assert!(result
-            .text
-            .contains("Use a warm, supportive tone without becoming verbose."));
-        assert!(result
-            .text
-            .contains("Favor immediate execution on the most obvious next step."));
-    }
-
-    #[test]
-    fn system_prompt_prefers_soul_over_personality_profile() {
-        let reg = make_registry();
-        let personality = make_personality();
-        let soul = SoulDoc {
-            path: PathBuf::from("/tmp/soul.md"),
-            content: "# Soul\n\nYou are Sol, a tuned and reflective collaborator.\n\n## Tunables\n\n- Autonomy: Act independently by default.\n".into(),
-        };
-        let result = assemble(&AssembleParams {
-            tools: &reg,
-            agents_md: &[],
-            skills: &[],
-            facts: &[],
-            project_memory_status: None,
-            personality: Some(&personality),
-            soul: Some(&soul),
-            task: None,
-            role: None,
-            mode: &AgentMode::Full,
-            memory: None,
-            user_profile: None,
-            cwd: None,
-            repo_context: None,
-            learning_enabled: false,
-            guardrail_profile: None,
-        });
-        assert!(result
-            .text
-            .contains("You are Sol, a tuned and reflective collaborator."));
-        assert!(result.text.contains("Soul:"));
-        assert!(result.text.contains("## Tunables"));
-        assert!(!result.text.contains("Working style:"));
-    }
-
-    #[test]
-    fn system_prompt_without_soul_keeps_personality_working_style_block() {
-        let reg = make_registry();
-        let personality = make_personality();
-        let result = test_assemble(&reg, &[], &[], &[], Some(&personality), None, None);
-        assert!(result.text.contains("Working style:"));
-    }
-
-    // -- Layer 2: AGENTS.md --
-
-    #[test]
     fn system_prompt_agents_md_included_verbatim() {
         let reg = make_registry();
         let agents = vec![make_agents_md("# Rules\n\nUse snake_case everywhere.")];
-        let result = test_assemble(&reg, &agents, &[], &[], None, None, None);
+        let result = test_assemble(&reg, &agents, &[], &[], None, None);
         assert!(result.text.contains("# Project Context"));
         assert!(result
             .text
@@ -977,7 +774,7 @@ mod tests {
             make_agents_md("Global rules here."),
             make_agents_md("Project rules here."),
         ];
-        let result = test_assemble(&reg, &agents, &[], &[], None, None, None);
+        let result = test_assemble(&reg, &agents, &[], &[], None, None);
         assert!(result.text.contains("Global rules here."));
         assert!(result.text.contains("Project rules here."));
     }
@@ -985,7 +782,7 @@ mod tests {
     #[test]
     fn system_prompt_empty_agents_md_skipped() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("# Project Context"));
     }
 
@@ -1006,7 +803,7 @@ mod tests {
                 "/home/.imp/skills/testing/SKILL.md",
             ),
         ];
-        let result = test_assemble(&reg, &[], &skills, &[], None, None, None);
+        let result = test_assemble(&reg, &[], &skills, &[], None, None);
         assert!(result.text.contains(
             "Available skills (load with `read ~/.imp/skills/<name>/SKILL.md` when relevant):"
         ));
@@ -1032,7 +829,6 @@ mod tests {
             skills: &skills,
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1063,7 +859,6 @@ mod tests {
             skills: &skills,
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1101,7 +896,6 @@ mod tests {
             skills: &skills,
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1132,7 +926,6 @@ mod tests {
             skills: &skills,
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1162,7 +955,6 @@ mod tests {
             skills: &skills,
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1181,7 +973,7 @@ mod tests {
     #[test]
     fn system_prompt_empty_skills_skipped() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("Available skills"));
     }
 
@@ -1200,7 +992,7 @@ mod tests {
                 verified_ago: "1d ago".into(),
             },
         ];
-        let result = test_assemble(&reg, &[], &[], &facts, None, None, None);
+        let result = test_assemble(&reg, &[], &[], &facts, None, None);
         assert!(result.text.contains("Project facts:"));
         assert!(result
             .text
@@ -1213,7 +1005,7 @@ mod tests {
     #[test]
     fn system_prompt_empty_facts_skipped() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("Project facts"));
     }
 
@@ -1228,7 +1020,6 @@ mod tests {
             project_memory_status: Some(
                 "Project memory status:\nWarnings:\n- STALE: \"Lockfile drift\"\n\nWorking on:\n- [12] Refresh auth flow",
             ),
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1254,7 +1045,6 @@ mod tests {
             skills: &[],
             facts: &[],
             project_memory_status: Some(""),
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1284,7 +1074,6 @@ mod tests {
             skills: &[],
             facts: &facts,
             project_memory_status: Some(status),
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1327,7 +1116,7 @@ mod tests {
             context_paths: vec![],
             constraints: vec![],
         };
-        let result = test_assemble(&reg, &[], &[], &[], None, Some(&task), None);
+        let result = test_assemble(&reg, &[], &[], &[], Some(&task), None);
         assert!(result.text.contains("## Task"));
         assert!(result.text.contains("Title: Fix the failing auth test"));
         assert!(result
@@ -1368,7 +1157,7 @@ mod tests {
             context_paths: vec![],
             constraints: vec![],
         };
-        let result = test_assemble(&reg, &[], &[], &[], None, Some(&task), None);
+        let result = test_assemble(&reg, &[], &[], &[], Some(&task), None);
         assert!(result.text.contains("## Previous attempts"));
         assert!(result.text.contains(
             "Do not repeat a failed approach unchanged; use the attempt history to adjust your plan."
@@ -1403,7 +1192,7 @@ mod tests {
             context_paths: vec![],
             constraints: vec![],
         };
-        let result = test_assemble(&reg, &[], &[], &[], None, Some(&task), None);
+        let result = test_assemble(&reg, &[], &[], &[], Some(&task), None);
         assert!(result.text.contains("## Dependencies"));
         assert!(result.text.contains(
             "Respect dependency state when sequencing work; unresolved dependencies are potential blockers."
@@ -1436,7 +1225,7 @@ mod tests {
                 "Scope changes to auth-related files unless broader edits are necessary".into(),
             ],
         };
-        let result = test_assemble(&reg, &[], &[], &[], None, Some(&task), None);
+        let result = test_assemble(&reg, &[], &[], &[], Some(&task), None);
         assert!(result.text.contains("Design:"));
         assert!(result
             .text
@@ -1461,7 +1250,7 @@ mod tests {
     #[test]
     fn system_prompt_no_task_skips_layer5() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(!result.text.contains("## Task"));
     }
 
@@ -1483,7 +1272,7 @@ mod tests {
             context_paths: vec![],
             constraints: vec![],
         };
-        let result = test_assemble(&reg, &[], &[], &[], None, Some(&task), None);
+        let result = test_assemble(&reg, &[], &[], &[], Some(&task), None);
         assert!(result.text.contains("Title: Do something"));
         assert!(!result.text.contains("Verify:"));
     }
@@ -1494,7 +1283,7 @@ mod tests {
     fn system_prompt_readonly_role_filters_tools() {
         let reg = make_registry();
         let role = make_readonly_role();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, Some(&role));
+        let result = test_assemble(&reg, &[], &[], &[], None, Some(&role));
         // Should include readonly tools
         assert!(result.text.contains("- read:"));
         // Should NOT include write tools
@@ -1506,7 +1295,7 @@ mod tests {
     fn system_prompt_role_instructions_appended() {
         let reg = make_registry();
         let role = make_readonly_role();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, Some(&role));
+        let result = test_assemble(&reg, &[], &[], &[], None, Some(&role));
         assert!(result
             .text
             .contains("Review code carefully. Do not modify files."));
@@ -1524,7 +1313,7 @@ mod tests {
             example: Some("status: passed\ncommands: ...".into()),
             ..crate::roles::RoleOutputSchema::default()
         });
-        let result = test_assemble(&reg, &[], &[], &[], None, None, Some(&role));
+        let result = test_assemble(&reg, &[], &[], &[], None, Some(&role));
         assert!(result.text.contains("Role output schema metadata:"));
         assert!(result.text.contains("- schema: `verification-result`"));
         assert!(result
@@ -1538,7 +1327,7 @@ mod tests {
     fn system_prompt_worker_role_includes_all_tools() {
         let reg = make_registry();
         let role = make_worker_role();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, Some(&role));
+        let result = test_assemble(&reg, &[], &[], &[], None, Some(&role));
         assert!(result.text.contains("- read:"));
         assert!(result.text.contains("- write:"));
         assert!(result.text.contains("- edit:"));
@@ -1549,7 +1338,7 @@ mod tests {
     fn system_prompt_no_role_instructions_when_none() {
         let reg = make_registry();
         let role = make_worker_role();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, Some(&role));
+        let result = test_assemble(&reg, &[], &[], &[], None, Some(&role));
         // Worker has no instructions, so the prompt shouldn't have extra instruction text
         let lines: Vec<&str> = result.text.lines().collect();
         let after_tools = lines.iter().position(|l| l.starts_with("- bash:")).unwrap();
@@ -1565,7 +1354,7 @@ mod tests {
     #[test]
     fn system_prompt_tracks_estimated_tokens() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         assert!(result.estimated_tokens > 0);
         // Rough check: the text is at least ~100 chars, so >= 25 tokens
         assert!(result.estimated_tokens >= 10);
@@ -1575,7 +1364,7 @@ mod tests {
     fn system_prompt_more_layers_means_more_tokens() {
         let reg = make_registry();
 
-        let minimal = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let minimal = test_assemble(&reg, &[], &[], &[], None, None);
 
         let agents = vec![make_agents_md(
             "Lots of project context here with many words.",
@@ -1590,7 +1379,7 @@ mod tests {
             verified_ago: "1h ago".into(),
         }];
 
-        let full = test_assemble(&reg, &agents, &skills, &facts, None, None, None);
+        let full = test_assemble(&reg, &agents, &skills, &facts, None, None);
 
         assert!(
             full.estimated_tokens > minimal.estimated_tokens,
@@ -1639,7 +1428,7 @@ mod tests {
             constraints: vec![],
         };
 
-        let result = test_assemble(&reg, &agents, &skills, &facts, None, Some(&task), None);
+        let result = test_assemble(&reg, &agents, &skills, &facts, Some(&task), None);
 
         // All layers present in order
         let identity_pos = result.text.find("You are imp").unwrap();
@@ -1657,7 +1446,7 @@ mod tests {
     #[test]
     fn system_prompt_display_impl() {
         let reg = make_registry();
-        let result = test_assemble(&reg, &[], &[], &[], None, None, None);
+        let result = test_assemble(&reg, &[], &[], &[], None, None);
         let displayed = format!("{result}");
         assert_eq!(displayed, result.text);
     }
@@ -1674,7 +1463,6 @@ mod tests {
             skills: &[],
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1701,7 +1489,6 @@ mod tests {
             skills: &[],
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1726,7 +1513,6 @@ mod tests {
             skills: &[],
             facts: &[],
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: None,
             role: None,
@@ -1773,7 +1559,6 @@ mod tests {
             skills: &skills,
             facts: &facts,
             project_memory_status: None,
-            personality: None,
             soul: None,
             task: Some(&task),
             role: None,

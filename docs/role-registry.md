@@ -480,7 +480,7 @@ layer:
 
 ## Non-goals for the first implementation
 
-- No personality/mythology role names in core UX.
+- No mythology role names in core UX.
 - No autonomous role spawning without workflow contract.
 - No provider-specific routing logic in the role registry itself.
 - No mandatory structured decoding until output schemas are wired into the LLM

@@ -217,7 +217,7 @@ Suggested behavior for `--fresh`:
 - no session persistence;
 - no `AGENTS.md` / `CLAUDE.md` discovery unless explicitly enabled;
 - no skills discovery unless explicitly enabled;
-- no user facts, memory, personality, or soul;
+- no user facts, memory, or soul;
 - no project memory;
 - deterministic minimal config surface;
 - tools remain enabled unless `--no-tools` is provided.

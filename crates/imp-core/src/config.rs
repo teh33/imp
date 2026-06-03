@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::guardrails::GuardrailConfig;
 use crate::hooks::HookDef;
-use crate::personality::PersonalityConfig;
 use crate::roles::{RoleDef, RoleRegistry, RoleRegistryError};
 use crate::storage;
 use crate::tools::web::types::WebConfig;
@@ -523,10 +522,6 @@ pub struct Config {
     /// Explicit runtime policy settings for tool and capability decisions.
     #[serde(default)]
     pub policy: PolicyConfig,
-
-    /// Personality settings, including identity sentence and saved profiles.
-    #[serde(default)]
-    pub personality: PersonalityConfig,
 }
 
 // ── UI configuration ────────────────────────────────────────────
@@ -1051,9 +1046,6 @@ impl Config {
         if other.secrets != SecretsConfig::default() {
             self.secrets = other.secrets;
         }
-        if other.personality != PersonalityConfig::default() {
-            self.personality.merge(other.personality);
-        }
         self.roles.extend(other.roles);
         self.hooks.extend(other.hooks);
     }
@@ -1125,7 +1117,6 @@ mod tests {
         assert_eq!(config.ui.chat_tool_display, ChatToolDisplay::Summary);
         assert_eq!(config.ui.tool_output, ToolOutputDisplay::Compact);
         assert_eq!(config.web, WebConfig::default());
-        assert_eq!(config.personality, PersonalityConfig::default());
         assert!(config.roles.is_empty());
         assert!(config.hooks.is_empty());
         assert!((config.context.observation_mask_threshold - 0.6).abs() < f64::EPSILON);
@@ -1222,82 +1213,6 @@ search_provider = "exa"
         let config_path = dir.path().join("nonexistent.toml");
         let config = Config::load(&config_path).unwrap();
         assert!(config.model.is_none());
-    }
-
-    #[test]
-    fn config_loads_personality_section() {
-        let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("config.toml");
-        fs::write(
-            &config_path,
-            r#"
-[personality.profile.identity]
-name = "Nova"
-work_style = "careful"
-voice = "clear"
-focus = "research"
-role = "assistant"
-
-[personality.profile.sliders]
-autonomy = "low"
-verbosity = "high"
-caution = "very-high"
-warmth = "high"
-planning_depth = "very-high"
-
-[personality.profiles]
-active = "researcher"
-
-[personality.profiles.saved.researcher.identity]
-name = "Nova"
-work_style = "careful"
-voice = "clear"
-focus = "research"
-role = "assistant"
-"#,
-        )
-        .unwrap();
-
-        let config = Config::load(&config_path).unwrap();
-        assert_eq!(config.personality.profile.identity.name, "Nova");
-        assert_eq!(
-            config.personality.profile.identity.render_sentence(),
-            "You are Nova, a careful, clear, research assistant."
-        );
-        assert_eq!(
-            config.personality.profiles.active.as_deref(),
-            Some("researcher")
-        );
-        assert!(config.personality.profiles.saved.contains_key("researcher"));
-    }
-
-    #[test]
-    fn config_merge_personality_project_overrides_user_and_keeps_saved_profiles() {
-        let mut user = Config::default();
-        user.personality.profile.identity.name = "imp".into();
-        user.personality.profiles.active = Some("builder".into());
-        user.personality.profiles.saved.insert(
-            "builder".into(),
-            crate::personality::PersonalityProfile::default(),
-        );
-
-        let mut project = Config::default();
-        project.personality.profile.identity.name = "Patch".into();
-        project.personality.profiles.active = Some("reviewer".into());
-        project.personality.profiles.saved.insert(
-            "reviewer".into(),
-            crate::personality::PersonalityProfile::default(),
-        );
-
-        user.merge(project);
-
-        assert_eq!(user.personality.profile.identity.name, "Patch");
-        assert_eq!(
-            user.personality.profiles.active.as_deref(),
-            Some("reviewer")
-        );
-        assert!(user.personality.profiles.saved.contains_key("builder"));
-        assert!(user.personality.profiles.saved.contains_key("reviewer"));
     }
 
     #[test]

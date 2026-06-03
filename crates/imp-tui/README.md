@@ -12,7 +12,7 @@ It provides the cockpit UI used by the `imp` binary: message stream, editor, com
 - model selector and thinking-level controls
 - session tree and branch navigation views
 - sidebar inspection for tool calls and outputs
-- settings, personality, and secrets screens
+- settings and secrets screens
 - rendering for agent/runtime events
 
 ## Intended use
