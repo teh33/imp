@@ -986,9 +986,8 @@ impl App {
         let current_context_tokens = self.display_context_tokens();
         let context_window = self.active_context_window();
         // Show the active-history estimate against the same display/input budget
-        // used by runtime preflight. GPT-5.5 uses its published 922k input
-        // budget and reserves the remaining 128k of its 1.05M total window for
-        // output.
+        // used by runtime preflight. GPT-5.5 displays a rounded 1.0M window
+        // while keeping a small reserve inside its 1.05M total window.
         let context_percent = if context_window > 0 {
             current_context_tokens as f64 / context_window as f64
         } else {

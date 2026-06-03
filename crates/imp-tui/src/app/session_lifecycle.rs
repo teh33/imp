@@ -856,7 +856,7 @@ fn current_model_meta_for_persistence_is_cached_for_render_status() {
 }
 
 #[test]
-fn gpt_5_5_status_uses_input_context_display_budget() {
+fn gpt_5_5_status_uses_one_million_context_display_budget() {
     let mut app = make_app();
     app.model_name = "gpt-5.5".into();
     app.current_model_meta_for_persistence = app
@@ -866,7 +866,7 @@ fn gpt_5_5_status_uses_input_context_display_budget() {
 
     let status = app.build_status_info();
 
-    assert_eq!(status.context_window, 922_000);
+    assert_eq!(status.context_window, 1_000_000);
 }
 
 #[test]
