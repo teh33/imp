@@ -12,12 +12,13 @@ name = "imp"
 path = "src/main.rs"
 
 [dependencies]
-imp-cli.workspace = true
+imp-bin.workspace = true
 tokio.workspace = true
 
 [workspace]
 resolver = "2"
 default-members = [
+    "crates/imp-bin",
     "crates/imp-llm",
     "crates/imp-core",
     "crates/imp-lua",
@@ -26,6 +27,7 @@ default-members = [
     "crates/mcp-shim",
 ]
 members = [
+    "crates/imp-bin",
     "crates/imp-llm",
     "crates/imp-core",
     "crates/imp-lua",
@@ -102,4 +104,5 @@ imp-core = { version = "0.3.0", path = "crates/imp-core" }
 imp-lua = { version = "0.3.0", path = "crates/imp-lua" }
 imp-tui = { version = "0.3.0", path = "crates/imp-tui" }
 imp-gui = { version = "0.3.0", path = "crates/imp-gui" }
+imp-bin = { version = "0.3.0", path = "crates/imp-bin" }
 imp-cli = { version = "0.3.0", path = "crates/imp-cli" }

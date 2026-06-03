@@ -2548,6 +2548,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "imp-bin"
+version = "0.3.3"
+dependencies = [
+ "imp-cli",
+ "imp-core",
+ "imp-llm",
+ "imp-tui",
+ "tokio",
+]
+
+[[package]]
 name = "imp-cli"
 version = "0.3.3"
 dependencies = [
@@ -2558,7 +2569,6 @@ dependencies = [
  "imp-core",
  "imp-llm",
  "imp-lua",
- "imp-tui",
  "serde",
  "serde_json",
  "tempfile",
@@ -2639,7 +2649,7 @@ dependencies = [
 name = "imp-install"
 version = "0.3.3"
 dependencies = [
- "imp-cli",
+ "imp-bin",
  "tokio",
 ]
 

@@ -1,0 +1,23 @@
+[package]
+name = "imp-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Binary composition crate for the imp coding agent"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[[bin]]
+name = "imp"
+path = "src/main.rs"
+
+[dependencies]
+imp-cli.workspace = true
+imp-core.workspace = true
+imp-llm.workspace = true
+imp-tui.workspace = true
+tokio.workspace = true

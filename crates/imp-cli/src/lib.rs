@@ -121,7 +121,7 @@ mod usage_report;
 /// A coding agent engine
 #[derive(Parser)]
 #[command(name = "imp", version, about)]
-struct Cli {
+pub struct Cli {
     /// Print response and exit (non-interactive mode)
     #[arg(short, long)]
     print: Option<String>,
@@ -980,18 +980,69 @@ fn run_evidence_command(command: Option<&EvidenceCommand>) -> imp_core::Result<(
     Ok(())
 }
 
-pub async fn run() {
-    let cli = Cli::parse();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliRunDisposition {
+    Headless,
+    Tui,
+}
 
+impl Cli {
+    pub fn no_session(&self) -> bool {
+        self.no_session
+    }
+
+    pub fn continue_recent(&self) -> bool {
+        self.cont
+    }
+
+    pub fn session_path(&self) -> Option<&Path> {
+        self.session.as_deref()
+    }
+
+    pub fn model_override(&self) -> Option<&str> {
+        self.model.as_deref()
+    }
+
+    pub fn thinking_override(&self) -> Option<&str> {
+        self.thinking.as_deref()
+    }
+}
+
+pub fn parse_cli() -> Cli {
+    Cli::parse()
+}
+
+pub fn disposition(cli: &Cli) -> CliRunDisposition {
+    match cli.command.as_ref() {
+        Some(Commands::Chat | Commands::Tui) => CliRunDisposition::Tui,
+        _ if cli.command.is_some() => CliRunDisposition::Headless,
+        _ if cli.list_models => CliRunDisposition::Headless,
+        _ if cli.mode == "interactive"
+            && cli.print.is_none()
+            && prompt_args(&cli.args).is_empty() =>
+        {
+            CliRunDisposition::Tui
+        }
+        _ => CliRunDisposition::Headless,
+    }
+}
+
+pub async fn run() {
+    let cli = parse_cli();
+    if disposition(&cli) == CliRunDisposition::Tui {
+        eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
+        std::process::exit(1);
+    }
+    run_headless(cli).await;
+}
+
+pub async fn run_headless(cli: Cli) {
     // Dispatch subcommands first
     if let Some(command) = &cli.command {
         match command {
             Commands::Chat => {
-                if let Err(e) = run_interactive(&cli).await {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-                return;
+                eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
+                std::process::exit(1);
             }
             Commands::Acp => {
                 if let Err(e) = acp::run_stdio_server(env!("CARGO_PKG_VERSION")).await {
@@ -1001,11 +1052,8 @@ pub async fn run() {
                 return;
             }
             Commands::Tui => {
-                if let Err(e) = run_interactive(&cli).await {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-                return;
+                eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
+                std::process::exit(1);
             }
             Commands::Mcp { command } => {
                 run_mcp_command(command.as_ref());
@@ -1165,13 +1213,10 @@ pub async fn run() {
         return;
     }
 
-    // Default interactive mode: fullscreen TUI
+    // Default interactive mode is owned by imp-bin, not imp-cli.
     if cli.mode == "interactive" {
-        if let Err(e) = run_interactive(&cli).await {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-        return;
+        eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
+        std::process::exit(1);
     }
 
     // RPC / JSON modes (JSON-lines stdin/stdout protocol)
@@ -2156,7 +2201,7 @@ async fn run_setup_mode() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_thinking_level(s: &str) -> ThinkingLevel {
+pub fn parse_thinking_level(s: &str) -> ThinkingLevel {
     match s.to_lowercase().as_str() {
         "off" => ThinkingLevel::Off,
         "minimal" => ThinkingLevel::Minimal,
@@ -3910,47 +3955,6 @@ fn summarize_session_entry(entry: &SessionEntry) -> String {
         SessionEntry::Label { label, .. } => format!("label {label}"),
         SessionEntry::Custom { custom_type, .. } => format!("custom {custom_type}"),
     }
-}
-
-async fn run_interactive(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let interactive_result = async {
-        let cwd = std::env::current_dir()?;
-        let config = Config::resolve(&imp_core::storage::global_root(), Some(&cwd))?;
-
-        let registry = ModelRegistry::with_builtins();
-
-        let session = if cli.no_session {
-            SessionManager::in_memory()
-        } else if cli.cont {
-            // Continue most recent session
-            match SessionManager::continue_recent(&cwd, &imp_core::storage::global_sessions_dir())?
-            {
-                Some(session) => session,
-                None => SessionManager::new(&cwd, &imp_core::storage::global_sessions_dir())?,
-            }
-        } else if let Some(ref path) = cli.session {
-            SessionManager::open(path)?
-        } else {
-            // New persistent session
-            SessionManager::new(&cwd, &imp_core::storage::global_sessions_dir())?
-        };
-
-        let mut runner =
-            imp_tui::interactive::InteractiveRunner::new(config, session, registry, cwd)?;
-
-        // Apply CLI overrides
-        if let Some(ref model) = cli.model {
-            runner.app_mut().model_name = model.clone();
-        }
-        if let Some(ref thinking) = cli.thinking {
-            runner.app_mut().thinking_level = parse_thinking_level(thinking);
-        }
-
-        runner.run_guarded().await.map_err(Into::into)
-    }
-    .await;
-
-    interactive_result
 }
 
 /// Expand @file arguments into file content blocks.

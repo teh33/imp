@@ -11,9 +11,6 @@ keywords.workspace = true
 categories.workspace = true
 exclude = ["auth.json"]
 
-[[bin]]
-name = "imp"
-path = "src/main.rs"
 
 [features]
 default = []
@@ -21,7 +18,6 @@ default = []
 [dependencies]
 imp-llm.workspace = true
 imp-core.workspace = true
-imp-tui.workspace = true
 imp-lua.workspace = true
 serde.workspace = true
 serde_json.workspace = true
