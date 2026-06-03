@@ -10,15 +10,16 @@ use super::{Tool, ToolContext, ToolOutput};
 use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{
-    load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow,
-    workflow_step_readiness, CheckKind, CheckStatus, ValidateOptions, ValidationMode,
-    WorkflowCheck, WorkflowDocument, WorkflowReadinessReasonKind, WorkflowReadinessState,
+    load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow, CheckKind,
+    CheckStatus, ValidateOptions, ValidationMode, WorkflowCheck, WorkflowDocument,
 };
 
 #[path = "workflow_contracts.rs"]
 mod workflow_contracts;
 #[path = "workflow_files.rs"]
 mod workflow_files;
+#[path = "workflow_readiness.rs"]
+mod workflow_readiness;
 #[path = "workflow_render.rs"]
 mod workflow_render;
 #[path = "workflow_status.rs"]
@@ -30,6 +31,7 @@ use workflow_files::{
     load_selected_workflow, load_workflow_items, validate_loaded_workflow, workflow_id_root,
     workflow_paths,
 };
+use workflow_readiness::blocked_steps;
 use workflow_render::{render_run_result, render_workflow, CaseExt};
 use workflow_status::{
     append_workflow_event, apply_status_update, open_workflow_event_file, set_mapping_string,
@@ -864,89 +866,6 @@ fn reconcile_workflow_statuses(
     }
 
     Ok(reconciled)
-}
-
-fn blocked_steps(doc: &WorkflowDocument) -> (WorkflowReadinessSummary, Vec<WorkflowBlockedStep>) {
-    let readiness = workflow_step_readiness(doc);
-    let summary = WorkflowReadinessSummary {
-        runnable: readiness
-            .iter()
-            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Runnable))
-            .count(),
-        waiting: readiness
-            .iter()
-            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Waiting))
-            .count(),
-        blocked: readiness
-            .iter()
-            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Blocked))
-            .count(),
-        terminal: readiness
-            .iter()
-            .filter(|entry| matches!(entry.state, WorkflowReadinessState::Terminal))
-            .count(),
-    };
-
-    let blocked_steps = readiness
-        .into_iter()
-        .filter(|entry| {
-            matches!(
-                entry.state,
-                WorkflowReadinessState::Waiting | WorkflowReadinessState::Blocked
-            )
-        })
-        .map(|entry| {
-            let mut reason_details = entry
-                .reasons
-                .into_iter()
-                .map(|reason| WorkflowBlockedStepReason {
-                    kind: readiness_reason_kind_label(reason.kind).to_string(),
-                    subject: reason.subject,
-                    message: reason.message,
-                })
-                .collect::<Vec<_>>();
-            if reason_details.is_empty() {
-                reason_details.push(WorkflowBlockedStepReason {
-                    kind: "unknown".to_string(),
-                    subject: None,
-                    message: "waiting for workflow engine support or checks".to_string(),
-                });
-            }
-            WorkflowBlockedStep {
-                step: entry.step,
-                status: format!("{:?}", entry.status).to_case(),
-                state: readiness_state_label(entry.state).to_string(),
-                reasons: reason_details
-                    .iter()
-                    .map(|reason| reason.message.clone())
-                    .collect(),
-                reason_details,
-            }
-        })
-        .collect();
-
-    (summary, blocked_steps)
-}
-
-fn readiness_state_label(state: WorkflowReadinessState) -> &'static str {
-    match state {
-        WorkflowReadinessState::Runnable => "runnable",
-        WorkflowReadinessState::Waiting => "waiting",
-        WorkflowReadinessState::Blocked => "blocked",
-        WorkflowReadinessState::Terminal => "terminal",
-    }
-}
-
-fn readiness_reason_kind_label(kind: WorkflowReadinessReasonKind) -> &'static str {
-    match kind {
-        WorkflowReadinessReasonKind::DependencyMissing => "dependency_missing",
-        WorkflowReadinessReasonKind::DependencyNotReady => "dependency_not_ready",
-        WorkflowReadinessReasonKind::WorkerMissing => "worker_missing",
-        WorkflowReadinessReasonKind::StatusNotRunnable => "status_not_runnable",
-        WorkflowReadinessReasonKind::CheckPending => "check_pending",
-        WorkflowReadinessReasonKind::CheckFailed => "check_failed",
-        WorkflowReadinessReasonKind::CheckBlocked => "check_blocked",
-    }
 }
 
 async fn evaluate_pending_check(
