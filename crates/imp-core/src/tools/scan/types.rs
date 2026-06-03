@@ -78,16 +78,36 @@ impl Default for FunctionInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeKind {
+    Contains,
+    Implements,
+    Imports,
+    Calls,
+    Tests,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeInfo {
+    pub from: String,
+    pub to: String,
+    pub source: String,
+    pub kind: EdgeKind,
+    pub label: Option<String>,
+}
+
 /// Combined extraction result from one or more files.
 #[derive(Debug, Default, Clone)]
 pub struct ScanResult {
     pub types: BTreeMap<String, TypeInfo>,
     pub functions: BTreeMap<String, FunctionInfo>,
+    pub edges: Vec<EdgeInfo>,
 }
 
 impl ScanResult {
     pub fn merge(&mut self, other: ScanResult) {
         self.types.extend(other.types);
         self.functions.extend(other.functions);
+        self.edges.extend(other.edges);
     }
 }

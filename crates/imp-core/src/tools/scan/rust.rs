@@ -28,7 +28,16 @@ fn extract_rust(root: &Node, source: &str, file: &str, result: &mut ScanResult) 
             "enum_item" => extract_enum(&child, source, file, result),
             "trait_item" => extract_trait(&child, source, file, result),
             "impl_item" => extract_impl(&child, source, file, result),
-            "function_item" => extract_function(&child, source, file, result),
+            "function_item" => {
+                let name = child
+                    .child_by_field_name("name")
+                    .map(|node| node_text(&node, source).to_string());
+                extract_function(&child, source, file, result);
+                if let Some(name) = name {
+                    collect_call_edges(&child, source, file, &name, result);
+                }
+            }
+            "use_declaration" => extract_use(&child, source, file, result),
             _ => {}
         }
     }
@@ -154,6 +163,15 @@ fn extract_impl(node: &Node, source: &str, file: &str, result: &mut ScanResult) 
     let trait_name = node
         .child_by_field_name("trait")
         .map(|t| node_text(&t, source).to_string());
+    if let Some(trait_name) = &trait_name {
+        result.edges.push(EdgeInfo {
+            from: type_name.clone(),
+            to: trait_name.clone(),
+            source: source_loc(file, node),
+            kind: EdgeKind::Implements,
+            label: Some(format!("{type_name} implements {trait_name}")),
+        });
+    }
 
     let mut methods = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
@@ -164,6 +182,14 @@ fn extract_impl(node: &Node, source: &str, file: &str, result: &mut ScanResult) 
                 if let Some(name_node) = child.child_by_field_name("name") {
                     let method_name = node_text(&name_node, source).to_string();
                     methods.push(method_name.clone());
+                    result.edges.push(EdgeInfo {
+                        from: type_name.clone(),
+                        to: method_name.clone(),
+                        source: source_loc(file, &child),
+                        kind: EdgeKind::Contains,
+                        label: Some(format!("{type_name} contains {method_name}")),
+                    });
+                    collect_call_edges(&child, source, file, &method_name, result);
 
                     if matches!(vis, Visibility::Public) {
                         let sig = build_fn_signature(&child, source);
@@ -222,6 +248,90 @@ fn extract_function(node: &Node, source: &str, file: &str, result: &mut ScanResu
             is_test,
         },
     );
+}
+
+fn extract_use(node: &Node, source: &str, file: &str, result: &mut ScanResult) {
+    let text = node_text(node, source)
+        .trim()
+        .trim_start_matches("use")
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+    if text.is_empty() {
+        return;
+    }
+    result.edges.push(EdgeInfo {
+        from: file.to_string(),
+        to: text.to_string(),
+        source: source_loc(file, node),
+        kind: EdgeKind::Imports,
+        label: Some(format!("imports {text}")),
+    });
+}
+
+fn collect_call_edges(
+    node: &Node,
+    source: &str,
+    file: &str,
+    caller: &str,
+    result: &mut ScanResult,
+) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "call_expression" => {
+                if let Some(callee) = extract_call_target(&child, source) {
+                    result.edges.push(EdgeInfo {
+                        from: caller.to_string(),
+                        to: callee.clone(),
+                        source: source_loc(file, &child),
+                        kind: EdgeKind::Calls,
+                        label: Some(format!("calls {callee}")),
+                    });
+                }
+            }
+            "method_call_expression" => {
+                if let Some(callee) = child
+                    .child_by_field_name("name")
+                    .or_else(|| child.child_by_field_name("field"))
+                    .map(|node| node_text(&node, source).to_string())
+                    .or_else(|| first_named_child_text(&child, source, "field_identifier"))
+                {
+                    result.edges.push(EdgeInfo {
+                        from: caller.to_string(),
+                        to: callee.clone(),
+                        source: source_loc(file, &child),
+                        kind: EdgeKind::Calls,
+                        label: Some(format!("method call {callee}")),
+                    });
+                }
+            }
+            _ => collect_call_edges(&child, source, file, caller, result),
+        }
+    }
+}
+
+fn extract_call_target(node: &Node, source: &str) -> Option<String> {
+    let function = node.child_by_field_name("function")?;
+    match function.kind() {
+        "identifier" | "scoped_identifier" => Some(node_text(&function, source).to_string()),
+        "field_expression" => function
+            .child_by_field_name("field")
+            .map(|field| node_text(&field, source).to_string()),
+        _ => first_named_child_text(&function, source, "identifier")
+            .or_else(|| first_named_child_text(&function, source, "scoped_identifier"))
+            .or_else(|| first_named_child_text(&function, source, "field_identifier")),
+    }
+}
+
+fn first_named_child_text(node: &Node, source: &str, kind: &str) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == kind {
+            return Some(node_text(&child, source).to_string());
+        }
+    }
+    None
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -398,6 +508,49 @@ impl Display for Foo {
         assert!(t.methods.contains(&"internal".to_string()));
         assert!(t.implements.contains(&"Display".to_string()));
         assert!(r.functions.contains_key("Foo::new"));
+    }
+
+    #[test]
+    fn rust_scan_edge_extracts_imports_impls_and_calls() {
+        let r = parse_rust_str(
+            r#"
+use crate::helpers::make_widget;
+
+pub trait Render { fn render(&self); }
+pub struct Widget;
+
+impl Render for Widget {
+    pub fn render(&self) {
+        make_widget();
+        crate::helpers::save_widget();
+        self.finish();
+    }
+
+    pub fn finish(&self) {}
+}
+"#,
+        );
+
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Imports && edge.to == "crate::helpers::make_widget"
+        }));
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Implements && edge.from == "Widget" && edge.to == "Render"
+        }));
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Contains && edge.from == "Widget" && edge.to == "render"
+        }));
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls && edge.from == "render" && edge.to == "make_widget"
+        }));
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.from == "render"
+                && edge.to == "crate::helpers::save_widget"
+        }));
+        assert!(r.edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls && edge.from == "render" && edge.to == "finish"
+        }));
     }
 
     #[test]

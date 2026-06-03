@@ -4,6 +4,8 @@
 //! They are intentionally independent from the AST-backed `scan` tool types and
 //! do not model write-oriented semantic actions.
 
+pub mod repo_index_adapter;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

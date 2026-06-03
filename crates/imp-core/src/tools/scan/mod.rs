@@ -36,6 +36,7 @@ use serde_json::json;
 
 use super::{truncate_head, truncate_line, Tool, ToolContext, ToolOutput, TruncationResult};
 use crate::error::{Error, Result};
+use crate::repo_index::{RepoSearchHit, RepoStructureIndex};
 use crate::tools::code_intel::CodeBlock;
 use types::*;
 
@@ -460,6 +461,7 @@ fn merge_scan_result_preserving_existing(acc: &mut ScanResult, result: ScanResul
     for (name, info) in result.functions {
         acc.functions.entry(name).or_insert(info);
     }
+    acc.edges.extend(result.edges);
 }
 
 fn file_set_cache_key(files: &[PathBuf]) -> u64 {
@@ -669,7 +671,14 @@ fn execute_search(
     files.sort();
     files.dedup();
     let index_files = prefilter_search_files(&files, query, mode);
-    let index = build_symbol_index(&index_files, cwd);
+    let scan_result = extract_files(&index_files, cwd);
+    let repo_index = RepoStructureIndex::from_scan_result(&scan_result);
+    let repo_hits = repo_index.search(query, max_results);
+    if !repo_hits.is_empty() {
+        return execute_search_repo_index(files.len(), query, mode, &repo_index, &repo_hits);
+    }
+
+    let index = symbol_index_from_scan_result(&scan_result);
     let hits = search_index(&index, query, mode, max_results);
     let mut lines = vec![
         format!("Action: search"),
@@ -714,6 +723,69 @@ fn execute_search(
                 "score": hit.score,
                 "why": hit.why,
             })).collect::<Vec<_>>(),
+        }),
+        is_error: false,
+    }
+}
+
+fn execute_search_repo_index(
+    files_analyzed: usize,
+    query: &str,
+    mode: &str,
+    index: &RepoStructureIndex,
+    hits: &[RepoSearchHit],
+) -> ToolOutput {
+    let mut lines = vec![
+        format!("Action: search"),
+        format!("Query: {query}"),
+        format!("Mode: {mode}"),
+        format!("Files analyzed: {files_analyzed}"),
+        repo_structure_index_line(index),
+    ];
+    lines.push("Results:".to_string());
+    for hit in hits {
+        let line = hit
+            .node
+            .location
+            .range
+            .as_ref()
+            .map(|range| range.start.line)
+            .unwrap_or(1);
+        lines.push(format!(
+            "- {}:{} [{}] {} score={} — {}",
+            hit.node.location.path,
+            line,
+            scan_symbol_kind_label(hit.node.symbol.kind),
+            hit.node.symbol.name,
+            hit.score,
+            hit.why.join(", ")
+        ));
+    }
+
+    ToolOutput {
+        content: vec![imp_llm::ContentBlock::Text {
+            text: truncate_output(lines.join("\n")),
+        }],
+        details: json!({
+            "action": "search",
+            "query": query,
+            "mode": mode,
+            "files_analyzed": files_analyzed,
+            "index_source": "repo_structure",
+            "repo_intelligence": repo_structure_index_details(index),
+            "results": hits.iter().map(|hit| {
+                let line = hit.node.location.range.as_ref().map(|range| range.start.line).unwrap_or(1);
+                json!({
+                    "file": hit.node.location.path,
+                    "symbol": hit.node.symbol.name,
+                    "qualified_symbol": hit.node.qualified_name,
+                    "kind": scan_symbol_kind_label(hit.node.symbol.kind),
+                    "line": line,
+                    "score": hit.score,
+                    "why": hit.why,
+                    "extract_target": format!("{}#{}", hit.node.location.path, hit.node.symbol.name),
+                })
+            }).collect::<Vec<_>>(),
         }),
         is_error: false,
     }
@@ -944,6 +1016,47 @@ fn repo_index_details(index: &[IndexedSymbol]) -> serde_json::Value {
         "symbols": index.len(),
         "tests": index.iter().filter(|symbol| symbol.is_test).count(),
     })
+}
+
+fn repo_structure_index_line(index: &RepoStructureIndex) -> String {
+    format!(
+        "Repo intelligence: {} symbols, {} tests, {} edges",
+        index.nodes.len(),
+        index.nodes.iter().filter(|node| node.is_test).count(),
+        index.edges.len()
+    )
+}
+
+fn repo_structure_index_details(index: &RepoStructureIndex) -> serde_json::Value {
+    json!({
+        "symbols": index.nodes.len(),
+        "tests": index.nodes.iter().filter(|node| node.is_test).count(),
+        "edges": index.edges.len(),
+    })
+}
+
+fn scan_symbol_kind_label(kind: crate::codeintel::SymbolKind) -> &'static str {
+    match kind {
+        crate::codeintel::SymbolKind::File => "file",
+        crate::codeintel::SymbolKind::Module => "module",
+        crate::codeintel::SymbolKind::Namespace => "namespace",
+        crate::codeintel::SymbolKind::Package => "package",
+        crate::codeintel::SymbolKind::Class => "class",
+        crate::codeintel::SymbolKind::Struct => "struct",
+        crate::codeintel::SymbolKind::Interface => "interface",
+        crate::codeintel::SymbolKind::Enum => "enum",
+        crate::codeintel::SymbolKind::Trait => "trait",
+        crate::codeintel::SymbolKind::Function => "function",
+        crate::codeintel::SymbolKind::Method => "method",
+        crate::codeintel::SymbolKind::Constructor => "constructor",
+        crate::codeintel::SymbolKind::Field => "field",
+        crate::codeintel::SymbolKind::Property => "property",
+        crate::codeintel::SymbolKind::Variable => "variable",
+        crate::codeintel::SymbolKind::Constant => "constant",
+        crate::codeintel::SymbolKind::TypeAlias => "type_alias",
+        crate::codeintel::SymbolKind::Macro => "macro",
+        crate::codeintel::SymbolKind::Unknown => "unknown",
+    }
 }
 
 fn search_index(
