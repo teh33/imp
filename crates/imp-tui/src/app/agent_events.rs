@@ -1,4 +1,4 @@
-use imp_core::agent::AgentEvent;
+use imp_core::agent::{AgentEvent, RunFinalStatus};
 use imp_core::session::SessionEntry;
 use imp_core::workflow::VerificationCloseoutEffect;
 use imp_llm::StreamEvent;
@@ -10,6 +10,24 @@ use super::{
     agent_event_kind, extension_policy_warning, format_error_for_display, provenance_warning,
     trust_policy_warning, verification_gate_label, verification_status_text, App,
 };
+
+fn terminal_agent_status_message(status: &RunFinalStatus) -> Option<String> {
+    match status {
+        RunFinalStatus::Failed { message } => Some(format!(
+            "Agent turn failed before producing a response: {message}"
+        )),
+        RunFinalStatus::Blocked { message, .. } => Some(format!(
+            "Agent turn stopped before producing a response: {message}"
+        )),
+        RunFinalStatus::NeedsUserInput { question } => Some(format!(
+            "Agent needs input before it can continue: {question}"
+        )),
+        RunFinalStatus::Cancelled => {
+            Some("Agent turn was cancelled before producing a response.".to_string())
+        }
+        RunFinalStatus::Done { .. } | RunFinalStatus::DoneWithConcerns { .. } => None,
+    }
+}
 
 impl App {
     // ── Agent event handling ────────────────────────────────────
@@ -61,13 +79,27 @@ impl App {
                 self.begin_llm_thought_segment();
                 self.turn_tracker.clear_counts();
             }
-            AgentEvent::AgentEnd { cost, .. } => {
+            AgentEvent::AgentEnd { cost, status, .. } => {
+                let had_visible_turn_output = self.completed_turns_in_run > 0
+                    || self.latest_streaming_message_mut().is_some_and(|message| {
+                        !message.content.trim().is_empty() || !message.tool_calls.is_empty()
+                    });
                 self.completed_turns_in_run = self.completed_turns_in_run.max(1);
                 self.accumulated_cost.total += cost.total;
                 self.accumulated_cost.input += cost.input;
                 self.accumulated_cost.output += cost.output;
                 self.is_streaming = false;
                 self.streaming_anchor_user_index = None;
+
+                if !had_visible_turn_output {
+                    if let Some(message) = terminal_agent_status_message(&status) {
+                        let display_error = format_error_for_display(&message);
+                        if self.last_agent_error.as_deref() != Some(display_error.as_str()) {
+                            self.last_agent_error = Some(display_error.clone());
+                            self.replace_latest_streaming_with_error(&display_error);
+                        }
+                    }
+                }
 
                 // Mark last streaming message as done
                 if let Some(last) = self.latest_streaming_message_mut() {
@@ -373,27 +405,28 @@ impl App {
                 // Stop streaming — errors can be terminal (no AgentEnd follows)
                 self.is_streaming = false;
                 self.streaming_anchor_user_index = None;
-                if let Some(last) = self.latest_streaming_message_mut() {
-                    last.is_streaming = false;
-                }
-                self.invalidate_chat_render_cache();
 
                 // Parse the error for a cleaner display
                 let display_error = format_error_for_display(&error);
                 if self.last_agent_error.as_deref() == Some(display_error.as_str()) {
+                    if !self.replace_latest_streaming_with_error(&display_error) {
+                        self.invalidate_chat_render_cache();
+                    }
                     return;
                 }
                 self.last_agent_error = Some(display_error.clone());
 
-                self.messages.push(DisplayMessage {
-                    role: MessageRole::Error,
-                    content: display_error,
-                    thinking: None,
-                    tool_calls: Vec::new(),
-                    assistant_blocks: Vec::new(),
-                    is_streaming: false,
-                    timestamp: imp_llm::now(),
-                });
+                if !self.replace_latest_streaming_with_error(&display_error) {
+                    self.messages.push(DisplayMessage {
+                        role: MessageRole::Error,
+                        content: display_error,
+                        thinking: None,
+                        tool_calls: Vec::new(),
+                        assistant_blocks: Vec::new(),
+                        is_streaming: false,
+                        timestamp: imp_llm::now(),
+                    });
+                }
                 self.invalidate_chat_render_cache();
             }
             _ => {}

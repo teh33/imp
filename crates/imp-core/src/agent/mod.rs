@@ -3274,6 +3274,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_surfaces_pre_output_provider_failure_as_terminal_failure() {
+        let provider = Arc::new(MockProvider::new_results(vec![vec![Err(
+            imp_llm::Error::ContextTooLong {
+                used: 100,
+                limit: 50,
+            },
+        )]]));
+
+        let model = test_model(provider);
+        let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+
+        let events_task = tokio::spawn(collect_events(handle));
+        let result = agent.run("Continue".to_string()).await;
+        drop(agent);
+
+        assert!(result.is_err());
+        let events = events_task.await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Error { error }
+                if error.contains("Context too long") && error.contains("exceeds 50")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::AgentEnd {
+                status: RunFinalStatus::Failed { message },
+                ..
+            } if message.contains("Context too long") && message.contains("exceeds 50")
+        )));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::TurnEnd { .. })));
+    }
+
+    #[tokio::test]
     async fn agent_retries_before_first_meaningful_event_but_not_after() {
         let provider = Arc::new(MockProvider::new_results(vec![
             vec![

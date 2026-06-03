@@ -106,6 +106,26 @@ impl App {
         self.push_message(MessageRole::Error, content);
     }
 
+    pub(super) fn replace_latest_streaming_with_error(&mut self, content: &str) -> bool {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|message| message.is_streaming)
+        {
+            message.role = MessageRole::Error;
+            message.content = content.to_string();
+            message.thinking = None;
+            message.tool_calls.clear();
+            message.assistant_blocks.clear();
+            message.is_streaming = false;
+            self.invalidate_chat_render_cache();
+            true
+        } else {
+            false
+        }
+    }
+
     pub(super) fn push_message(&mut self, role: MessageRole, content: &str) {
         self.messages.push(DisplayMessage {
             role,

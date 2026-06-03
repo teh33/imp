@@ -1199,6 +1199,77 @@ async fn agent_task_failure_preserves_active_replacement_handle() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn agent_task_failure_replaces_pending_assistant_placeholder_with_error() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("will fail before output".to_string());
+
+    app.handle_runtime_signal(RuntimeSignal::AgentTaskFailed(
+        "Provider error: context_length_exceeded".into(),
+    ));
+
+    assert!(!app.is_streaming);
+    assert!(app.agent_handle.is_none());
+    assert_eq!(app.messages.len(), 2);
+    assert_eq!(app.messages[0].role, MessageRole::User);
+    assert_eq!(app.messages[1].role, MessageRole::Error);
+    assert!(!app.messages[1].is_streaming);
+    assert!(app.messages[1].content.contains("Context full"));
+
+    app.editor.set_content("try again with a smaller request");
+    app.send_message();
+
+    assert_eq!(app.messages.len(), 4);
+    assert_eq!(app.messages[2].role, MessageRole::User);
+    assert_eq!(app.messages[2].content, "try again with a smaller request");
+    assert_eq!(app.messages[3].role, MessageRole::Assistant);
+    assert!(app.messages[3].is_streaming);
+    assert_eq!(
+        app.pending_agent_prompt.as_deref(),
+        Some("try again with a smaller request")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_error_replaces_pending_assistant_placeholder_with_error() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("will receive provider error".to_string());
+
+    app.handle_agent_event(AgentEvent::Error {
+        error: "Provider error: context_length_exceeded".into(),
+    });
+
+    assert!(!app.is_streaming);
+    assert_eq!(app.messages.len(), 2);
+    assert_eq!(app.messages[0].role, MessageRole::User);
+    assert_eq!(app.messages[1].role, MessageRole::Error);
+    assert!(!app.messages[1].is_streaming);
+    assert!(app.messages[1].content.contains("Context full"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_agent_end_before_turn_output_replaces_pending_assistant_placeholder() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("will fail at end".to_string());
+
+    app.handle_agent_event(AgentEvent::AgentEnd {
+        usage: Usage::default(),
+        cost: Cost::default(),
+        status: imp_core::agent::RunFinalStatus::Failed {
+            message: "provider rejected request before output".into(),
+        },
+    });
+
+    assert!(!app.is_streaming);
+    assert_eq!(app.messages.len(), 2);
+    assert_eq!(app.messages[0].role, MessageRole::User);
+    assert_eq!(app.messages[1].role, MessageRole::Error);
+    assert!(!app.messages[1].is_streaming);
+    assert!(app.messages[1]
+        .content
+        .contains("Agent turn failed before producing a response"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn esc_cancel_first_requests_cancel_second_aborts_stuck_agent_task() {
     let mut app = make_app();
     let (_event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();

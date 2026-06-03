@@ -272,14 +272,15 @@ impl App {
         self.completed_turns_in_run = 0;
         self.is_streaming = false;
         self.streaming_anchor_user_index = None;
-        if let Some(last) = self.latest_streaming_message_mut() {
-            last.is_streaming = false;
-        }
 
         let display_error = format_error_for_display(&error);
         if self.last_agent_error.as_deref() != Some(display_error.as_str()) {
-            self.push_error_msg(&display_error);
+            if !self.replace_latest_streaming_with_error(&display_error) {
+                self.push_error_msg(&display_error);
+            }
             self.last_agent_error = Some(display_error);
+        } else {
+            self.replace_latest_streaming_with_error(&display_error);
         }
     }
 }

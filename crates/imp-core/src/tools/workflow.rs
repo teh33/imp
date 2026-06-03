@@ -12,7 +12,7 @@ use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{
     load_workflow, load_workflow_raw, next_runnable_steps, validate_workflow,
-    workflow_step_readiness, workflow_subagent_input, CheckKind, CheckStatus, StepKind, StepStatus,
+    workflow_step_readiness, workflow_subagent_input, CheckKind, CheckStatus, StepKind,
     ValidateOptions, ValidationMode, WorkflowCheck, WorkflowDocument, WorkflowReadinessReasonKind,
     WorkflowReadinessState, WorkflowStep, WorkflowStepAction, WorkflowStepActionKind,
     WorkflowWorker,
@@ -2139,6 +2139,7 @@ impl CaseExt for str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::StepStatus;
     use std::sync::Arc;
 
     fn repo_root() -> PathBuf {
