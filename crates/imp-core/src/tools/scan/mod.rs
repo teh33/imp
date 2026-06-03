@@ -517,20 +517,102 @@ pub fn collect_source_files(root: &Path) -> Result<Vec<PathBuf>> {
         return Ok(files);
     }
 
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
+    collect_source_files_with_ignore(root)
+}
+
+fn collect_source_files_with_ignore(root: &Path) -> Result<Vec<PathBuf>> {
+    let is_git_repo = is_inside_git_worktree(root);
+    let mut builder = ignore::WalkBuilder::new(root);
+    builder
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .ignore(true)
+        .hidden(!is_git_repo)
         .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| !is_skip_dir(entry.path()))
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-    {
-        if is_supported(entry.path()) {
-            files.push(entry.path().to_path_buf());
+        .threads(std::thread::available_parallelism().map_or(1, usize::from));
+
+    if !is_git_repo {
+        if let Some(overrides) = non_git_source_overrides(root) {
+            builder.overrides(overrides);
         }
     }
 
+    let mut files = Vec::new();
+    for result in builder.build() {
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        if entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+            && is_supported(entry.path())
+        {
+            files.push(entry.path().to_path_buf());
+        }
+    }
+    files.sort();
     Ok(files)
+}
+
+fn is_inside_git_worktree(root: &Path) -> bool {
+    Command::new("git")
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|stdout| stdout.trim() == "true")
+}
+
+fn non_git_source_overrides(root: &Path) -> Option<ignore::overrides::Override> {
+    let mut builder = ignore::overrides::OverrideBuilder::new(root);
+    for pattern in non_git_source_ignore_patterns() {
+        builder.add(pattern).ok()?;
+    }
+    builder.build().ok()
+}
+
+fn non_git_source_ignore_patterns() -> &'static [&'static str] {
+    const COMMON: &[&str] = &[
+        "!**/node_modules/",
+        "!**/__pycache__/",
+        "!**/venv/",
+        "!**/.venv/",
+        "!**/vendor/",
+        "!**/dist/",
+        "!**/build/",
+        "!**/.next/",
+        "!**/coverage/",
+        "!**/target/debug/",
+        "!**/target/release/",
+        "!**/target/rust-analyzer/",
+        "!**/target/criterion/",
+        #[cfg(target_os = "macos")]
+        "!**/Library/Application Support/",
+        #[cfg(target_os = "macos")]
+        "!**/Library/Caches/",
+        #[cfg(target_os = "macos")]
+        "!**/Library/Group Containers/",
+        #[cfg(target_os = "macos")]
+        "!**/Library/Containers/",
+        #[cfg(target_os = "windows")]
+        "!**/bin/Debug/",
+        #[cfg(target_os = "windows")]
+        "!**/bin/Release/",
+        #[cfg(target_os = "windows")]
+        "!**/Program Files/",
+        #[cfg(target_os = "windows")]
+        "!**/Program Files (x86)/",
+        #[cfg(target_os = "windows")]
+        "!**/AppData/Local/",
+        #[cfg(target_os = "windows")]
+        "!**/AppData/Roaming/",
+    ];
+    COMMON
 }
 
 fn git_tracked_source_files(root: &Path) -> Option<Vec<PathBuf>> {
@@ -614,29 +696,6 @@ pub fn is_supported(path: &Path) -> bool {
                 | "dart"
         )
     )
-}
-
-fn is_skip_dir(path: &Path) -> bool {
-    const SKIP: &[&str] = &[
-        "target",
-        "node_modules",
-        ".git",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "vendor",
-        "dist",
-        "build",
-        ".next",
-        "coverage",
-    ];
-    path.components().any(|c| {
-        if let std::path::Component::Normal(name) = c {
-            SKIP.contains(&name.to_string_lossy().as_ref())
-        } else {
-            false
-        }
-    })
 }
 
 // ── search and test discovery ───────────────────────────────────────
@@ -1999,6 +2058,61 @@ pub fn hello() void {}",
                 result.functions.keys().collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn collect_source_files_uses_ignore_files_in_fallback_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join(".ignore"), "ignored.py\n").unwrap();
+        std::fs::write(root.join("kept.py"), "def kept(): pass\n").unwrap();
+        std::fs::write(root.join("ignored.py"), "def ignored(): pass\n").unwrap();
+        std::fs::write(root.join("notes.txt"), "not source\n").unwrap();
+
+        let files = collect_source_files(root).unwrap();
+        let names = files
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"kept.py"));
+        assert!(!names.contains(&"ignored.py"));
+        assert!(!names.contains(&"notes.txt"));
+    }
+
+    #[test]
+    fn scan_non_git_ignore_prunes_common_noise_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(root.join("target/debug/build")).unwrap();
+        std::fs::create_dir_all(root.join(".venv/lib")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn kept() {}\n").unwrap();
+        std::fs::write(
+            root.join("node_modules/pkg/index.ts"),
+            "export const ignored = 1;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("target/debug/build/generated.rs"),
+            "fn ignored() {}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(".venv/lib/site.py"), "def ignored(): pass\n").unwrap();
+
+        let files = collect_source_files(root).unwrap();
+        let relative = files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(relative, vec!["src/lib.rs"]);
     }
 
     #[test]
