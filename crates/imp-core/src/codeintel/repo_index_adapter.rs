@@ -1,8 +1,7 @@
 use super::{
     AdapterDescriptor, AdapterSource, BackendProvenance, CodeIntelAdapter, CodeIntelEnvelope,
     CodeIntelQuery, CodeIntelSurface, DefinitionItem, Freshness, Location, Position, ReferenceItem,
-    ReferenceUsage, RelatedLocation, RelationshipKind, SymbolIdentity, SymbolKind, TextRange,
-    Truncation,
+    ReferenceUsage, RelatedLocation, RelationshipKind, SymbolIdentity, Truncation,
 };
 
 const DEFAULT_LIMIT: usize = 50;
@@ -370,6 +369,7 @@ fn plural(count: usize) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codeintel::{SymbolKind, TextRange};
 
     fn range(start: u32, end: u32) -> Option<TextRange> {
         Some(TextRange {

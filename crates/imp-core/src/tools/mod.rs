@@ -232,6 +232,12 @@ pub struct ToolContext {
     pub supporting_provenance: Vec<Provenance>,
 }
 
+fn lock_unpoisoned<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// In-session file content cache. Avoids re-reading files that haven't changed.
 pub struct FileCache {
     entries: std::sync::Mutex<std::collections::HashMap<PathBuf, FileCacheEntry>>,
@@ -261,7 +267,7 @@ impl FileCache {
         let mtime = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
 
         {
-            let cache = self.entries.lock().unwrap();
+            let cache = lock_unpoisoned(&self.entries);
             if let Some(entry) = cache.get(path) {
                 if entry.mtime == mtime {
                     return Ok(entry.content.clone());
@@ -272,7 +278,7 @@ impl FileCache {
         let content = std::fs::read_to_string(path)?;
 
         {
-            let mut cache = self.entries.lock().unwrap();
+            let mut cache = lock_unpoisoned(&self.entries);
             cache.insert(
                 path.to_path_buf(),
                 FileCacheEntry {
@@ -287,7 +293,7 @@ impl FileCache {
 
     /// Invalidate a cache entry (call after write/edit).
     pub fn invalidate(&self, path: &Path) {
-        let mut cache = self.entries.lock().unwrap();
+        let mut cache = lock_unpoisoned(&self.entries);
         cache.remove(path);
     }
 }
@@ -364,12 +370,12 @@ impl CheckpointState {
             created_at: imp_llm::now(),
             files: captured,
         };
-        self.records.lock().unwrap().push(record.clone());
+        lock_unpoisoned(&self.records).push(record.clone());
         Ok(Some(record))
     }
 
     pub fn checkpoints(&self) -> Vec<CheckpointRecord> {
-        self.records.lock().unwrap().clone()
+        lock_unpoisoned(&self.records).clone()
     }
 
     pub fn checkpoint(&self, id: &str) -> Option<CheckpointRecord> {
@@ -425,7 +431,7 @@ impl FileHistory {
     pub fn snapshot_before_edit(&self, path: &Path) -> std::io::Result<()> {
         let canonical = path.to_path_buf();
 
-        let mut originals = self.originals.lock().unwrap();
+        let mut originals = lock_unpoisoned(&self.originals);
         if originals.contains_key(&canonical) {
             return Ok(()); // first edit wins
         }
@@ -438,12 +444,12 @@ impl FileHistory {
 
     /// Get the original content of a file (before any edits in this session).
     pub fn original(&self, path: &Path) -> Option<String> {
-        self.originals.lock().unwrap().get(path).cloned()
+        lock_unpoisoned(&self.originals).get(path).cloned()
     }
 
     /// Rollback a file to its original content.
     pub fn rollback(&self, path: &Path) -> std::io::Result<()> {
-        let originals = self.originals.lock().unwrap();
+        let originals = lock_unpoisoned(&self.originals);
         if let Some(content) = originals.get(path) {
             std::fs::write(path, content)?;
         }
@@ -452,7 +458,7 @@ impl FileHistory {
 
     /// List all files with snapshots.
     pub fn tracked_files(&self) -> Vec<PathBuf> {
-        self.originals.lock().unwrap().keys().cloned().collect()
+        lock_unpoisoned(&self.originals).keys().cloned().collect()
     }
 }
 
