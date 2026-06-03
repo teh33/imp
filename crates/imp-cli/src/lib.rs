@@ -4175,6 +4175,37 @@ mod tests {
     }
 
     #[test]
+    fn cli_disposition_routes_tui_modes_to_composition_crate() {
+        let default_cli = Cli::try_parse_from(["imp"]).expect("parse default cli");
+        assert_eq!(disposition(&default_cli), CliRunDisposition::Tui);
+
+        let tui_cli = Cli::try_parse_from(["imp", "tui"]).expect("parse tui command");
+        assert_eq!(disposition(&tui_cli), CliRunDisposition::Tui);
+
+        let chat_cli = Cli::try_parse_from(["imp", "chat"]).expect("parse chat command");
+        assert_eq!(disposition(&chat_cli), CliRunDisposition::Tui);
+    }
+
+    #[test]
+    fn cli_disposition_routes_headless_modes_to_imp_cli() {
+        let print_cli = Cli::try_parse_from(["imp", "-p", "say ready"])
+            .expect("parse print command");
+        assert_eq!(disposition(&print_cli), CliRunDisposition::Headless);
+
+        let rpc_cli = Cli::try_parse_from(["imp", "--mode", "rpc"])
+            .expect("parse rpc mode");
+        assert_eq!(disposition(&rpc_cli), CliRunDisposition::Headless);
+
+        let workflow_cli = Cli::try_parse_from(["imp", "workflow", "list"])
+            .expect("parse workflow command");
+        assert_eq!(disposition(&workflow_cli), CliRunDisposition::Headless);
+
+        let bare_prompt_cli = Cli::try_parse_from(["imp", "fix", "this"])
+            .expect("parse bare prompt");
+        assert_eq!(disposition(&bare_prompt_cli), CliRunDisposition::Headless);
+    }
+
+    #[test]
     fn cli_treats_old_run_workflow_flags_as_prompt_args() {
         let cli = Cli::try_parse_from(["imp", "run", "5.1", "--defer-verify"])
             .expect("legacy native work run flags are no longer a subcommand");
