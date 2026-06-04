@@ -721,6 +721,21 @@ struct SearchHit {
     why: Vec<String>,
 }
 
+const FULL_SYMBOL_SEARCH_INDEX_LIMIT: usize = 1_000;
+
+fn search_index_files(files: &[PathBuf], query: &str, mode: &str) -> Vec<PathBuf> {
+    if mode == "symbol" && files.len() <= FULL_SYMBOL_SEARCH_INDEX_LIMIT {
+        return files.to_vec();
+    }
+
+    let selected = prefilter_search_files(files, query, mode);
+    if mode == "symbol" && selected.is_empty() {
+        files.to_vec()
+    } else {
+        selected
+    }
+}
+
 fn execute_search(
     mut files: Vec<PathBuf>,
     cwd: &Path,
@@ -730,11 +745,18 @@ fn execute_search(
 ) -> ToolOutput {
     files.sort();
     files.dedup();
-    let index_files = prefilter_search_files(&files, query, mode);
+    let index_files = search_index_files(&files, query, mode);
     let repo_index = load_or_build_repo_structure_index(&index_files, cwd);
     let repo_hits = repo_index.search(query, max_results);
     if !repo_hits.is_empty() {
-        return execute_search_repo_index(files.len(), query, mode, &repo_index, &repo_hits);
+        return execute_search_repo_index(
+            files.len(),
+            index_files.len(),
+            query,
+            mode,
+            &repo_index,
+            &repo_hits,
+        );
     }
 
     let index = build_symbol_index(&index_files, cwd);
@@ -744,6 +766,7 @@ fn execute_search(
         format!("Query: {query}"),
         format!("Mode: {mode}"),
         format!("Files analyzed: {}", files.len()),
+        format!("Files indexed: {}", index_files.len()),
         repo_index_line(&index),
     ];
     if hits.is_empty() {
@@ -789,6 +812,7 @@ fn execute_search(
 
 fn execute_search_repo_index(
     files_analyzed: usize,
+    files_indexed: usize,
     query: &str,
     mode: &str,
     index: &RepoStructureIndex,
@@ -799,6 +823,7 @@ fn execute_search_repo_index(
         format!("Query: {query}"),
         format!("Mode: {mode}"),
         format!("Files analyzed: {files_analyzed}"),
+        format!("Files indexed: {files_indexed}"),
         repo_structure_index_line(index),
     ];
     lines.push("Results:".to_string());
@@ -830,6 +855,7 @@ fn execute_search_repo_index(
             "query": query,
             "mode": mode,
             "files_analyzed": files_analyzed,
+            "files_indexed": files_indexed,
             "index_source": "repo_structure",
             "repo_intelligence": repo_structure_index_details(index),
             "results": hits.iter().map(|hit| {
