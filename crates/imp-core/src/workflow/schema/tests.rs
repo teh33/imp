@@ -466,6 +466,130 @@ closeout:
 }
 
 #[test]
+fn workflow_iteration_schema_parses_loop_until_done_strategy() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: loop-workflow
+title: Loop Workflow
+status: active
+kind: investigation
+settings: {}
+strategy:
+  kind: loop_until_done
+  max_rounds: 3
+  stop_when: [all_checks_pass, no_new_findings]
+spec:
+  goal: Investigate until done.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [reviewed]
+context: {}
+steps:
+  investigate:
+    kind: context
+    status: todo
+    checks: [reviewed]
+prototypes: {}
+checks:
+  reviewed:
+    kind: review
+    status: pending
+    question: Investigation complete?
+workers: {}
+results:
+  path: .imp/workflows/loop-workflow/results.md
+closeout:
+  done:
+    requires: [reviewed]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let strategy = doc.strategy.as_ref().expect("strategy exists");
+    let WorkflowStrategy::LoopUntilDone {
+        max_rounds,
+        stop_when,
+    } = strategy;
+    assert_eq!(*max_rounds, 3);
+    assert_eq!(
+        stop_when,
+        &vec![
+            WorkflowStopCondition::AllChecksPass,
+            WorkflowStopCondition::NoNewFindings
+        ]
+    );
+
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/loop-workflow")),
+    );
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:#?}");
+}
+
+#[test]
+fn workflow_iteration_runtime_rejects_unbounded_loop_strategy() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: unbounded-loop-workflow
+title: Unbounded Loop Workflow
+status: active
+kind: investigation
+settings: {}
+strategy:
+  kind: loop_until_done
+  max_rounds: 0
+  stop_when: []
+spec:
+  goal: Investigate until done.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [reviewed]
+context: {}
+steps:
+  investigate:
+    kind: context
+    status: todo
+    checks: [reviewed]
+prototypes: {}
+checks:
+  reviewed:
+    kind: review
+    status: pending
+    question: Investigation complete?
+workers: {}
+results:
+  path: .imp/workflows/unbounded-loop-workflow/results.md
+closeout:
+  done:
+    requires: [reviewed]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(
+            ".imp/workflows/unbounded-loop-workflow",
+        )),
+    );
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "strategy.max_rounds"
+                && diagnostic.message.contains("greater than 0")
+        }),
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "strategy.stop_when"
+                && diagnostic.message.contains("at least one stop condition")
+        }),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
 fn workflow_adversarial_schema_parses_review_requirement() {
     let yaml = r#"
 schema: imp.workflow/v1

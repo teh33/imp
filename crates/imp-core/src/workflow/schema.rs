@@ -19,6 +19,8 @@ pub struct WorkflowDocument {
     pub parent: Option<WorkflowParent>,
     #[serde(default)]
     pub settings: BTreeMap<String, serde_yaml::Value>,
+    #[serde(default)]
+    pub strategy: Option<WorkflowStrategy>,
     pub spec: WorkflowSpec,
     #[serde(default)]
     pub context: BTreeMap<String, ContextRequirement>,
@@ -36,6 +38,25 @@ pub struct WorkflowDocument {
 pub struct WorkflowParent {
     pub workflow: String,
     pub step: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowStrategy {
+    LoopUntilDone {
+        max_rounds: u32,
+        #[serde(default)]
+        stop_when: Vec<WorkflowStopCondition>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStopCondition {
+    AllChecksPass,
+    NoNewFindings,
+    SurvivingHypothesis,
+    BudgetExhausted,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -431,6 +452,7 @@ pub fn validate_workflow(
     }
 
     validate_directory_id(doc, options, &mut diagnostics);
+    validate_strategy(doc, &mut diagnostics);
     validate_step_references(doc, options, &mut diagnostics);
     validate_check_references(doc, &mut diagnostics);
     validate_check_contracts(doc, &mut diagnostics);
@@ -600,6 +622,27 @@ fn is_terminal_step_status(status: StepStatus) -> bool {
             | StepStatus::Failed
             | StepStatus::Blocked
     )
+}
+
+fn validate_strategy(doc: &WorkflowDocument, diagnostics: &mut Vec<WorkflowDiagnostic>) {
+    if let Some(WorkflowStrategy::LoopUntilDone {
+        max_rounds,
+        stop_when,
+    }) = &doc.strategy
+    {
+        if *max_rounds == 0 {
+            diagnostics.push(WorkflowDiagnostic::new(
+                "strategy.max_rounds",
+                "loop_until_done strategy requires max_rounds greater than 0",
+            ));
+        }
+        if stop_when.is_empty() {
+            diagnostics.push(WorkflowDiagnostic::new(
+                "strategy.stop_when",
+                "loop_until_done strategy requires at least one stop condition",
+            ));
+        }
+    }
 }
 
 fn validate_directory_id(
