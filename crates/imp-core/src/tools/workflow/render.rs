@@ -2,6 +2,18 @@ use super::{WorkflowNextAction, WorkflowRunResult};
 use crate::workflow::{CheckStatus, StepKind, WorkflowDocument};
 
 pub(super) fn render_run_result(result: &WorkflowRunResult) -> String {
+    let body = render_run_result_body(result);
+    format!("{}\n{}", workflow_summary_line(result), body)
+}
+
+fn workflow_summary_line(result: &WorkflowRunResult) -> String {
+    format!(
+        "{} · {}/{} steps · {}",
+        result.title, result.completed_steps, result.total_steps, result.status
+    )
+}
+
+fn render_run_result_body(result: &WorkflowRunResult) -> String {
     match &result.next_action {
         WorkflowNextAction::OrchestratedCommandChecks { steps, reconciled } => {
             let check_count: usize = steps.iter().map(|step| step.checks.len()).sum();

@@ -2,19 +2,26 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::checks::{run_command_checks, WorkflowCommandStepRun};
+use super::checks::{WorkflowCommandStepRun, run_command_checks};
 use super::contracts::{
     action_for_runnable_step, subagent_action_for_runnable_step, subagent_batch_for_runnable_steps,
 };
 use super::files::load_selected_workflow;
 use super::readiness::blocked_steps;
-use super::render::{render_run_result, CaseExt};
+use super::render::{CaseExt, render_run_result};
 use super::{
     ToolContext, ToolOutput, WorkflowDiagnosticView, WorkflowExecutionMode, WorkflowNextAction,
     WorkflowRunResult, WorkflowValidationModeParam,
 };
 use crate::error::Result;
-use crate::workflow::{load_workflow, next_runnable_steps, validate_workflow};
+use crate::workflow::{StepStatus, load_workflow, next_runnable_steps, validate_workflow};
+
+fn workflow_completed_steps(doc: &crate::workflow::WorkflowDocument) -> usize {
+    doc.steps
+        .values()
+        .filter(|step| matches!(step.status, StepStatus::Done))
+        .count()
+}
 
 pub(super) async fn run_action(
     workflows_root: &Path,
@@ -33,12 +40,17 @@ pub(super) async fn run_action(
         })
         .collect::<Vec<_>>();
 
-    let (next_action, result_status) = if !diagnostics.is_empty() {
+    let (next_action, result_status, result_title, completed_steps, total_steps) = if !diagnostics
+        .is_empty()
+    {
         (
             WorkflowNextAction::ValidationBlocked {
                 diagnostics: diagnostic_views.clone(),
             },
             format!("{:?}", doc.status).to_case(),
+            doc.title.clone(),
+            workflow_completed_steps(&doc),
+            doc.steps.len(),
         )
     } else {
         let mut current_doc = doc;
@@ -123,12 +135,21 @@ pub(super) async fn run_action(
                 blocked_steps,
             }
         };
-        (action, result_status)
+        (
+            action,
+            result_status,
+            current_doc.title.clone(),
+            workflow_completed_steps(&current_doc),
+            current_doc.steps.len(),
+        )
     };
 
     let result = WorkflowRunResult {
         id: id.clone(),
+        title: result_title,
         status: result_status,
+        completed_steps,
+        total_steps,
         execution_mode: run_mode,
         next_action,
     };

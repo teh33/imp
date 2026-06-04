@@ -286,7 +286,10 @@ async fn workflow_command_guard_fails_zero_test_command_output() {
 
     let doc = load_workflow(&workflow_root.join("workflow.yaml")).expect("updated workflow loads");
     assert!(matches!(
-        doc.checks.get("command_check").expect("check exists").status,
+        doc.checks
+            .get("command_check")
+            .expect("check exists")
+            .status,
         CheckStatus::Failed
     ));
     assert!(matches!(
@@ -603,10 +606,65 @@ async fn workflow_run_renders_subagent_batch_for_parallel_action_steps() {
 }
 
 #[test]
+fn workflow_summary_line_leads_run_result_rendering() {
+    let result = WorkflowRunResult {
+        id: "fanout".to_string(),
+        title: "Fanout Workflow".to_string(),
+        status: "active".to_string(),
+        completed_steps: 2,
+        total_steps: 5,
+        execution_mode: WorkflowExecutionMode::MainAgent,
+        next_action: WorkflowNextAction::RunStep {
+            step: "synthesize".to_string(),
+            step_kind: "synthesize".to_string(),
+            worker: None,
+            worker_assignment: Box::new(None),
+            checks: vec!["synthesis_reviewed".to_string()],
+            workflow: None,
+            depends_on: vec!["verify_a".to_string(), "verify_b".to_string()],
+        },
+    };
+
+    let text = render_run_result(&result);
+    assert_eq!(
+        text.lines().next(),
+        Some("Fanout Workflow · 2/5 steps · active")
+    );
+}
+
+#[test]
+fn workflow_render_run_result_keeps_body_after_summary() {
+    let result = WorkflowRunResult {
+        id: "fanout".to_string(),
+        title: "Fanout Workflow".to_string(),
+        status: "active".to_string(),
+        completed_steps: 2,
+        total_steps: 5,
+        execution_mode: WorkflowExecutionMode::MainAgent,
+        next_action: WorkflowNextAction::RunStep {
+            step: "synthesize".to_string(),
+            step_kind: "synthesize".to_string(),
+            worker: None,
+            worker_assignment: Box::new(None),
+            checks: vec!["synthesis_reviewed".to_string()],
+            workflow: None,
+            depends_on: vec!["verify_a".to_string(), "verify_b".to_string()],
+        },
+    };
+
+    let text = render_run_result(&result);
+    assert!(text.contains("Next workflow action: run step synthesize [synthesize]"));
+    assert!(text.contains("Depends on: verify_a, verify_b"));
+}
+
+#[test]
 fn workflow_synthesis_barrier_run_step_renders_dependencies() {
     let result = WorkflowRunResult {
         id: "fanout".to_string(),
+        title: "Fanout".to_string(),
         status: "active".to_string(),
+        completed_steps: 2,
+        total_steps: 5,
         execution_mode: WorkflowExecutionMode::MainAgent,
         next_action: WorkflowNextAction::RunStep {
             step: "synthesize".to_string(),

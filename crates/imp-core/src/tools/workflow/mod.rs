@@ -118,7 +118,10 @@ struct WorkflowDiagnosticView {
 #[derive(Debug, Clone, Serialize)]
 struct WorkflowRunResult {
     id: String,
+    title: String,
     status: String,
+    completed_steps: usize,
+    total_steps: usize,
     execution_mode: WorkflowExecutionMode,
     next_action: WorkflowNextAction,
 }
