@@ -464,6 +464,7 @@ pub fn workflow_subagent_input(
                     path: Some(path.clone()),
                     description: Some("required completion artifact".to_string()),
                 })
+                .chain(std::iter::once(workflow_discoveries_artifact(workflow_id)))
                 .collect(),
         },
         resource_limits: SubagentResourceLimits {
@@ -472,18 +473,45 @@ pub fn workflow_subagent_input(
             ..SubagentResourceLimits::default()
         },
         merge_policy: merge_policy_for_role(action.role.as_deref()),
-        output_contract: Some(format!(
-            "Complete workflow `{workflow_id}` step `{step_id}`. Required checks: {}. Required artifacts: {}.",
-            action.completion.checks.join(", "),
-            action
-                .completion
-                .artifacts
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+        output_contract: Some(workflow_step_output_contract(workflow_id, step_id, action)),
     }
+}
+
+fn workflow_discoveries_artifact(workflow_id: &str) -> SubagentArtifactRef {
+    SubagentArtifactRef {
+        name: "workflow discoveries".to_string(),
+        path: Some(PathBuf::from(format!(
+            ".imp/workflows/{workflow_id}/artifacts/discoveries.md"
+        ))),
+        description: Some("workflow-level discoveries and prior learnings".to_string()),
+    }
+}
+
+fn workflow_step_output_contract(
+    workflow_id: &str,
+    step_id: &str,
+    action: &crate::workflow::WorkflowStepAction,
+) -> String {
+    let mut parts = vec![format!(
+        "Complete workflow `{workflow_id}` step `{step_id}`. Required checks: {}. Required artifacts: {}.",
+        action.completion.checks.join(", "),
+        action
+            .completion
+            .artifacts
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )];
+
+    if !action.output.required_sections.is_empty() {
+        parts.push(format!(
+            "Required output sections: {}.",
+            action.output.required_sections.join(", ")
+        ));
+    }
+
+    parts.join("\n")
 }
 
 pub fn workflow_subagent_spawn(
@@ -523,13 +551,17 @@ pub fn workflow_subagent_completion(
         Some(RunFinalStatus::Cancelled) => "subagent cancelled".to_string(),
         None => "subagent ended without a final status".to_string(),
     };
+    let mut evidence = input.context.artifacts.clone();
+    if matches!(status, SubagentStatus::Failed) {
+        evidence.push(workflow_failure_summary_artifact(input));
+    }
     let event = SubagentEvent::Completed {
         outcome: crate::agent::SubagentOutcome {
             child_run_id: input.child_run_id.clone(),
             role: input.role.clone(),
             status: status.clone(),
             summary: summary.clone(),
-            evidence: input.context.artifacts.clone(),
+            evidence,
             files_changed: input.resource_limits.writable_paths.clone(),
             files_inspected: input.resource_limits.allowed_paths.clone(),
             verification_results: Vec::new(),
@@ -546,6 +578,25 @@ pub fn workflow_subagent_completion(
         status,
         summary,
         event,
+    }
+}
+
+fn workflow_failure_summary_artifact(input: &SubagentInput) -> SubagentArtifactRef {
+    SubagentArtifactRef {
+        name: "failure summary".to_string(),
+        path: Some(PathBuf::from(format!(
+            ".imp/workflows/{}/artifacts/failures/{}-attempt-1.md",
+            input
+                .parent_run_id
+                .as_str()
+                .strip_prefix("workflow-")
+                .unwrap_or_else(|| input.parent_run_id.as_str()),
+            input.child_run_id.as_str()
+        ))),
+        description: Some(
+            "structured summary of what was tried, why it failed, touched files, verification, and next attempt guidance"
+                .to_string(),
+        ),
     }
 }
 

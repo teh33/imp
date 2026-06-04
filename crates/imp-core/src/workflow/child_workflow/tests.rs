@@ -2,7 +2,9 @@ use super::*;
 use crate::agent::{RunFinalStatus, StopReason};
 use crate::config::Config;
 
-use crate::workflow::{AutonomyMode, ToolPermissionSet, WorkflowStepAction, WorkflowType};
+use crate::workflow::{
+    AutonomyMode, ToolPermissionSet, WorkflowStepAction, WorkflowStepOutputContract, WorkflowType,
+};
 
 fn registry() -> RoleRegistry {
     Config::default().role_registry().unwrap()
@@ -21,10 +23,19 @@ fn workflow_subagent_spawn_builds_bounded_input_and_started_event() {
             checks: vec!["tests_passed".into()],
             artifacts: vec![PathBuf::from(".imp/workflows/demo/results.md")],
         },
+        output: WorkflowStepOutputContract {
+            required_sections: vec!["Decision".into(), "Evidence".into()],
+        },
     };
 
     let spawn = workflow_subagent_spawn("demo", "verify", &action);
 
+    assert!(spawn
+        .input
+        .output_contract
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Required output sections: Decision, Evidence"));
     assert_eq!(spawn.input.parent_run_id.as_str(), "workflow-demo");
     assert_eq!(spawn.input.child_run_id.as_str(), "workflow-demo-verify");
     assert_eq!(spawn.input.role, SubagentRole::Verifier);
@@ -50,6 +61,52 @@ fn workflow_subagent_spawn_builds_bounded_input_and_started_event() {
 }
 
 #[test]
+fn workflow_output_contract_sections_are_included_in_subagent_input() {
+    let action = WorkflowStepAction {
+        kind: crate::workflow::WorkflowStepActionKind::Agent,
+        role: Some("reviewer".into()),
+        worker: None,
+        objective: "Review workflow output shape".into(),
+        instructions: Vec::new(),
+        write_scope: vec![PathBuf::from(".imp/workflows/demo/results.md")],
+        completion: crate::workflow::WorkflowStepActionCompletion::default(),
+        output: WorkflowStepOutputContract {
+            required_sections: vec!["Decision".into(), "Evidence".into(), "Concerns".into()],
+        },
+    };
+
+    let input = workflow_subagent_input("demo", "review", &action);
+    let contract = input.output_contract.as_deref().expect("output contract");
+
+    assert!(contract.contains("Required output sections: Decision, Evidence, Concerns"));
+    assert_eq!(input.merge_policy, SubagentMergePolicy::Review);
+}
+
+#[test]
+fn workflow_discoveries_artifact_is_included_in_subagent_input() {
+    let action = WorkflowStepAction {
+        kind: crate::workflow::WorkflowStepActionKind::Agent,
+        role: Some("coder".into()),
+        worker: None,
+        objective: "Use workflow discoveries".into(),
+        instructions: Vec::new(),
+        write_scope: vec![PathBuf::from("src/lib.rs")],
+        completion: crate::workflow::WorkflowStepActionCompletion::default(),
+        output: WorkflowStepOutputContract::default(),
+    };
+
+    let input = workflow_subagent_input("demo", "build", &action);
+
+    assert!(input.context.artifacts.iter().any(|artifact| {
+        artifact.name == "workflow discoveries"
+            && artifact.path.as_deref()
+                == Some(std::path::Path::new(
+                    ".imp/workflows/demo/artifacts/discoveries.md",
+                ))
+    }));
+}
+
+#[test]
 fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
     let action = WorkflowStepAction {
         kind: crate::workflow::WorkflowStepActionKind::Agent,
@@ -59,6 +116,7 @@ fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
         instructions: Vec::new(),
         write_scope: vec![PathBuf::from("src/lib.rs")],
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
+        output: WorkflowStepOutputContract::default(),
     };
     let input = workflow_subagent_input("demo", "build", &action);
 
@@ -79,6 +137,39 @@ fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
     assert_eq!(outcome.role, SubagentRole::Implementer);
     assert_eq!(outcome.status, SubagentStatus::Incomplete);
     assert_eq!(outcome.files_changed, vec![PathBuf::from("src/lib.rs")]);
+}
+
+#[test]
+fn workflow_failure_summary_artifact_is_added_for_failed_subagent() {
+    let action = WorkflowStepAction {
+        kind: crate::workflow::WorkflowStepActionKind::Agent,
+        role: Some("coder".into()),
+        worker: None,
+        objective: "Fail usefully".into(),
+        instructions: Vec::new(),
+        write_scope: vec![PathBuf::from("src/lib.rs")],
+        completion: crate::workflow::WorkflowStepActionCompletion::default(),
+        output: WorkflowStepOutputContract::default(),
+    };
+    let input = workflow_subagent_input("demo", "build", &action);
+
+    let completion = workflow_subagent_completion(
+        &input,
+        Some(&RunFinalStatus::Failed {
+            message: "tests failed".into(),
+        }),
+    );
+
+    let SubagentEvent::Completed { outcome } = completion.event else {
+        panic!("expected completed event");
+    };
+    assert_eq!(outcome.status, SubagentStatus::Failed);
+    assert!(outcome.evidence.iter().any(|artifact| {
+        artifact.name == "failure summary"
+            && artifact.path.as_deref().is_some_and(|path| {
+                path.ends_with("artifacts/failures/workflow-demo-build-attempt-1.md")
+            })
+    }));
 }
 
 #[test]

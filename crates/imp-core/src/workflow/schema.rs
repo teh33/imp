@@ -91,6 +91,13 @@ pub struct WorkflowStep {
     pub action: Option<WorkflowStepAction>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowStepOutputContract {
+    #[serde(default)]
+    pub required_sections: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowStepAction {
@@ -106,6 +113,8 @@ pub struct WorkflowStepAction {
     pub write_scope: Vec<PathBuf>,
     #[serde(default)]
     pub completion: WorkflowStepActionCompletion,
+    #[serde(default)]
+    pub output: WorkflowStepOutputContract,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
