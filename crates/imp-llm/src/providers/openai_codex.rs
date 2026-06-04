@@ -148,12 +148,12 @@ impl Provider for OpenAiCodexProvider {
         };
 
         let mut request = build_request_json(model, context.clone(), options);
-        // The ChatGPT/Codex backend maintains its own server-side context when
-        // requests share a session id. imp already sends the full active
-        // history for each turn, so attaching a stable session id can make the
-        // backend accumulate duplicate context and report a full window while
-        // the local active request is still small.
-        add_codex_request_fields(&mut request, None);
+        // Keep prompt cache affinity, but do not attach the ChatGPT session
+        // header. imp sends the full active history every turn; the backend
+        // session header can make Codex accumulate hidden server-side context
+        // beyond the visible local request, while prompt_cache_key is only the
+        // cache namespace we want to preserve.
+        add_codex_request_fields(&mut request, context.thread_id.as_deref());
         let headers = build_headers(&account_id, api_key, None);
         stream_response_json(
             self.client.clone(),
