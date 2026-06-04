@@ -7,8 +7,8 @@ use super::{
     WorkflowWorkerAssignment, WorkflowWorkerAssignmentContract,
 };
 use crate::workflow::{
-    workflow_subagent_input, WorkflowDocument, WorkflowStep, WorkflowStepAction,
-    WorkflowStepActionKind, WorkflowWorker,
+    WorkflowDocument, WorkflowStep, WorkflowStepAction, WorkflowStepActionKind, WorkflowWorker,
+    workflow_subagent_input,
 };
 
 const MAX_SUBAGENT_BATCH_ASSIGNMENTS: usize = 4;
@@ -204,10 +204,25 @@ fn agent_action_contract(
         workflow_id: workflow_id.to_string(),
         step: step_id.to_string(),
         step_kind: step_kind.to_string(),
-        role,
+        role: role.clone(),
         objective: action.objective.clone(),
         instructions: {
             let mut instructions = action.instructions.clone();
+            let review_required = action.review.as_ref().is_some_and(|review| review.required);
+            if matches!(role.as_str(), "reviewer" | "verifier") || review_required {
+                instructions.push(
+                    "Review adversarially: check the objective, acceptance criteria, evidence, and required checks; distinguish blocking findings from non-blocking concerns; do not approve without evidence."
+                        .to_string(),
+                );
+            }
+            if let Some(review) = &action.review {
+                instructions.extend(
+                    review
+                        .rubric
+                        .iter()
+                        .map(|item| format!("Review rubric: {item}")),
+                );
+            }
             instructions.push(format!(
                 "When this step is complete, call workflow(action=\"complete_step\", id=\"{workflow_id}\", step=\"{step_id}\", reason=\"...\") to mark the step and its checks complete."
             ));
@@ -225,9 +240,28 @@ fn agent_action_contract(
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
+        review_required: action.review.as_ref().is_some_and(|review| review.required),
+        review_rubric: action
+            .review
+            .as_ref()
+            .map(|review| review.rubric.clone())
+            .unwrap_or_default(),
+        output_required_sections: action_output_required_sections(action),
         worker: action.worker.clone(),
         communication: workflow_communication_contract(workflow_id, step_id, run_mode),
     }
+}
+
+fn action_output_required_sections(action: &WorkflowStepAction) -> Vec<String> {
+    let mut sections = action.output.required_sections.clone();
+    if let Some(review) = &action.review {
+        for section in &review.output.required_sections {
+            if !sections.contains(section) {
+                sections.push(section.clone());
+            }
+        }
+    }
+    sections
 }
 
 fn workflow_communication_contract(

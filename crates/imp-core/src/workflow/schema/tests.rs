@@ -209,10 +209,12 @@ closeout:
             && reason.subject.as_deref() == Some("does_not_exist")
     }));
     assert_eq!(find("active_step").state, WorkflowReadinessState::Waiting);
-    assert!(find("active_step")
-        .reasons
-        .iter()
-        .any(|reason| { reason.kind == WorkflowReadinessReasonKind::StatusNotRunnable }));
+    assert!(
+        find("active_step")
+            .reasons
+            .iter()
+            .any(|reason| { reason.kind == WorkflowReadinessReasonKind::StatusNotRunnable })
+    );
     assert_eq!(find("failed_step").state, WorkflowReadinessState::Terminal);
 }
 
@@ -461,6 +463,140 @@ closeout:
         &ValidateOptions::draft(PathBuf::from(".imp/workflows/strong-implementation")),
     );
     assert_eq!(diagnostics, Vec::new(), "{diagnostics:#?}");
+}
+
+#[test]
+fn workflow_adversarial_schema_parses_review_requirement() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: adversarial-review-schema
+title: Adversarial Review Schema
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Review support parses.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [source_changed, review_done]
+context: {}
+steps:
+  implement:
+    kind: build
+    status: todo
+    checks: [source_changed, review_done]
+    action:
+      kind: agent
+      objective: Implement the change.
+      write_scope: [crates/imp-core/src/workflow/schema.rs]
+      completion:
+        checks: [review_done]
+      review:
+        required: true
+        role: reviewer
+        rubric:
+        - Check evidence.
+        output:
+          required_sections: [Decision, Evidence]
+prototypes: {}
+checks:
+  source_changed:
+    kind: changed_files
+    status: pending
+    paths: [crates/imp-core/src/workflow/schema.rs]
+  review_done:
+    kind: review
+    status: pending
+    question: Did review pass?
+workers: {}
+results:
+  path: .imp/workflows/adversarial-review-schema/results.md
+closeout:
+  done:
+    requires: [review_done]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let action = doc
+        .steps
+        .get("implement")
+        .and_then(|step| step.action.as_ref())
+        .expect("action exists");
+    let review = action.review.as_ref().expect("review requirement exists");
+
+    assert!(review.required);
+    assert_eq!(review.role.as_deref(), Some("reviewer"));
+    assert_eq!(review.rubric, vec!["Check evidence."]);
+    assert_eq!(
+        review.output.required_sections,
+        vec!["Decision", "Evidence"]
+    );
+
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/adversarial-review-schema")),
+    );
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:#?}");
+}
+
+#[test]
+fn workflow_adversarial_closeout_requires_review_check_gate() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: adversarial-review-closeout
+title: Adversarial Review Closeout
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Review support validates.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [tests_passed]
+context: {}
+steps:
+  implement:
+    kind: build
+    status: todo
+    action:
+      kind: agent
+      objective: Implement the change.
+      write_scope: [crates/imp-core/src/workflow/schema.rs]
+      completion:
+        checks: [tests_passed]
+      review:
+        required: true
+prototypes: {}
+checks:
+  tests_passed:
+    kind: command
+    status: pending
+    command: cargo +nightly test -p imp-core workflow_adversarial_closeout --lib
+workers: {}
+results:
+  path: .imp/workflows/adversarial-review-closeout/results.md
+closeout:
+  done:
+    requires: [tests_passed]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/adversarial-review-closeout")),
+    );
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "steps.implement.action.review"
+                && diagnostic
+                    .message
+                    .contains("required adversarial review must be gated")
+        }),
+        "{diagnostics:#?}"
+    );
 }
 
 #[test]

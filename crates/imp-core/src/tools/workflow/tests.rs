@@ -1,5 +1,5 @@
 use super::*;
-use crate::workflow::{load_workflow, validate_workflow, CheckStatus, StepStatus};
+use crate::workflow::{CheckStatus, StepStatus, load_workflow, validate_workflow};
 use files::load_selected_workflow;
 use std::path::Path;
 use std::sync::Arc;
@@ -96,10 +96,12 @@ async fn workflow_run_returns_next_runnable_step() {
     );
     assert_eq!(contract["writes_code"], true);
     assert_eq!(contract["worktree"], "workflow");
-    assert!(contract["objective"]
-        .as_str()
-        .expect("objective")
-        .contains("Complete workflow step `execute`"));
+    assert!(
+        contract["objective"]
+            .as_str()
+            .expect("objective")
+            .contains("Complete workflow step `execute`")
+    );
     let instructions = contract["instructions"].as_array().expect("instructions");
     assert!(instructions.iter().any(|instruction| {
         instruction
@@ -418,15 +420,25 @@ async fn workflow_run_renders_agent_action_contract() {
         text.contains("Workflow needs main agent action: inspect [context]"),
         "{text}"
     );
-    assert!(text.contains("Role: coder"), "{text}");
+    assert!(text.contains("Role: reviewer"), "{text}");
     assert!(
-        text.contains("Objective: Inspect workflow action support."),
+        text.contains("Objective: Review workflow action support."),
         "{text}"
     );
     assert!(text.contains("Instructions:"), "{text}");
     assert!(text.contains("Allowed writes:"), "{text}");
     assert!(text.contains("Completion:"), "{text}");
     assert!(text.contains("complete_step"), "{text}");
+    assert!(text.contains("Review adversarially"), "{text}");
+    assert!(
+        text.contains("Review rubric: Check acceptance criteria."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Output sections: Decision, Evidence, Blocking Findings"),
+        "{text}"
+    );
+    assert!(text.contains("Review required: yes"), "{text}");
     assert!(text.contains("Communication:"), "{text}");
     assert!(text.contains("main_agent_artifact_mailbox"), "{text}");
     assert!(
@@ -665,10 +677,12 @@ fn workflow_update_status_updates_yaml_and_appends_event() {
         &ctx,
     )
     .expect("update succeeds");
-    assert!(output
-        .text_content()
-        .expect("text output")
-        .contains("Updated workflow"));
+    assert!(
+        output
+            .text_content()
+            .expect("text output")
+            .contains("Updated workflow")
+    );
 
     let workflow_path = workflows_root
         .join("implement-workflow-update-events")
@@ -715,10 +729,12 @@ async fn workflow_tool_execute_enforces_mode_action_policy() {
     assert!(output.is_error);
     let text = output.text_content().expect("text output");
     assert!(text.contains("not available in auditor mode"), "{text}");
-    assert!(!workflows_root
-        .join("implement-workflow-run-engine")
-        .join("events.jsonl")
-        .exists());
+    assert!(
+        !workflows_root
+            .join("implement-workflow-run-engine")
+            .join("events.jsonl")
+            .exists()
+    );
 }
 
 #[test]
@@ -749,10 +765,12 @@ fn workflow_update_rejects_invalid_status_without_writing() {
     assert!(error.to_string().contains("invalid YAML/schema"));
     let after = std::fs::read_to_string(&workflow_path).expect("fixture remains");
     assert_eq!(before, after);
-    assert!(!workflows_root
-        .join("implement-workflow-update-events")
-        .join("events.jsonl")
-        .exists());
+    assert!(
+        !workflows_root
+            .join("implement-workflow-update-events")
+            .join("events.jsonl")
+            .exists()
+    );
 }
 
 #[tokio::test]
@@ -1141,42 +1159,56 @@ kind: implementation
 spec:
   goal: Dispatch agent action.
   acceptance:
-inspected:
-  text: Agent action is dispatched.
-  status: todo
-  checks:
-    - inspected
+    inspected:
+      text: Agent action is dispatched.
+      status: todo
+      checks:
+        - inspected
+context: {}
 steps:
   inspect:
-kind: context
-status: ready
-checks:
-  - inspected
-action:
-  kind: agent
-  role: coder
-  objective: Inspect workflow action support.
-  instructions:
-    - Read the workflow runner.
-    - Report the action contract.
-  write_scope:
-    - .imp/workflows/agent-action-workflow/artifacts/inspection.md
-  completion:
+    kind: context
+    status: ready
     checks:
       - inspected
-    artifacts:
-      - .imp/workflows/agent-action-workflow/artifacts/inspection.md
+    action:
+      kind: agent
+      role: reviewer
+      objective: Review workflow action support.
+      instructions:
+        - Read the workflow runner.
+        - Report the action contract.
+      output:
+        required_sections:
+          - Decision
+          - Evidence
+      review:
+        required: true
+        rubric:
+          - Check acceptance criteria.
+        output:
+          required_sections:
+            - Blocking Findings
+      write_scope:
+        - .imp/workflows/agent-action-workflow/artifacts/inspection.md
+      completion:
+        checks:
+          - inspected
+        artifacts:
+          - .imp/workflows/agent-action-workflow/artifacts/inspection.md
+prototypes: {}
 checks:
   inspected:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: Was the agent action inspected?
 results:
   path: .imp/workflows/agent-action-workflow/results.md
 workers: {}
 closeout:
   done:
-requires:
-  - inspected
+    requires:
+      - inspected
 "#,
     )
     .expect("write workflow");

@@ -98,6 +98,19 @@ pub struct WorkflowStepOutputContract {
     pub required_sections: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowStepReviewRequirement {
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub rubric: Vec<String>,
+    #[serde(default)]
+    pub output: WorkflowStepOutputContract,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowStepAction {
@@ -115,6 +128,8 @@ pub struct WorkflowStepAction {
     pub completion: WorkflowStepActionCompletion,
     #[serde(default)]
     pub output: WorkflowStepOutputContract,
+    #[serde(default)]
+    pub review: Option<WorkflowStepReviewRequirement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -718,6 +733,21 @@ fn validate_action_contracts(doc: &WorkflowDocument, diagnostics: &mut Vec<Workf
                     format!("steps.{step_id}.action.worker"),
                     "worker action must reference a worker",
                 )),
+            }
+        }
+
+        if let Some(review) = &action.review {
+            if review.required
+                && !action.completion.checks.iter().any(|check_id| {
+                    doc.checks
+                        .get(check_id)
+                        .is_some_and(|check| matches!(check.kind, CheckKind::Review))
+                })
+            {
+                diagnostics.push(WorkflowDiagnostic::new(
+                    format!("steps.{step_id}.action.review"),
+                    "required adversarial review must be gated by a review check in action.completion.checks",
+                ));
             }
         }
 

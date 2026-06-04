@@ -52,6 +52,15 @@ pub(super) fn render_run_result(result: &WorkflowRunResult) -> String {
                     lines.push(format!("- {instruction}"));
                 }
             }
+            if !contract.output_required_sections.is_empty() {
+                lines.push(format!(
+                    "Output sections: {}",
+                    contract.output_required_sections.join(", ")
+                ));
+            }
+            if contract.review_required {
+                lines.push("Review required: yes".to_string());
+            }
             if !contract.write_scope.is_empty() {
                 lines.push(String::new());
                 lines.push("Allowed writes:".to_string());

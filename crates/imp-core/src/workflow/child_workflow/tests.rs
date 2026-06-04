@@ -26,6 +26,7 @@ fn workflow_subagent_spawn_builds_bounded_input_and_started_event() {
         output: WorkflowStepOutputContract {
             required_sections: vec!["Decision".into(), "Evidence".into()],
         },
+        review: None,
     };
 
     let spawn = workflow_subagent_spawn("demo", "verify", &action);
@@ -73,6 +74,7 @@ fn workflow_output_contract_sections_are_included_in_subagent_input() {
         output: WorkflowStepOutputContract {
             required_sections: vec!["Decision".into(), "Evidence".into(), "Concerns".into()],
         },
+        review: None,
     };
 
     let input = workflow_subagent_input("demo", "review", &action);
@@ -93,6 +95,7 @@ fn workflow_discoveries_artifact_is_included_in_subagent_input() {
         write_scope: vec![PathBuf::from("src/lib.rs")],
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
+        review: None,
     };
 
     let input = workflow_subagent_input("demo", "build", &action);
@@ -117,6 +120,7 @@ fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
         write_scope: vec![PathBuf::from("src/lib.rs")],
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
+        review: None,
     };
     let input = workflow_subagent_input("demo", "build", &action);
 
@@ -150,6 +154,7 @@ fn workflow_failure_summary_artifact_is_added_for_failed_subagent() {
         write_scope: vec![PathBuf::from("src/lib.rs")],
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
+        review: None,
     };
     let input = workflow_subagent_input("demo", "build", &action);
 

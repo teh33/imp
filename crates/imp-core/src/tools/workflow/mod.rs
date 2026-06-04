@@ -258,6 +258,9 @@ struct WorkflowAgentActionContract {
     write_scope: Vec<String>,
     completion_checks: Vec<String>,
     completion_artifacts: Vec<String>,
+    review_required: bool,
+    review_rubric: Vec<String>,
+    output_required_sections: Vec<String>,
     worker: Option<String>,
     communication: WorkflowCommunicationContract,
 }
