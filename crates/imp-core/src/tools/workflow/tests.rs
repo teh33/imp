@@ -266,6 +266,73 @@ async fn workflow_run_does_not_complete_build_from_broad_checks_only() {
 }
 
 #[tokio::test]
+async fn workflow_command_guard_fails_zero_test_command_output() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let (workflows_root, workflow_root) = write_zero_test_command_workflow(temp.path());
+
+    let ctx = test_ctx(temp.path());
+    let output = run_action(
+        &workflows_root,
+        Some("zero-test-command-workflow"),
+        WorkflowValidationModeParam::Strict,
+        WorkflowExecutionMode::MainAgent,
+        &ctx,
+    )
+    .await
+    .expect("run succeeds");
+    let text = output.text_content().expect("text output");
+    assert!(text.contains("command_check: failed"), "{text}");
+    assert!(text.contains("- step verify: failed"), "{text}");
+
+    let doc = load_workflow(&workflow_root.join("workflow.yaml")).expect("updated workflow loads");
+    assert!(matches!(
+        doc.checks.get("command_check").expect("check exists").status,
+        CheckStatus::Failed
+    ));
+    assert!(matches!(
+        doc.steps.get("verify").expect("step exists").status,
+        StepStatus::Failed
+    ));
+
+    let events = std::fs::read_to_string(workflow_root.join("events.jsonl"))
+        .expect("events should be written");
+    assert!(events.contains("matched zero tests"), "{events}");
+}
+
+#[tokio::test]
+async fn workflow_command_check_successful_command_still_passes() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let (workflows_root, workflow_root) = write_command_check_workflow(temp.path(), true);
+
+    let ctx = test_ctx(temp.path());
+    let output = run_action(
+        &workflows_root,
+        Some("command-check-workflow"),
+        WorkflowValidationModeParam::Strict,
+        WorkflowExecutionMode::MainAgent,
+        &ctx,
+    )
+    .await
+    .expect("run succeeds");
+    let text = output.text_content().expect("text output");
+    assert!(text.contains("command_check: passed"), "{text}");
+
+    let doc =
+        load_workflow(&workflow_root.join("workflow.yaml")).expect("updated workflow should load");
+    assert!(matches!(
+        doc.checks
+            .get("command_check")
+            .expect("check exists")
+            .status,
+        CheckStatus::Passed
+    ));
+    assert!(matches!(
+        doc.steps.get("verify").expect("step exists").status,
+        StepStatus::Done
+    ));
+}
+
+#[tokio::test]
 async fn workflow_run_marks_step_failed_when_command_check_fails() {
     let temp = tempfile::TempDir::new().expect("tempdir");
     let (workflows_root, workflow_root) = write_command_check_workflow(temp.path(), false);
@@ -993,31 +1060,80 @@ settings:
 spec:
   goal: Run command checks.
   acceptance:
-command_check_passes:
-  text: Command check passes.
-  status: todo
-  checks:
-    - command_check
+    command_check_passes:
+      text: Command check passes.
+      status: todo
+      checks:
+        - command_check
+context: {{}}
 steps:
   verify:
-kind: verify
-status: ready
-checks:
-  - command_check
+    kind: verify
+    status: ready
+    checks:
+      - command_check
+prototypes: {{}}
 checks:
   command_check:
-kind: command
-status: pending
-command: {command}
+    kind: command
+    status: pending
+    command: {command}
 results:
   path: .imp/workflows/command-check-workflow/results.md
 workers: {{}}
 closeout:
   done:
-requires:
-  - command_check
+    requires:
+      - command_check
 "#
         ),
+    )
+    .expect("write workflow");
+    (workflows_root, workflow_root)
+}
+
+fn write_zero_test_command_workflow(root: &Path) -> (PathBuf, PathBuf) {
+    let workflows_root = root.join(".imp/workflows");
+    let workflow_root = workflows_root.join("zero-test-command-workflow");
+    std::fs::create_dir_all(&workflow_root).expect("create workflow root");
+    std::fs::write(
+        workflow_root.join("workflow.yaml"),
+        r#"schema: imp.workflow/v1
+id: zero-test-command-workflow
+title: Zero test command workflow
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Guard command evidence.
+  acceptance:
+    command_check_passes:
+      text: Command check passes.
+      status: todo
+      checks:
+        - command_check
+context: {}
+steps:
+  verify:
+    kind: verify
+    status: ready
+    checks:
+      - command_check
+prototypes: {}
+checks:
+  command_check:
+    kind: command
+    status: pending
+    command: |
+      printf 'running 0 tests\ntest result: ok. 0 passed; 0 failed\n'
+results:
+  path: .imp/workflows/zero-test-command-workflow/results.md
+workers: {}
+closeout:
+  done:
+    requires:
+      - command_check
+"#,
     )
     .expect("write workflow");
     (workflows_root, workflow_root)

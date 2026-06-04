@@ -237,6 +237,29 @@ pub(super) fn reconcile_workflow_statuses(
     Ok(reconciled)
 }
 
+fn command_output_has_zero_test_evidence(stdout: &[u8], stderr: &[u8]) -> bool {
+    let mut combined = String::from_utf8_lossy(stdout).to_lowercase();
+    combined.push_str(&String::from_utf8_lossy(stderr).to_lowercase());
+    combined.contains("running 0 tests") || combined.contains("0 tests, 0 benchmarks")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_output_has_zero_test_evidence;
+
+    #[test]
+    fn workflow_zero_test_detection_matches_cargo_zero_tests() {
+        let stdout = b"running 0 tests\ntest result: ok. 0 passed; 0 failed";
+        assert!(command_output_has_zero_test_evidence(stdout, b""));
+    }
+
+    #[test]
+    fn workflow_zero_test_detection_ignores_nonempty_cargo_tests() {
+        let stdout = b"running 1 test\ntest result: ok. 1 passed; 0 failed";
+        assert!(!command_output_has_zero_test_evidence(stdout, b""));
+    }
+}
+
 async fn evaluate_pending_check(
     check: &WorkflowCheck,
     cwd: &Path,
@@ -254,23 +277,25 @@ async fn evaluate_pending_check(
                 .output()
                 .await
                 .map_err(|error| format!("failed to run command check: {error}"))?;
-            let status = if output.status.success() {
+            let zero_test_evidence = output.status.success()
+                && command_output_has_zero_test_evidence(&output.stdout, &output.stderr);
+            let status = if output.status.success() && !zero_test_evidence {
                 "passed"
             } else {
                 "failed"
             };
-            Ok((
-                status.to_string(),
+            let exit = output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |code| code.to_string());
+            let reason = if zero_test_evidence {
                 format!(
-                    "command `{}` exited with {}",
-                    command,
-                    output
-                        .status
-                        .code()
-                        .map_or_else(|| "signal".to_string(), |code| code.to_string())
-                ),
-                output.status.code(),
-            ))
+                    "command `{command}` exited with {exit} but matched zero tests; command checks require non-empty test evidence by default"
+                )
+            } else {
+                format!("command `{command}` exited with {exit}")
+            };
+            Ok((status.to_string(), reason, output.status.code()))
         }
         CheckKind::Presence | CheckKind::Absence => {
             let path = check
