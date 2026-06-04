@@ -3,7 +3,8 @@ use crate::agent::{RunFinalStatus, StopReason};
 use crate::config::Config;
 
 use crate::workflow::{
-    AutonomyMode, ToolPermissionSet, WorkflowStepAction, WorkflowStepOutputContract, WorkflowType,
+    AutonomyMode, ToolPermissionSet, WorkflowStepAction, WorkflowStepIsolation,
+    WorkflowStepOutputContract, WorkflowType,
 };
 
 fn registry() -> RoleRegistry {
@@ -27,6 +28,7 @@ fn workflow_subagent_spawn_builds_bounded_input_and_started_event() {
             required_sections: vec!["Decision".into(), "Evidence".into()],
         },
         review: None,
+        isolation: WorkflowStepIsolation::default(),
     };
 
     let spawn = workflow_subagent_spawn("demo", "verify", &action);
@@ -75,6 +77,7 @@ fn workflow_output_contract_sections_are_included_in_subagent_input() {
             required_sections: vec!["Decision".into(), "Evidence".into(), "Concerns".into()],
         },
         review: None,
+        isolation: WorkflowStepIsolation::default(),
     };
 
     let input = workflow_subagent_input("demo", "review", &action);
@@ -96,6 +99,7 @@ fn workflow_discoveries_artifact_is_included_in_subagent_input() {
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
         review: None,
+        isolation: WorkflowStepIsolation::default(),
     };
 
     let input = workflow_subagent_input("demo", "build", &action);
@@ -121,6 +125,7 @@ fn workflow_subagent_completion_maps_final_status_to_outcome_event() {
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
         review: None,
+        isolation: WorkflowStepIsolation::default(),
     };
     let input = workflow_subagent_input("demo", "build", &action);
 
@@ -155,6 +160,7 @@ fn workflow_failure_summary_artifact_is_added_for_failed_subagent() {
         completion: crate::workflow::WorkflowStepActionCompletion::default(),
         output: WorkflowStepOutputContract::default(),
         review: None,
+        isolation: WorkflowStepIsolation::default(),
     };
     let input = workflow_subagent_input("demo", "build", &action);
 

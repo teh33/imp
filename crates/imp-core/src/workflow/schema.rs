@@ -132,6 +132,43 @@ pub struct WorkflowStepReviewRequirement {
     pub output: WorkflowStepOutputContract,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWorktreeIsolationPolicy {
+    Shared,
+    Optional,
+    Required,
+}
+
+impl Default for WorkflowWorktreeIsolationPolicy {
+    fn default() -> Self {
+        Self::Shared
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWorktreeApplyPolicy {
+    Never,
+    Verified,
+    ApprovalRequired,
+}
+
+impl Default for WorkflowWorktreeApplyPolicy {
+    fn default() -> Self {
+        Self::Never
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowStepIsolation {
+    #[serde(default)]
+    pub worktree: WorkflowWorktreeIsolationPolicy,
+    #[serde(default)]
+    pub apply: WorkflowWorktreeApplyPolicy,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowStepAction {
@@ -151,6 +188,8 @@ pub struct WorkflowStepAction {
     pub output: WorkflowStepOutputContract,
     #[serde(default)]
     pub review: Option<WorkflowStepReviewRequirement>,
+    #[serde(default)]
+    pub isolation: WorkflowStepIsolation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -776,6 +815,24 @@ fn validate_action_contracts(doc: &WorkflowDocument, diagnostics: &mut Vec<Workf
                     format!("steps.{step_id}.action.worker"),
                     "worker action must reference a worker",
                 )),
+            }
+        }
+
+        if matches!(
+            action.isolation.apply,
+            WorkflowWorktreeApplyPolicy::Verified
+        ) {
+            if action.write_scope.is_empty() {
+                diagnostics.push(WorkflowDiagnostic::new(
+                    format!("steps.{step_id}.action.isolation.apply"),
+                    "verified worktree apply requires an explicit write_scope",
+                ));
+            }
+            if action.completion.checks.is_empty() {
+                diagnostics.push(WorkflowDiagnostic::new(
+                    format!("steps.{step_id}.action.isolation.apply"),
+                    "verified worktree apply requires completion checks",
+                ));
             }
         }
 

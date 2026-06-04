@@ -466,6 +466,132 @@ closeout:
 }
 
 #[test]
+fn workflow_worktree_policy_parses_action_isolation_policy() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: worktree-policy-workflow
+title: Worktree Policy Workflow
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Test worktree policy.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [tests_passed]
+context: {}
+steps:
+  implement:
+    kind: build
+    status: todo
+    checks: [tests_passed]
+    action:
+      kind: agent
+      objective: Implement safely.
+      write_scope: [crates/imp-core/src/workflow/schema.rs]
+      completion:
+        checks: [tests_passed]
+      isolation:
+        worktree: required
+        apply: verified
+prototypes: {}
+checks:
+  tests_passed:
+    kind: command
+    status: pending
+    command: cargo +nightly test -p imp-core workflow_worktree_policy --lib
+workers: {}
+results:
+  path: .imp/workflows/worktree-policy-workflow/results.md
+closeout:
+  done:
+    requires: [tests_passed]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let action = doc
+        .steps
+        .get("implement")
+        .and_then(|step| step.action.as_ref())
+        .expect("action exists");
+    assert_eq!(action.isolation.worktree, WorkflowWorktreeIsolationPolicy::Required);
+    assert_eq!(action.isolation.apply, WorkflowWorktreeApplyPolicy::Verified);
+
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(
+            ".imp/workflows/worktree-policy-workflow",
+        )),
+    );
+    assert_eq!(diagnostics, Vec::new(), "{diagnostics:#?}");
+}
+
+#[test]
+fn workflow_verified_apply_requires_scope_and_checks() {
+    let yaml = r#"
+schema: imp.workflow/v1
+id: verified-apply-workflow
+title: Verified Apply Workflow
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Test verified apply validation.
+  acceptance:
+    done:
+      text: Done.
+      status: todo
+      checks: [reviewed]
+context: {}
+steps:
+  implement:
+    kind: build
+    status: todo
+    action:
+      kind: agent
+      objective: Implement safely.
+      isolation:
+        worktree: required
+        apply: verified
+prototypes: {}
+checks:
+  reviewed:
+    kind: review
+    status: pending
+    question: Reviewed?
+workers: {}
+results:
+  path: .imp/workflows/verified-apply-workflow/results.md
+closeout:
+  done:
+    requires: [reviewed]
+"#;
+    let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
+    let diagnostics = validate_workflow(
+        &doc,
+        &ValidateOptions::draft(PathBuf::from(
+            ".imp/workflows/verified-apply-workflow",
+        )),
+    );
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "steps.implement.action.isolation.apply"
+                && diagnostic.message.contains("explicit write_scope")
+        }),
+        "{diagnostics:#?}"
+    );
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.path == "steps.implement.action.isolation.apply"
+                && diagnostic.message.contains("completion checks")
+        }),
+        "{diagnostics:#?}"
+    );
+}
+
+#[test]
 fn workflow_iteration_schema_parses_loop_until_done_strategy() {
     let yaml = r#"
 schema: imp.workflow/v1
