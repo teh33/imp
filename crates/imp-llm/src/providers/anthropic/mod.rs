@@ -1215,5 +1215,4 @@ fn builtin_models() -> Vec<ModelMeta> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "anthropic/tests.rs"]
 mod tests;
