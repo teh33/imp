@@ -1,3 +1,4 @@
+use super::render::render_run_result;
 use super::*;
 use crate::workflow::{CheckStatus, StepStatus, load_workflow, validate_workflow};
 use files::load_selected_workflow;
@@ -531,6 +532,71 @@ async fn workflow_run_renders_subagent_batch_for_parallel_action_steps() {
             .expect("assignments")
             .len(),
         3
+    );
+}
+
+#[test]
+fn workflow_synthesis_barrier_run_step_renders_dependencies() {
+    let result = WorkflowRunResult {
+        id: "fanout".to_string(),
+        status: "active".to_string(),
+        execution_mode: WorkflowExecutionMode::MainAgent,
+        next_action: WorkflowNextAction::RunStep {
+            step: "synthesize".to_string(),
+            step_kind: "synthesize".to_string(),
+            worker: None,
+            worker_assignment: Box::new(None),
+            checks: vec!["synthesis_reviewed".to_string()],
+            workflow: None,
+            depends_on: vec!["verify_a".to_string(), "verify_b".to_string()],
+        },
+    };
+
+    let text = render_run_result(&result);
+
+    assert!(text.contains("Next workflow action: run step synthesize [synthesize]"));
+    assert!(text.contains("Depends on: verify_a, verify_b"), "{text}");
+    assert!(text.contains("Checks: synthesis_reviewed"), "{text}");
+}
+
+#[tokio::test]
+async fn workflow_fanout_policy_uses_configured_subagent_concurrency_cap() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let workflows_root =
+        write_parallel_action_workflow_with_concurrency(temp.path(), false, Some(2));
+
+    let ctx = test_ctx(temp.path());
+    let output = run_action(
+        &workflows_root,
+        Some("parallel-action-workflow"),
+        WorkflowValidationModeParam::Strict,
+        WorkflowExecutionMode::Subagents,
+        &ctx,
+    )
+    .await
+    .expect("run succeeds");
+    let text = output.text_content().expect("text output");
+    assert!(
+        text.contains("Workflow recommends 2 parallel subagent action(s)."),
+        "{text}"
+    );
+    assert!(
+        text.contains("subagent concurrency cap of 2 reached"),
+        "{text}"
+    );
+    assert_eq!(
+        output.details["result"]["next_action"]["assignments"]
+            .as_array()
+            .expect("assignments")
+            .len(),
+        2
+    );
+    assert_eq!(
+        output.details["result"]["next_action"]["held_back"]
+            .as_array()
+            .expect("held back")
+            .len(),
+        1
     );
 }
 
@@ -1216,6 +1282,14 @@ closeout:
 }
 
 fn write_parallel_action_workflow(root: &Path, overlap: bool) -> PathBuf {
+    write_parallel_action_workflow_with_concurrency(root, overlap, None)
+}
+
+fn write_parallel_action_workflow_with_concurrency(
+    root: &Path,
+    overlap: bool,
+    max_concurrent_subagents: Option<u32>,
+) -> PathBuf {
     let workflows_root = root.join(".imp/workflows");
     let workflow_root = workflows_root.join("parallel-action-workflow");
     std::fs::create_dir_all(&workflow_root).expect("create workflow root");
@@ -1224,6 +1298,9 @@ fn write_parallel_action_workflow(root: &Path, overlap: bool) -> PathBuf {
     } else {
         "docs/workflows.md"
     };
+    let settings = max_concurrent_subagents
+        .map(|limit| format!("settings:\n  max_concurrent_subagents: {limit}\n"))
+        .unwrap_or_default();
     std::fs::write(
         workflow_root.join("workflow.yaml"),
         format!(
@@ -1232,78 +1309,83 @@ id: parallel-action-workflow
 title: Parallel action workflow
 status: active
 kind: test
-spec:
+{settings}spec:
   goal: Dispatch parallel action steps.
   acceptance:
-done:
-  text: Parallel actions are dispatched.
-  status: todo
-  checks:
-    - cli_done
-    - core_done
-    - docs_done
+    done:
+      text: Parallel actions are dispatched.
+      status: todo
+      checks:
+        - cli_done
+        - core_done
+        - docs_done
+context: {{}}
 steps:
   cli:
-kind: build
-status: ready
-checks:
-  - cli_done
-action:
-  kind: agent
-  role: CLI coder
-  objective: Update CLI workflow behavior.
-  write_scope:
-    - crates/imp-cli/src/lib.rs
-  completion:
+    kind: build
+    status: ready
     checks:
       - cli_done
+    action:
+      kind: agent
+      role: CLI coder
+      objective: Update CLI workflow behavior.
+      write_scope:
+        - crates/imp-cli/src/lib.rs
+      completion:
+        checks:
+          - cli_done
   core:
-kind: build
-status: ready
-checks:
-  - core_done
-action:
-  kind: agent
-  role: Core coder
-  objective: Update core workflow behavior.
-  write_scope:
-    - crates/imp-core/src/tools/workflow.rs
-  completion:
+    kind: build
+    status: ready
     checks:
       - core_done
+    action:
+      kind: agent
+      role: Core coder
+      objective: Update core workflow behavior.
+      write_scope:
+        - crates/imp-core/src/tools/workflow.rs
+      completion:
+        checks:
+          - core_done
   docs:
-kind: build
-status: ready
-checks:
-  - docs_done
-action:
-  kind: agent
-  role: Docs writer
-  objective: Update workflow docs.
-  write_scope:
-    - {docs_scope}
-  completion:
+    kind: build
+    status: ready
     checks:
       - docs_done
+    action:
+      kind: agent
+      role: Docs writer
+      objective: Update workflow docs.
+      write_scope:
+        - {docs_scope}
+      completion:
+        checks:
+          - docs_done
+prototypes: {{}}
 checks:
   cli_done:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: CLI update reviewed?
   core_done:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: Core update reviewed?
   docs_done:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: Docs update reviewed?
 results:
   path: .imp/workflows/parallel-action-workflow/results.md
 workers: {{}}
 closeout:
   done:
-requires:
-  - cli_done
-  - core_done
-  - docs_done
+    requires:
+      - cli_done
+      - core_done
+      - docs_done
 "#
         ),
     )

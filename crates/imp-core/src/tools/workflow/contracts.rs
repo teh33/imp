@@ -11,7 +11,8 @@ use crate::workflow::{
     workflow_subagent_input,
 };
 
-const MAX_SUBAGENT_BATCH_ASSIGNMENTS: usize = 4;
+const DEFAULT_SUBAGENT_BATCH_ASSIGNMENTS: usize = 4;
+const MAX_CONFIGURED_SUBAGENT_BATCH_ASSIGNMENTS: usize = 128;
 
 pub(super) fn subagent_batch_for_runnable_steps(
     workflow_id: &str,
@@ -22,6 +23,8 @@ pub(super) fn subagent_batch_for_runnable_steps(
     let mut assignments = Vec::new();
     let mut held_back = Vec::new();
     let mut selected_scopes: Vec<(String, Vec<PathBuf>)> = Vec::new();
+
+    let concurrency_limit = workflow_subagent_concurrency_limit(doc);
 
     for step_id in runnable_steps {
         let Some(step) = doc.steps.get(&step_id) else {
@@ -37,11 +40,11 @@ pub(super) fn subagent_batch_for_runnable_steps(
             continue;
         };
 
-        if assignments.len() >= MAX_SUBAGENT_BATCH_ASSIGNMENTS {
+        if assignments.len() >= concurrency_limit {
             held_back.push(WorkflowHeldBackStep {
                 step: step_id,
                 step_kind,
-                reason: format!("subagent batch cap of {MAX_SUBAGENT_BATCH_ASSIGNMENTS} reached"),
+                reason: format!("subagent concurrency cap of {concurrency_limit} reached"),
             });
             continue;
         }
@@ -84,6 +87,16 @@ pub(super) fn subagent_batch_for_runnable_steps(
     } else {
         None
     }
+}
+
+fn workflow_subagent_concurrency_limit(doc: &WorkflowDocument) -> usize {
+    doc.settings
+        .get("max_concurrent_subagents")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(MAX_CONFIGURED_SUBAGENT_BATCH_ASSIGNMENTS))
+        .unwrap_or(DEFAULT_SUBAGENT_BATCH_ASSIGNMENTS)
 }
 
 fn write_scopes_overlap(left: &[PathBuf], right: &[PathBuf]) -> bool {
