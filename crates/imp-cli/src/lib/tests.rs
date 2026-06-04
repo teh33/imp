@@ -1,7 +1,9 @@
 use super::*;
+use crate::local_install::resolve_install_destination;
 use imp_llm::auth::{OAuthCredential, StoredCredential};
 use imp_llm::stream::StreamEvent;
 use serde_json::json;
+use std::ffi::OsString;
 
 /// Helper: build a minimal Cli struct with defaults for testing.
 fn default_cli() -> Cli {
