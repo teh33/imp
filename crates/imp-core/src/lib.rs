@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod builder;
+pub mod code_index;
 pub mod codeintel;
 pub mod compaction;
 pub mod config;

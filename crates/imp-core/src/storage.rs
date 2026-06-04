@@ -105,6 +105,10 @@ pub fn global_session_index_path() -> PathBuf {
     global_indexes_dir().join("session_index.db")
 }
 
+pub fn global_code_index_path() -> PathBuf {
+    global_indexes_dir().join("code-index").join("index.sqlite")
+}
+
 pub fn global_skills_dir() -> PathBuf {
     global_root().join("skills")
 }

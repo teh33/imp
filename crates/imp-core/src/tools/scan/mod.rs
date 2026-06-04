@@ -35,6 +35,7 @@ use rayon::prelude::*;
 use serde_json::json;
 
 use super::{truncate_head, truncate_line, Tool, ToolContext, ToolOutput, TruncationResult};
+use crate::code_index::CodeIndexStore;
 use crate::error::{Error, Result};
 use crate::repo_index::{RepoSearchHit, RepoStructureIndex};
 use crate::tools::code_intel::CodeBlock;
@@ -730,14 +731,13 @@ fn execute_search(
     files.sort();
     files.dedup();
     let index_files = prefilter_search_files(&files, query, mode);
-    let scan_result = extract_files(&index_files, cwd);
-    let repo_index = RepoStructureIndex::from_scan_result(&scan_result);
+    let repo_index = load_or_build_repo_structure_index(&index_files, cwd);
     let repo_hits = repo_index.search(query, max_results);
     if !repo_hits.is_empty() {
         return execute_search_repo_index(files.len(), query, mode, &repo_index, &repo_hits);
     }
 
-    let index = symbol_index_from_scan_result(&scan_result);
+    let index = build_symbol_index(&index_files, cwd);
     let hits = search_index(&index, query, mode, max_results);
     let mut lines = vec![
         format!("Action: search"),
@@ -996,6 +996,23 @@ fn prefilter_search_files(files: &[PathBuf], query: &str, _mode: &str) -> Vec<Pa
         })
         .collect::<Vec<_>>();
     dedup_paths(selected)
+}
+
+fn load_or_build_repo_structure_index(files: &[PathBuf], cwd: &Path) -> RepoStructureIndex {
+    let fingerprint = format!("{:016x}", file_set_cache_key(files));
+    let index_path = crate::storage::global_code_index_path();
+    if let Ok(store) = CodeIndexStore::open(&index_path) {
+        if let Ok(Some(index)) = store.load_repo_index(cwd, &fingerprint) {
+            return index;
+        }
+    }
+
+    let result = extract_files(files, cwd);
+    let index = RepoStructureIndex::from_scan_result(&result);
+    if let Ok(mut store) = CodeIndexStore::open(&index_path) {
+        let _ = store.write_repo_index(cwd, &fingerprint, &index);
+    }
+    index
 }
 
 fn build_symbol_index(files: &[PathBuf], cwd: &Path) -> Vec<IndexedSymbol> {
