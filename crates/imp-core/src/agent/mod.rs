@@ -112,6 +112,16 @@ pub struct Agent {
     pub thread_id: Option<String>,
     /// Cache options for LLM requests.
     pub cache_options: imp_llm::CacheOptions,
+    /// Provider-observed effective input ceiling for this session. Set when a
+    /// provider rejects a request below our configured model limit so later
+    /// turns trim/compact before hitting the same backend limit again.
+    pub observed_context_input_limit: Option<u32>,
+    /// Provider-reported context baseline from the last successful response.
+    /// OpenAI/Codex can account for hidden or encrypted reasoning that is not
+    /// represented in imp's logical message history, so this baseline is used
+    /// as an authoritative floor for later local estimates until the local
+    /// history is rewritten by masking or compaction.
+    pub provider_context_baseline_tokens: Option<u32>,
     /// In-memory recovery checkpoints for this run. Session persistence can seed this ledger later.
     pub recovery_ledger: Arc<std::sync::Mutex<RecoveryLedger>>,
     /// Tracks identical consecutive tool calls to detect loops.
@@ -219,6 +229,8 @@ impl Agent {
                 extended_ttl: false,
                 global_scope: false,
             },
+            observed_context_input_limit: None,
+            provider_context_baseline_tokens: None,
             recovery_ledger: Arc::new(std::sync::Mutex::new(RecoveryLedger::new())),
             last_tool_call: Arc::new(std::sync::Mutex::new(None)),
             continue_policy: ContinuePolicy::Disabled,

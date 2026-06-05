@@ -228,9 +228,17 @@ fn test_model(provider: Arc<dyn Provider>) -> Model {
 }
 
 fn test_model_with_context_window(provider: Arc<dyn Provider>, context_window: u32) -> Model {
+    test_model_with_id_and_context_window(provider, "test-model", context_window)
+}
+
+fn test_model_with_id_and_context_window(
+    provider: Arc<dyn Provider>,
+    id: &str,
+    context_window: u32,
+) -> Model {
     Model {
         meta: ModelMeta {
-            id: "test-model".to_string(),
+            id: id.to_string(),
             provider: "mock".to_string(),
             name: "Test Model".to_string(),
             context_window,
@@ -249,6 +257,28 @@ fn test_model_with_context_window(provider: Arc<dyn Provider>, context_window: u
         },
         provider,
     }
+}
+
+fn large_window_test_model(provider: Arc<dyn Provider>) -> Model {
+    test_model_with_id_and_context_window(provider, "large-window-test-model", 1_050_000)
+}
+
+fn tool_heavy_messages_for_usage(model: &Model, target_tokens: u32) -> Vec<Message> {
+    let mut messages = Vec::new();
+    let chunk = "abcdefghijklmnopqrstuvwxyz0123456789 ".repeat(4_000);
+    let mut index = 0usize;
+    while crate::context::context_usage(&messages, model).used < target_tokens {
+        let call_id = format!("usage_call_{index}");
+        messages.push(Message::user(format!("inspect generated file {index}")));
+        messages.push(make_assistant_tool_call(
+            &call_id,
+            "read",
+            serde_json::json!({"path": format!("src/generated_{index}.rs")}),
+        ));
+        messages.push(make_tool_result(&call_id, "read", &chunk));
+        index += 1;
+    }
+    messages
 }
 
 fn text_response(text: &str, input_tokens: u32, output_tokens: u32) -> Vec<StreamEvent> {
@@ -271,6 +301,30 @@ fn text_response(text: &str, input_tokens: u32, output_tokens: u32) -> Vec<Strea
                     cache_write_tokens: 0,
                 }),
                 stop_reason: LlmStopReason::EndTurn,
+                timestamp: 1000,
+            },
+        },
+    ]
+}
+
+fn context_length_exceeded_response() -> Vec<StreamEvent> {
+    vec![
+        StreamEvent::MessageStart {
+            model: "test-model".to_string(),
+        },
+        StreamEvent::MessageEnd {
+            message: AssistantMessage {
+                content: Vec::new(),
+                usage: Some(Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                }),
+                stop_reason: LlmStopReason::Error(
+                    "context_length_exceeded: Your input exceeds the context window of this model. Please adjust your input and try again."
+                        .to_string(),
+                ),
                 timestamp: 1000,
             },
         },
@@ -3533,6 +3587,114 @@ async fn agent_auto_compacts_tool_heavy_context_before_provider_request() {
 }
 
 #[tokio::test]
+async fn auto_compaction_does_not_run_at_moderate_nominal_usage() {
+    let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
+    let model = large_window_test_model(provider);
+    let seeded_messages = tool_heavy_messages_for_usage(&model, 270_000);
+
+    let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+    let events_task = tokio::spawn(collect_events(handle));
+    agent.context_config.observation_mask_threshold = 2.0;
+    agent.context_config.auto_compaction.mode = crate::config::AutoCompactionMode::NearThreshold;
+    agent.context_config.auto_compaction.trigger_ratio = 0.85;
+    agent.messages = seeded_messages;
+
+    agent.run("continue".to_string()).await.unwrap();
+    drop(agent);
+
+    let events = events_task.await.unwrap();
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        AgentEvent::Warning { message }
+            if message.contains("Auto-compacted older tool output")
+    )));
+}
+
+#[tokio::test]
+async fn observed_provider_ceiling_lowers_auto_compaction_threshold() {
+    let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
+    let model = large_window_test_model(provider);
+    let seeded_messages = tool_heavy_messages_for_usage(&model, 270_000);
+
+    let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+    let events_task = tokio::spawn(collect_events(handle));
+    agent.context_config.observation_mask_threshold = 2.0;
+    agent.context_config.auto_compaction.mode = crate::config::AutoCompactionMode::NearThreshold;
+    agent.context_config.auto_compaction.trigger_ratio = 0.85;
+    agent.context_config.auto_compaction.target_ratio = 0.70;
+    agent.observed_context_input_limit = Some(300_000);
+    agent.messages = seeded_messages;
+
+    agent.run("continue".to_string()).await.unwrap();
+    drop(agent);
+
+    let events = events_task.await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Warning { message }
+            if message.contains("Auto-compacted older tool output")
+    )));
+}
+
+#[tokio::test]
+async fn auto_compaction_preserves_latest_tool_call_result_pair() {
+    let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
+    let model = large_window_test_model(provider);
+    let mut seeded_messages = tool_heavy_messages_for_usage(&model, 270_000);
+    let latest_call_id = "latest_call_to_preserve";
+    seeded_messages.push(make_assistant_tool_call(
+        latest_call_id,
+        "read",
+        serde_json::json!({"path": "src/current.rs"}),
+    ));
+    seeded_messages.push(make_tool_result(
+        latest_call_id,
+        "read",
+        "current file content that must remain paired with its tool call",
+    ));
+
+    let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+    let events_task = tokio::spawn(collect_events(handle));
+    agent.context_config.observation_mask_threshold = 2.0;
+    agent.context_config.auto_compaction.mode = crate::config::AutoCompactionMode::NearThreshold;
+    agent.context_config.auto_compaction.trigger_ratio = 0.85;
+    agent.context_config.auto_compaction.target_ratio = 0.70;
+    agent.observed_context_input_limit = Some(300_000);
+    agent.messages = seeded_messages;
+
+    agent.run("continue".to_string()).await.unwrap();
+
+    let has_latest_call = agent.messages.iter().any(|message| match message {
+        Message::Assistant(assistant) => assistant.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolCall { id, .. } if id == latest_call_id
+            )
+        }),
+        _ => false,
+    });
+    let has_latest_result = agent.messages.iter().any(|message| {
+        matches!(
+            message,
+            Message::ToolResult(result) if result.tool_call_id == latest_call_id
+        )
+    });
+    drop(agent);
+
+    let events = events_task.await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Warning { message }
+            if message.contains("Auto-compacted older tool output")
+    )));
+    assert!(
+        has_latest_call,
+        "latest assistant tool call was compacted away"
+    );
+    assert!(has_latest_result, "latest tool result was compacted away");
+}
+
+#[tokio::test]
 async fn agent_masks_observations_when_context_is_tight() {
     let provider = Arc::new(MockProvider::new(vec![text_response("done", 100, 20)]));
 
@@ -3614,6 +3776,58 @@ async fn agent_reports_context_full_before_provider_request() {
             status: RunFinalStatus::Failed { message },
             ..
         } if message.contains("Context full")
+    )));
+}
+
+#[tokio::test]
+async fn agent_recovers_when_provider_returns_context_error_message_end() {
+    let provider = Arc::new(MockProvider::new(vec![
+        context_length_exceeded_response(),
+        text_response("recovered", 100, 20),
+    ]));
+
+    let mut seeded_messages = Vec::new();
+    for index in 0..12 {
+        let call_id = format!("call_{index}");
+        seeded_messages.push(make_assistant_tool_call(
+            &call_id,
+            "read",
+            serde_json::json!({"path": format!("src/file_{index}.rs")}),
+        ));
+        seeded_messages.push(make_tool_result(&call_id, "read", &"x".repeat(400)));
+    }
+
+    let model = test_model(provider);
+    let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+    let events_task = tokio::spawn(collect_events(handle));
+    agent.context_config.observation_mask_threshold = 2.0;
+    agent.messages = seeded_messages;
+
+    agent.run("continue".to_string()).await.unwrap();
+    drop(agent);
+
+    let events = events_task.await.unwrap();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::Warning { message }
+            if message.contains("context exhaustion after completing an error response")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ContextUsageUpdated {
+            used,
+            display_window,
+            ..
+        }
+            if used == display_window
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::TurnEnd { message, .. }
+            if message
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Text { text } if text == "recovered"))
     )));
 }
 

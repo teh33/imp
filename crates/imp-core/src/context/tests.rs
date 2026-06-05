@@ -373,8 +373,10 @@ fn gpt_5_5_context_budget_uses_one_million_display_window_with_buffer() {
     let budget = context_budget(&model);
 
     assert_eq!(budget.total_window, 1_050_000);
+    assert_eq!(budget.input_limit, 922_000);
+    assert_eq!(budget.output_limit, 128_000);
     assert_eq!(budget.display_window, 1_000_000);
-    assert_eq!(budget.reserved_buffer, 50_000);
+    assert_eq!(budget.reserved_buffer, 128_000);
     assert_eq!(budget.ratio_for_used(500_000), 0.5);
 }
 
@@ -385,6 +387,8 @@ fn non_gpt_5_5_context_budget_uses_model_window_without_buffer() {
     let budget = context_budget(&model);
 
     assert_eq!(budget.total_window, 100_000);
+    assert_eq!(budget.input_limit, 100_000);
+    assert_eq!(budget.output_limit, 4096);
     assert_eq!(budget.display_window, 100_000);
     assert_eq!(budget.reserved_buffer, 0);
 }

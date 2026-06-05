@@ -2770,6 +2770,26 @@ fn rpc_agent_event_legacy_json(event: &AgentEvent) -> Value {
             "type": "recovery_checkpoint",
             "checkpoint": checkpoint,
         }),
+        AgentEvent::ContextUsageUpdated {
+            used,
+            display_window,
+            input_limit,
+            system_tokens,
+            tool_definition_tokens,
+            message_tokens,
+            output_tokens,
+            observed_input_limit,
+        } => json!({
+            "type": "context_usage_updated",
+            "used": used,
+            "display_window": display_window,
+            "input_limit": input_limit,
+            "system_tokens": system_tokens,
+            "tool_definition_tokens": tool_definition_tokens,
+            "message_tokens": message_tokens,
+            "output_tokens": output_tokens,
+            "observed_input_limit": observed_input_limit,
+        }),
         AgentEvent::Warning { message } => {
             json!({ "type": "warning", "message": message })
         }

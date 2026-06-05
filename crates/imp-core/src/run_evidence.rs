@@ -135,6 +135,23 @@ impl RunEvent {
                 run_event.tool_name = Some(result.tool_name.clone());
                 run_event.status = Some(if result.is_error { "error" } else { "ok" }.into());
             }
+            AgentEvent::ContextUsageUpdated {
+                used,
+                display_window,
+                input_limit,
+                system_tokens,
+                tool_definition_tokens,
+                message_tokens,
+                output_tokens,
+                observed_input_limit,
+            } => {
+                run_event.summary = Some(format!(
+                    "{used}/{display_window} tokens (limit {input_limit}, system {system_tokens}, tools {tool_definition_tokens}, messages {message_tokens}, output {output_tokens}, observed ceiling {observed})",
+                    observed = observed_input_limit
+                        .map(|limit| limit.to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ));
+            }
             AgentEvent::Warning { message } => {
                 run_event.summary = Some(truncate(message, 240));
             }
@@ -353,6 +370,7 @@ fn agent_event_kind(event: &AgentEvent) -> &'static str {
         AgentEvent::ToolExecutionStart { .. } => "tool.started",
         AgentEvent::ToolOutputDelta { .. } => "tool.output_delta",
         AgentEvent::ToolExecutionEnd { .. } => "tool.completed",
+        AgentEvent::ContextUsageUpdated { .. } => "context.usage",
         AgentEvent::Warning { .. } => "warning",
         AgentEvent::Timing { .. } => "timing",
         AgentEvent::RecoveryCheckpoint { .. } => "recovery.checkpoint",

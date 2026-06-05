@@ -185,6 +185,16 @@ pub enum AgentEvent {
         result: imp_llm::ToolResultMessage,
         provenance: Option<Provenance>,
     },
+    ContextUsageUpdated {
+        used: u32,
+        display_window: u32,
+        input_limit: u32,
+        system_tokens: u32,
+        tool_definition_tokens: u32,
+        message_tokens: u32,
+        output_tokens: u32,
+        observed_input_limit: Option<u32>,
+    },
     Warning {
         message: String,
     },
@@ -334,6 +344,23 @@ impl AgentEvent {
                     ..RuntimeToolCall::default()
                 },
             },
+            AgentEvent::ContextUsageUpdated {
+                used,
+                display_window,
+                input_limit,
+                system_tokens,
+                tool_definition_tokens,
+                message_tokens,
+                output_tokens,
+                observed_input_limit,
+            } => RuntimeEventKind::Warning {
+                message: format!(
+                    "context usage updated: {used}/{display_window} tokens (limit {input_limit}, system {system_tokens}, tools {tool_definition_tokens}, messages {message_tokens}, output {output_tokens}, observed ceiling {observed})",
+                    observed = observed_input_limit
+                        .map(|limit| limit.to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ),
+            },
             AgentEvent::Warning { message } => RuntimeEventKind::Warning {
                 message: message.clone(),
             },
@@ -477,6 +504,29 @@ impl AgentEvent {
                 }),
             )
             .with_tool_call_id(tool_call_id.clone()),
+            AgentEvent::ContextUsageUpdated {
+                used,
+                display_window,
+                input_limit,
+                system_tokens,
+                tool_definition_tokens,
+                message_tokens,
+                output_tokens,
+                observed_input_limit,
+            } => TraceEvent::new(
+                run_id,
+                "context.usage",
+                json!({
+                    "used": used,
+                    "display_window": display_window,
+                    "input_limit": input_limit,
+                    "system_tokens": system_tokens,
+                    "tool_definition_tokens": tool_definition_tokens,
+                    "message_tokens": message_tokens,
+                    "output_tokens": output_tokens,
+                    "observed_input_limit": observed_input_limit,
+                }),
+            ),
             AgentEvent::Warning { message } => {
                 TraceEvent::new(run_id, "warning", json!({ "message": message }))
             }

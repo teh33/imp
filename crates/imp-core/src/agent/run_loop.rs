@@ -43,9 +43,44 @@ fn recoverable_stream_failure_message(error: &str) -> Option<String> {
     }
 }
 
+fn effective_display_window(
+    estimate: &crate::context::RequestContextEstimate,
+    observed_input_limit: Option<u32>,
+) -> u32 {
+    observed_input_limit
+        .map(|limit| estimate.display_window.min(limit.max(1)))
+        .unwrap_or(estimate.display_window)
+}
+
+fn format_context_estimate_details(
+    estimate: &crate::context::RequestContextEstimate,
+    observed_input_limit: Option<u32>,
+) -> String {
+    let effective = observed_input_limit.unwrap_or(estimate.input_limit);
+    let display = effective_display_window(estimate, observed_input_limit);
+    format!(
+        "estimate: input {} / effective limit {} (model limit {}, display {}, system {}, tools {}, messages {}, planned output {}, observed ceiling {})",
+        estimate.input_tokens,
+        effective,
+        estimate.input_limit,
+        display,
+        estimate.system_tokens,
+        estimate.tool_definition_tokens,
+        estimate.message_tokens,
+        estimate.output_tokens,
+        observed_input_limit
+            .map(|limit| limit.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    )
+}
+
+fn recoverable_context_failure_message(error: &str) -> bool {
+    crate::error_display::format_error_for_display(error).starts_with("Context full:")
+}
+
 fn recoverable_context_failure(error: &imp_llm::Error) -> bool {
     matches!(error, imp_llm::Error::ContextTooLong { .. })
-        || matches!(error, imp_llm::Error::Provider(message) if crate::error_display::format_error_for_display(message).starts_with("Context full:"))
+        || matches!(error, imp_llm::Error::Provider(message) if recoverable_context_failure_message(message))
 }
 
 fn auto_compaction_should_run(
@@ -56,8 +91,8 @@ fn auto_compaction_should_run(
     if usage.limit == 0 {
         return false;
     }
-    let trigger_ratio = if trigger_ratio.is_finite() && trigger_ratio > 0.0 {
-        trigger_ratio
+    let trigger_ratio = if trigger_ratio.is_finite() {
+        trigger_ratio.clamp(0.0, 1.0)
     } else {
         0.90
     };
@@ -68,13 +103,89 @@ fn auto_compaction_should_run(
     }
 }
 
+fn auto_compaction_tail_tokens(usage: &crate::context::ContextUsage, target_ratio: f64) -> u32 {
+    if usage.limit == 0 {
+        return crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS;
+    }
+    let target_ratio = if target_ratio.is_finite() {
+        target_ratio.clamp(0.05, 0.95)
+    } else {
+        0.70
+    };
+    let target = (usage.limit as f64 * target_ratio).floor() as u32;
+    target
+        .max(16_000)
+        .min(crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS)
+}
+
+fn observed_input_limit_after_overflow(estimate: &crate::context::RequestContextEstimate) -> u32 {
+    // If the provider rejects a request below our configured model limit, treat
+    // that provider response as authoritative for this run and leave headroom
+    // below the failed local estimate. This prevents imp from repeatedly
+    // waiting until the same too-high local token count before trimming again.
+    ((estimate.input_tokens as f64) * 0.80).floor().max(1.0) as u32
+}
+
+fn update_observed_input_limit(
+    observed_input_limit: &mut Option<u32>,
+    estimate: &crate::context::RequestContextEstimate,
+) -> u32 {
+    let observed = observed_input_limit_after_overflow(estimate);
+    let effective = observed_input_limit
+        .map(|existing| existing.min(observed))
+        .unwrap_or(observed);
+    *observed_input_limit = Some(effective);
+    effective
+}
+
+fn apply_provider_context_baseline(
+    estimate: &mut crate::context::RequestContextEstimate,
+    provider_context_baseline_tokens: Option<u32>,
+) {
+    if let Some(baseline) = provider_context_baseline_tokens {
+        estimate.input_tokens = estimate.input_tokens.max(baseline);
+    }
+}
+
+fn sanitized_request_estimate(
+    messages: &[Message],
+    model: &imp_llm::Model,
+    options: &RequestOptions,
+    observed_input_limit: Option<u32>,
+    provider_context_baseline_tokens: Option<u32>,
+) -> (Vec<Message>, crate::context::RequestContextEstimate) {
+    let mut context_messages = messages.to_vec();
+    crate::session::sanitize_messages(&mut context_messages);
+    let mut estimate = crate::context::estimate_request_context(&context_messages, model, options);
+    apply_provider_context_baseline(&mut estimate, provider_context_baseline_tokens);
+    if let Some(limit) = observed_input_limit {
+        let effective_limit = limit.max(1);
+        estimate.input_limit = estimate.input_limit.min(effective_limit);
+        estimate.display_window = estimate.display_window.min(effective_limit);
+    }
+    (context_messages, estimate)
+}
+
 fn mask_all_observations_for_recovery(
     messages: &mut [Message],
     model: &imp_llm::Model,
+    options: &RequestOptions,
+    observed_input_limit: Option<u32>,
+    provider_context_baseline_tokens: Option<u32>,
 ) -> Option<(u32, u32)> {
-    let before = crate::context::context_usage(messages, model).used;
+    let before = sanitized_request_estimate(
+        messages,
+        model,
+        options,
+        observed_input_limit,
+        provider_context_baseline_tokens,
+    )
+    .1
+    .input_tokens;
     crate::context::mask_observations(messages, 0);
-    let after = crate::context::context_usage(messages, model).used;
+    let after = sanitized_request_estimate(messages, model, options, observed_input_limit, None)
+        .1
+        .input_tokens;
     (after < before).then_some((before, after))
 }
 
@@ -235,6 +346,7 @@ impl Agent {
             std::collections::VecDeque::new();
         let mut stream_recovery_attempts: u32 = 0;
         let mut context_recovery_attempts: u32 = 0;
+        let mut observed_input_limit: Option<u32> = self.observed_context_input_limit;
         trace_run("init_loop_state", phase_started);
 
         if let Some(nudge) = self.workflow_pre_turn_follow_up_hint(&prompt, !self.tools.is_empty())
@@ -305,18 +417,68 @@ impl Agent {
             .await;
             let context_assembly_started_at = Instant::now();
 
-            let mut usage = crate::context::context_usage(&self.messages, &self.model);
+            let options = RequestOptions {
+                thinking_level: self.thinking_level,
+                // Use configured output cap when present; otherwise let providers
+                // choose their own sensible default output budget.
+                max_tokens: self.max_tokens,
+                temperature: None,
+                system_prompt: self.system_prompt.clone(),
+                tools: self.tools.definitions(),
+                cache_options: self.cache_options.clone(),
+                effort: None,
+            };
+
+            let (mut context_messages, mut request_estimate) = sanitized_request_estimate(
+                &self.messages,
+                &self.model,
+                &options,
+                observed_input_limit,
+                self.provider_context_baseline_tokens,
+            );
+            self.emit(AgentEvent::ContextUsageUpdated {
+                used: request_estimate.input_tokens,
+                display_window: request_estimate.display_window,
+                input_limit: request_estimate.input_limit,
+                system_tokens: request_estimate.system_tokens,
+                tool_definition_tokens: request_estimate.tool_definition_tokens,
+                message_tokens: request_estimate.message_tokens,
+                output_tokens: request_estimate.output_tokens,
+                observed_input_limit,
+            })
+            .await;
+            let mut usage = request_estimate.as_usage();
             if usage.ratio >= self.context_config.observation_mask_threshold {
                 crate::context::mask_observations(
                     &mut self.messages,
                     self.context_config.mask_window,
                 );
+                self.provider_context_baseline_tokens = None;
                 self.hooks
                     .fire(&HookEvent::OnContextThreshold { ratio: usage.ratio })
                     .await;
                 // Masking can materially reduce context size, so any subsequent
-                // logic must use fresh usage rather than the pre-masking snapshot.
-                usage = crate::context::context_usage(&self.messages, &self.model);
+                // logic must use fresh exact-request usage rather than the
+                // pre-masking snapshot.
+                (context_messages, request_estimate) = sanitized_request_estimate(
+                    &self.messages,
+                    &self.model,
+                    &options,
+                    observed_input_limit,
+                    self.provider_context_baseline_tokens,
+                );
+                self.emit(AgentEvent::ContextUsageUpdated {
+                    used: request_estimate.input_tokens,
+                    display_window: request_estimate.display_window,
+                    input_limit: request_estimate.input_limit,
+                    system_tokens: request_estimate.system_tokens,
+                    tool_definition_tokens: request_estimate.tool_definition_tokens,
+                    message_tokens: request_estimate.message_tokens,
+                    output_tokens: request_estimate.output_tokens,
+                    observed_input_limit,
+                })
+                .await;
+                usage = request_estimate.as_usage();
             }
 
             if auto_compaction_should_run(
@@ -324,12 +486,17 @@ impl Agent {
                 &usage,
                 self.context_config.auto_compaction.trigger_ratio,
             ) {
+                let recent_tail_tokens = auto_compaction_tail_tokens(
+                    &usage,
+                    self.context_config.auto_compaction.target_ratio,
+                );
                 if let Some(compaction) = crate::compaction::compact_messages_for_auto_compaction(
                     &self.messages,
                     &self.model,
-                    crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS,
+                    recent_tail_tokens,
                 ) {
                     self.messages = compaction.messages;
+                    self.provider_context_baseline_tokens = None;
                     self.emit(AgentEvent::Warning {
                         message: format!(
                             "Auto-compacted older tool output and file dumps before the provider request ({} -> {} estimated tokens). Exact old output may need to be reread.",
@@ -338,23 +505,64 @@ impl Agent {
                         ),
                     })
                     .await;
-                    usage = crate::context::context_usage(&self.messages, &self.model);
+                    (context_messages, request_estimate) = sanitized_request_estimate(
+                        &self.messages,
+                        &self.model,
+                        &options,
+                        observed_input_limit,
+                        self.provider_context_baseline_tokens,
+                    );
+                    self.emit(AgentEvent::ContextUsageUpdated {
+                        used: request_estimate.input_tokens,
+                        display_window: request_estimate.display_window,
+                        input_limit: request_estimate.input_limit,
+                        system_tokens: request_estimate.system_tokens,
+                        tool_definition_tokens: request_estimate.tool_definition_tokens,
+                        message_tokens: request_estimate.message_tokens,
+                        output_tokens: request_estimate.output_tokens,
+                        observed_input_limit,
+                    })
+                    .await;
+                    usage = request_estimate.as_usage();
                 }
             }
 
             if usage.used >= usage.limit && usage.limit > 0 {
                 if context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS {
-                    if let Some((before, after)) =
-                        mask_all_observations_for_recovery(&mut self.messages, &self.model)
-                    {
+                    if let Some((before, after)) = mask_all_observations_for_recovery(
+                        &mut self.messages,
+                        &self.model,
+                        &options,
+                        observed_input_limit,
+                        self.provider_context_baseline_tokens,
+                    ) {
                         context_recovery_attempts += 1;
+                        self.provider_context_baseline_tokens = None;
                         self.emit(AgentEvent::Warning {
                             message: format!(
                                 "Context recovery masked tool outputs before the provider request ({before} -> {after} estimated tokens)."
                             ),
                         })
                         .await;
-                        usage = crate::context::context_usage(&self.messages, &self.model);
+                        (context_messages, request_estimate) = sanitized_request_estimate(
+                            &self.messages,
+                            &self.model,
+                            &options,
+                            observed_input_limit,
+                            self.provider_context_baseline_tokens,
+                        );
+                        self.emit(AgentEvent::ContextUsageUpdated {
+                            used: request_estimate.input_tokens,
+                            display_window: request_estimate.display_window,
+                            input_limit: request_estimate.input_limit,
+                            system_tokens: request_estimate.system_tokens,
+                            tool_definition_tokens: request_estimate.tool_definition_tokens,
+                            message_tokens: request_estimate.message_tokens,
+                            output_tokens: request_estimate.output_tokens,
+                            observed_input_limit,
+                        })
+                        .await;
+                        usage = request_estimate.as_usage();
                     }
                 }
             }
@@ -362,12 +570,14 @@ impl Agent {
             if usage.used >= usage.limit && usage.limit > 0 {
                 let budget = crate::context::context_budget(&self.model);
                 let message = format!(
-                    "Context full: estimated {} tokens exceeds the {} token input budget for {} (provider {}, total window {}, reserved buffer {}). Run /compact or start a new chat to continue.",
+                    "Context full: estimated {} input tokens exceeds the {} token input budget for {} (provider {}, total window {}, display window {}, planned output {}, reserved buffer {}). Run /compact or start a new chat to continue.",
                     usage.used,
                     usage.limit,
                     self.model.meta.id,
                     self.model.provider.id(),
                     budget.total_window,
+                    budget.display_window,
+                    request_estimate.output_tokens,
                     budget.reserved_buffer
                 );
                 self.emit(AgentEvent::Error {
@@ -393,23 +603,12 @@ impl Agent {
             // compaction has been removed because the rewrite-based behavior
             // was too error-prone to keep in the runtime.
 
-            // Build context and options for the LLM
+            // Build context for the LLM from the exact sanitized request that
+            // preflight estimated.
             let context = Context {
-                messages: self.messages.clone(),
+                messages: context_messages,
                 session_id: self.session_id.clone(),
                 thread_id: self.thread_id.clone(),
-            };
-
-            let options = RequestOptions {
-                thinking_level: self.thinking_level,
-                // Use configured output cap when present; otherwise let providers
-                // choose their own sensible default output budget.
-                max_tokens: self.max_tokens,
-                temperature: None,
-                system_prompt: self.system_prompt.clone(),
-                tools: self.tools.definitions(),
-                cache_options: self.cache_options.clone(),
-                effort: None,
             };
             self.emit_timing_with_details(
                 TimingEvent::new(turn, TimingStage::ContextAssemblyEnd, turn_started_at, None)
@@ -462,13 +661,16 @@ impl Agent {
             .await;
             let model = clone_model(&self.model);
             let context = context.clone();
-            let options = options.clone();
+            let request_options = options.clone();
             let api_key = self.api_key.clone();
             let mut stream = crate::retry::stream_with_retry(
                 move || {
-                    model
-                        .provider
-                        .stream(&model, context.clone(), options.clone(), &api_key)
+                    model.provider.stream(
+                        &model,
+                        context.clone(),
+                        request_options.clone(),
+                        &api_key,
+                    )
                 },
                 self.retry_policy.clone(),
             );
@@ -592,6 +794,8 @@ impl Agent {
                                 .await;
                                 if let Some(ref usage) = message.usage {
                                     total_usage.add(usage);
+                                    self.provider_context_baseline_tokens =
+                                        Some(usage.total_tokens());
                                 }
                                 assistant_msg = Some(message);
                             }
@@ -674,13 +878,37 @@ impl Agent {
                             && recoverable_context_failure(&e)
                             && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
                         {
-                            if let Some((before, after)) =
-                                mask_all_observations_for_recovery(&mut self.messages, &self.model)
-                            {
+                            let observed_limit = update_observed_input_limit(
+                                &mut observed_input_limit,
+                                &request_estimate,
+                            );
+                            self.observed_context_input_limit = observed_input_limit;
+                            let effective_display =
+                                effective_display_window(&request_estimate, observed_input_limit);
+                            self.emit(AgentEvent::ContextUsageUpdated {
+                                used: effective_display,
+                                display_window: effective_display,
+                                input_limit: request_estimate.input_limit,
+                                system_tokens: request_estimate.system_tokens,
+                                tool_definition_tokens: request_estimate.tool_definition_tokens,
+                                message_tokens: request_estimate.message_tokens,
+                                output_tokens: request_estimate.output_tokens,
+                                observed_input_limit,
+                            })
+                            .await;
+                            if let Some((before, after)) = mask_all_observations_for_recovery(
+                                &mut self.messages,
+                                &self.model,
+                                &options,
+                                observed_input_limit,
+                                self.provider_context_baseline_tokens,
+                            ) {
                                 context_recovery_attempts += 1;
+                                self.provider_context_baseline_tokens = None;
                                 self.emit(AgentEvent::Warning {
                                     message: format!(
-                                        "Provider reported context exhaustion before output; masked tool outputs and retrying ({before} -> {after} estimated tokens)."
+                                        "Provider reported context exhaustion before output; {}; treating ~{observed_limit} estimated tokens as the observed input ceiling, masked tool outputs, and retrying ({before} -> {after} estimated tokens).",
+                                        format_context_estimate_details(&request_estimate, observed_input_limit)
                                     ),
                                 })
                                 .await;
@@ -769,6 +997,46 @@ impl Agent {
             };
 
             if let StopReason::Error(error) = &msg.stop_reason {
+                if recoverable_context_failure_message(error)
+                    && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
+                {
+                    let observed_limit =
+                        update_observed_input_limit(&mut observed_input_limit, &request_estimate);
+                    self.observed_context_input_limit = observed_input_limit;
+                    let effective_display =
+                        effective_display_window(&request_estimate, observed_input_limit);
+                    self.emit(AgentEvent::ContextUsageUpdated {
+                        used: effective_display,
+                        display_window: effective_display,
+                        input_limit: request_estimate.input_limit,
+                        system_tokens: request_estimate.system_tokens,
+                        tool_definition_tokens: request_estimate.tool_definition_tokens,
+                        message_tokens: request_estimate.message_tokens,
+                        output_tokens: request_estimate.output_tokens,
+                        observed_input_limit,
+                    })
+                    .await;
+                    if let Some((before, after)) = mask_all_observations_for_recovery(
+                        &mut self.messages,
+                        &self.model,
+                        &options,
+                        observed_input_limit,
+                        self.provider_context_baseline_tokens,
+                    ) {
+                        context_recovery_attempts += 1;
+                        self.provider_context_baseline_tokens = None;
+                        self.emit(AgentEvent::Warning {
+                            message: format!(
+                                "Provider reported context exhaustion after completing an error response; {}; treating ~{observed_limit} estimated tokens as the observed input ceiling, masked tool outputs, and retrying ({before} -> {after} estimated tokens).",
+                                format_context_estimate_details(&request_estimate, observed_input_limit)
+                            ),
+                        })
+                        .await;
+                        turn_state.record_continue(super::ContinueReason::QueuedUserFollowUp);
+                        turn += 1;
+                        continue 'turns;
+                    }
+                }
                 self.emit(AgentEvent::Error {
                     error: error.clone(),
                 })

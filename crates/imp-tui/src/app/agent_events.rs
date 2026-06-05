@@ -280,6 +280,15 @@ impl App {
                 // Persist tool result to session so resume has full conversation
                 let _ = self.session.append_tool_result_message(result);
             }
+            AgentEvent::ContextUsageUpdated {
+                used,
+                display_window,
+                ..
+            } => {
+                self.current_context_tokens = used;
+                self.context_window = display_window;
+                self.invalidate_chat_render_cache();
+            }
             AgentEvent::Warning { message } => {
                 self.push_warning_msg(&message);
             }
