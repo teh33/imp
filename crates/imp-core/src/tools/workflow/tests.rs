@@ -11,24 +11,36 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn workflow_tool_list_discovers_workflows() {
-    let output = list_action(&repo_root().join(".imp/workflows")).expect("list succeeds");
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let workflows_root = temp.path().join(".imp/workflows");
+    copy_workflow_fixture("prototype-imp-workflow-engine", &workflows_root);
+    copy_workflow_fixture("implement-workflow-run-engine", &workflows_root);
+
+    let output = list_action(&workflows_root).expect("list succeeds");
     let text = output.text_content().expect("text output");
-    assert!(text.contains("prototype-imp-workflow-engine"));
-    assert!(text.contains("prototype-workflow-tool"));
+    assert!(text.contains("prototype-imp-workflow-engine"), "{text}");
+    assert!(text.contains("implement-workflow-run-engine"), "{text}");
 }
 
 #[test]
 fn workflow_tool_show_renders_status() {
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let workflows_root = temp.path().join(".imp/workflows");
+    copy_workflow_fixture("implement-workflow-run-engine", &workflows_root);
+
     let output = show_action(
-        &repo_root().join(".imp/workflows"),
-        Some("update-imp-after-workflow-engine"),
+        &workflows_root,
+        Some("implement-workflow-run-engine"),
         WorkflowValidationModeParam::Strict,
     )
     .expect("show succeeds");
     let text = output.text_content().expect("text output");
-    assert!(text.contains("Workflow: update-imp-after-workflow-engine"));
-    assert!(text.contains("Acceptance:"));
-    assert!(text.contains("Steps:"));
+    assert!(
+        text.contains("Workflow: implement-workflow-run-engine"),
+        "{text}"
+    );
+    assert!(text.contains("Acceptance:"), "{text}");
+    assert!(text.contains("Steps:"), "{text}");
 }
 
 #[test]
@@ -74,7 +86,7 @@ async fn workflow_run_returns_next_runnable_step() {
     );
     assert!(text.contains("Worker: builder"), "{text}");
     assert!(
-        text.contains("Worker assignment: builder (builder)"),
+        text.contains("Worker assignment: builder (coder)"),
         "{text}"
     );
     assert!(text.contains("Writes: code, tests"), "{text}");
@@ -830,8 +842,8 @@ async fn workflow_run_reports_validation_diagnostics() {
     let raw = std::fs::read_to_string(&workflow_path)
         .expect("fixture copied")
         .replace(
-            "checks:\n      - implementation_ready",
-            "checks:\n      - missing_check",
+            "checks: [source_changed, implementation_ready]",
+            "checks: [source_changed, missing_check]",
         );
     std::fs::write(&workflow_path, raw).expect("write broken fixture");
 
@@ -1211,32 +1223,34 @@ kind: implementation
 spec:
   goal: Run presence and absence checks.
   acceptance:
-content_checked:
-  text: Content is checked.
-  status: todo
-  checks: [has_alpha, no_gamma]
+    content_checked:
+      text: Content is checked.
+      status: todo
+      checks: [has_alpha, no_gamma]
+context: {}
 steps:
   verify:
-kind: verify
-status: ready
-checks: [has_alpha, no_gamma]
+    kind: verify
+    status: ready
+    checks: [has_alpha, no_gamma]
+prototypes: {}
 checks:
   has_alpha:
-kind: presence
-status: pending
-path: subject.txt
-pattern: alpha
+    kind: presence
+    status: pending
+    path: subject.txt
+    pattern: alpha
   no_gamma:
-kind: absence
-status: pending
-path: subject.txt
-pattern: gamma
+    kind: absence
+    status: pending
+    path: subject.txt
+    pattern: gamma
 results:
   path: .imp/workflows/presence-absence-workflow/results.md
 workers: {}
 closeout:
   done:
-requires: [has_alpha, no_gamma]
+    requires: [has_alpha, no_gamma]
 "#,
     )
     .expect("write workflow");
@@ -1257,26 +1271,28 @@ kind: implementation
 spec:
   goal: Run changed files check.
   acceptance:
-source_changed:
-  text: Source changed.
-  status: todo
-  checks: [source_changed]
+    source_changed:
+      text: Source changed.
+      status: todo
+      checks: [source_changed]
+context: {}
 steps:
   verify:
-kind: verify
-status: ready
-checks: [source_changed]
+    kind: verify
+    status: ready
+    checks: [source_changed]
+prototypes: {}
 checks:
   source_changed:
-kind: changed_files
-status: pending
-paths: [tracked.txt]
+    kind: changed_files
+    status: pending
+    paths: [tracked.txt]
 results:
   path: .imp/workflows/changed-files-workflow/results.md
 workers: {}
 closeout:
   done:
-requires: [source_changed]
+    requires: [source_changed]
 "#,
     )
     .expect("write workflow");
@@ -1297,27 +1313,29 @@ kind: implementation
 spec:
   goal: Broad command checks alone should not complete implementation.
   acceptance:
-done:
-  text: Work is done.
-  status: todo
-  checks: [broad_tests]
+    done:
+      text: Work is done.
+      status: todo
+      checks: [broad_tests]
+context: {}
 steps:
   implement:
-kind: build
-status: ready
-checks: [broad_tests]
+    kind: build
+    status: ready
+    checks: [broad_tests]
+prototypes: {}
 checks:
   broad_tests:
-kind: command
-status: pending
-broad: true
-command: true
+    kind: command
+    status: pending
+    broad: true
+    command: true
 results:
   path: .imp/workflows/broad-only-workflow/results.md
 workers: {}
 closeout:
   done:
-requires: [broad_tests]
+    requires: [broad_tests]
 "#,
     )
     .expect("write workflow");
@@ -1359,26 +1377,28 @@ kind: test
 spec:
   goal: Report readiness when blocked.
   acceptance:
-done:
-  text: Readiness is reported.
-  status: todo
+    done:
+      text: Readiness is reported.
+      status: todo
+context: {}
 steps:
   inspect:
-kind: context
-status: active
+    kind: context
+    status: active
   verify:
-kind: verify
-status: todo
-depends_on:
-  - inspect
+    kind: verify
+    status: todo
+    depends_on:
+      - inspect
+prototypes: {}
 checks: {}
 results:
   path: .imp/workflows/no-runnable-workflow/results.md
 workers: {}
 closeout:
   done:
-requires:
-  - no_unapproved_goal_or_acceptance_changes
+    requires:
+      - no_unapproved_goal_or_acceptance_changes
 "#,
     )
     .expect("write workflow");
@@ -1581,28 +1601,31 @@ kind: implementation
 spec:
   goal: Report missing action contract.
   acceptance:
-inspected:
-  text: Missing action is reported.
-  status: todo
-  checks:
-    - inspected
+    inspected:
+      text: Missing action is reported.
+      status: todo
+      checks:
+        - inspected
+context: {}
 steps:
   inspect:
-kind: context
-status: ready
-checks:
-  - inspected
+    kind: context
+    status: ready
+    checks:
+      - inspected
+prototypes: {}
 checks:
   inspected:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: Inspected?
 results:
   path: .imp/workflows/missing-action-workflow/results.md
 workers: {}
 closeout:
   done:
-requires:
-  - inspected
+    requires:
+      - inspected
 "#,
     )
     .expect("write workflow");
@@ -1623,33 +1646,36 @@ kind: implementation
 spec:
   goal: Validate action contracts.
   acceptance:
-inspected:
-  text: Invalid action is rejected.
-  status: todo
-  checks:
-    - inspected
+    inspected:
+      text: Invalid action is rejected.
+      status: todo
+      checks:
+        - inspected
+context: {}
 steps:
   inspect:
-kind: context
-status: ready
-action:
-  kind: worker
-  worker: missing_worker
-  objective: ""
-  completion:
-    checks:
-      - missing_check
+    kind: context
+    status: ready
+    action:
+      kind: worker
+      worker: missing_worker
+      objective: ""
+      completion:
+        checks:
+          - missing_check
+prototypes: {}
 checks:
   inspected:
-kind: review
-status: pending
+    kind: review
+    status: pending
+    question: Inspected?
 results:
   path: .imp/workflows/invalid-action-workflow/results.md
 workers: {}
 closeout:
   done:
-requires:
-  - inspected
+    requires:
+      - inspected
 "#,
     )
     .expect("write workflow");
@@ -1657,13 +1683,22 @@ requires:
 }
 
 fn copy_workflow_fixture(id: &str, workflows_root: &Path) {
+    let destination_dir = workflows_root.join(id);
+    std::fs::create_dir_all(&destination_dir).expect("create fixture workflow dir");
     let source = repo_root()
         .join(".imp/workflows")
         .join(id)
         .join("workflow.yaml");
-    let destination_dir = workflows_root.join(id);
-    std::fs::create_dir_all(&destination_dir).expect("create fixture workflow dir");
-    std::fs::copy(source, destination_dir.join("workflow.yaml")).expect("copy fixture workflow");
+    if source.exists() {
+        std::fs::copy(source, destination_dir.join("workflow.yaml"))
+            .expect("copy fixture workflow");
+    } else {
+        std::fs::write(
+            destination_dir.join("workflow.yaml"),
+            fixture_workflow_yaml(id),
+        )
+        .expect("write built-in fixture workflow");
+    }
 
     if id == "implement-workflow-update-events" || id == "implement-workflow-run-engine" {
         copy_workflow_fixture("prototype-imp-workflow-engine", workflows_root);
@@ -1684,3 +1719,111 @@ fn copy_workflow_fixture(id: &str, workflows_root: &Path) {
         std::fs::write(source_artifact, "fixture source artifact").expect("write source artifact");
     }
 }
+
+fn fixture_workflow_yaml(id: &str) -> String {
+    match id {
+        "implement-workflow-run-engine" => IMPLEMENT_WORKFLOW_RUN_ENGINE.to_string(),
+        "implement-workflow-update-events" => IMPLEMENT_WORKFLOW_RUN_ENGINE
+            .replace(
+                "id: implement-workflow-run-engine",
+                "id: implement-workflow-update-events",
+            )
+            .replace(
+                "Implement Workflow Run Engine",
+                "Implement Workflow Update Events",
+            )
+            .replace(
+                "implement-workflow-run-engine",
+                "implement-workflow-update-events",
+            ),
+        "prototype-imp-workflow-engine" => PROTOTYPE_IMP_WORKFLOW_ENGINE.to_string(),
+        other => panic!("unknown built-in workflow fixture {other}"),
+    }
+}
+
+const IMPLEMENT_WORKFLOW_RUN_ENGINE: &str = r#"schema: imp.workflow/v1
+id: implement-workflow-run-engine
+title: Implement Workflow Run Engine
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Implement workflow run engine.
+  acceptance:
+    implementation_ready:
+      text: Implementation is ready.
+      status: todo
+      checks: [source_changed, implementation_ready]
+context: {}
+steps:
+  plan:
+    kind: plan
+    status: done
+  execute:
+    kind: build
+    status: done
+    depends_on: [plan]
+    worker: builder
+    checks: [source_changed, implementation_ready]
+  verify:
+    kind: verify
+    status: done
+    depends_on: [execute]
+prototypes: {}
+checks:
+  source_changed:
+    kind: changed_files
+    status: passed
+    paths: [crates/imp-core/src/tools/workflow.rs]
+  implementation_ready:
+    kind: review
+    status: pending
+    question: Implementation ready?
+workers:
+  builder:
+    role: coder
+    writes: [code, tests]
+    writes_code: true
+    worktree: workflow
+    responsibilities:
+      - Complete workflow step `execute`.
+    checks: [implementation_ready]
+results:
+  path: .imp/workflows/implement-workflow-run-engine/results.md
+closeout:
+  done:
+    requires: [source_changed, implementation_ready]
+"#;
+
+const PROTOTYPE_IMP_WORKFLOW_ENGINE: &str = r#"schema: imp.workflow/v1
+id: prototype-imp-workflow-engine
+title: Prototype imp workflow engine
+status: active
+kind: prototype
+settings: {}
+spec:
+  goal: Prototype workflow engine.
+  acceptance:
+    done:
+      text: Prototype is done.
+      status: todo
+      checks: [reviewed]
+context: {}
+steps:
+  inspect:
+    kind: context
+    status: todo
+    checks: [reviewed]
+prototypes: {}
+checks:
+  reviewed:
+    kind: review
+    status: pending
+    question: Prototype reviewed?
+workers: {}
+results:
+  path: .imp/workflows/prototype-imp-workflow-engine/results.md
+closeout:
+  done:
+    requires: [reviewed]
+"#;

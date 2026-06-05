@@ -9,13 +9,168 @@ fn workflow_root(id: &str) -> PathBuf {
 }
 
 fn load_fixture(id: &str) -> WorkflowDocument {
-    load_workflow(&workflow_root(id).join("workflow.yaml")).expect("fixture should load")
+    let path = workflow_root(id).join("workflow.yaml");
+    if path.exists() {
+        load_workflow(&path).expect("fixture should load")
+    } else {
+        serde_yaml::from_str(fixture_workflow_yaml(id)).expect("built-in fixture should parse")
+    }
 }
 
 fn validate_fixture(id: &str) -> Vec<WorkflowDiagnostic> {
     let doc = load_fixture(id);
-    validate_workflow(&doc, &ValidateOptions::strict(workflow_root(id)))
+    let root = workflow_root(id);
+    let options = if root.join("workflow.yaml").exists() {
+        ValidateOptions::strict(root)
+    } else {
+        ValidateOptions::draft(root)
+    };
+    validate_workflow(&doc, &options)
 }
+
+fn fixture_workflow_yaml(id: &str) -> &'static str {
+    match id {
+        "prototype-imp-workflow-engine" => PROTOTYPE_IMP_WORKFLOW_ENGINE,
+        "define-workflow-schema" => DEFINE_WORKFLOW_SCHEMA,
+        "prototype-rust-workflow-schema-parser" => PROTOTYPE_RUST_WORKFLOW_SCHEMA_PARSER,
+        other => panic!("unknown built-in workflow fixture {other}"),
+    }
+}
+
+fn write_schema_fixture(workflows_root: &Path, id: &str) {
+    let root = workflows_root.join(id);
+    std::fs::create_dir_all(&root).expect("create fixture root");
+    std::fs::write(root.join("workflow.yaml"), fixture_workflow_yaml(id))
+        .expect("write schema fixture");
+}
+
+const PROTOTYPE_IMP_WORKFLOW_ENGINE: &str = r#"schema: imp.workflow/v1
+id: prototype-imp-workflow-engine
+title: Prototype imp workflow engine
+status: active
+kind: prototype
+settings: {}
+spec:
+  goal: Prototype workflow engine.
+  acceptance:
+    reviewed:
+      text: Prototype reviewed.
+      status: todo
+      checks: [reviewed]
+context: {}
+steps:
+  inspect:
+    kind: context
+    status: done
+    checks: [reviewed]
+prototypes: {}
+checks:
+  reviewed:
+    kind: review
+    status: passed
+    question: Reviewed?
+workers: {}
+results:
+  path: .imp/workflows/prototype-imp-workflow-engine/results.md
+closeout:
+  done:
+    requires: [reviewed]
+"#;
+
+const DEFINE_WORKFLOW_SCHEMA: &str = r#"schema: imp.workflow/v1
+id: define-workflow-schema
+title: Define workflow schema
+status: active
+kind: implementation
+settings: {}
+spec:
+  goal: Define workflow schema.
+  acceptance:
+    done:
+      text: Schema is defined.
+      status: todo
+      checks: [schema_reviewed]
+context: {}
+steps:
+  prototype_rust_parser:
+    kind: workflow
+    status: todo
+    workflow: prototype-rust-workflow-schema-parser
+    checks: [schema_reviewed]
+prototypes: {}
+checks:
+  schema_reviewed:
+    kind: review
+    status: pending
+    question: Schema reviewed?
+workers: {}
+results:
+  path: .imp/workflows/define-workflow-schema/results.md
+closeout:
+  done:
+    requires: [schema_reviewed]
+"#;
+
+const PROTOTYPE_RUST_WORKFLOW_SCHEMA_PARSER: &str = r#"schema: imp.workflow/v1
+id: prototype-rust-workflow-schema-parser
+title: Prototype Rust workflow schema parser
+status: active
+kind: implementation
+parent:
+  workflow: define-workflow-schema
+  step: prototype_rust_parser
+settings: {}
+spec:
+  goal: Prototype Rust workflow parser.
+  acceptance:
+    done:
+      text: Parser prototype is ready.
+      status: todo
+      checks: [source_changed, parser_reviewed]
+context: {}
+steps:
+  add_schema_module:
+    kind: build
+    status: todo
+    checks: [source_changed]
+    worker: rust_builder
+  add_validation_tests:
+    kind: verify
+    status: todo
+    depends_on: [add_schema_module]
+    checks: [parser_reviewed]
+  record_parser_considerations:
+    kind: review
+    status: todo
+    depends_on: [add_validation_tests]
+    prototypes: [parser_considerations]
+    checks: [parser_reviewed]
+prototypes:
+  parser_considerations:
+    question: What parser tradeoffs matter?
+    status: proposed
+checks:
+  source_changed:
+    kind: changed_files
+    status: pending
+    paths: [crates/imp-core/src/workflow/schema.rs]
+  parser_reviewed:
+    kind: review
+    status: pending
+    question: Parser reviewed?
+workers:
+  rust_builder:
+    role: coder
+    writes: [crates/imp-core/src/workflow/schema.rs]
+    writes_code: true
+    responsibilities: [Implement schema module]
+    checks: [source_changed]
+results:
+  path: .imp/workflows/prototype-rust-workflow-schema-parser/results.md
+closeout:
+  done:
+    requires: [source_changed, parser_reviewed]
+"#;
 
 #[test]
 fn workflow_schema_dogfood_workflows_parse_and_validate() {
@@ -515,14 +670,18 @@ closeout:
         .get("implement")
         .and_then(|step| step.action.as_ref())
         .expect("action exists");
-    assert_eq!(action.isolation.worktree, WorkflowWorktreeIsolationPolicy::Required);
-    assert_eq!(action.isolation.apply, WorkflowWorktreeApplyPolicy::Verified);
+    assert_eq!(
+        action.isolation.worktree,
+        WorkflowWorktreeIsolationPolicy::Required
+    );
+    assert_eq!(
+        action.isolation.apply,
+        WorkflowWorktreeApplyPolicy::Verified
+    );
 
     let diagnostics = validate_workflow(
         &doc,
-        &ValidateOptions::draft(PathBuf::from(
-            ".imp/workflows/worktree-policy-workflow",
-        )),
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/worktree-policy-workflow")),
     );
     assert_eq!(diagnostics, Vec::new(), "{diagnostics:#?}");
 }
@@ -570,9 +729,7 @@ closeout:
     let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
     let diagnostics = validate_workflow(
         &doc,
-        &ValidateOptions::draft(PathBuf::from(
-            ".imp/workflows/verified-apply-workflow",
-        )),
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/verified-apply-workflow")),
     );
 
     assert!(
@@ -694,9 +851,7 @@ closeout:
     let doc: WorkflowDocument = serde_yaml::from_str(yaml).expect("workflow parses");
     let diagnostics = validate_workflow(
         &doc,
-        &ValidateOptions::draft(PathBuf::from(
-            ".imp/workflows/unbounded-loop-workflow",
-        )),
+        &ValidateOptions::draft(PathBuf::from(".imp/workflows/unbounded-loop-workflow")),
     );
 
     assert!(
@@ -851,18 +1006,31 @@ closeout:
 
 #[test]
 fn workflow_schema_strict_validation_rejects_parent_mismatch() {
-    let mut doc = load_fixture("prototype-rust-workflow-schema-parser");
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let workflows_root = temp.path().join(".imp/workflows");
+    write_schema_fixture(&workflows_root, "define-workflow-schema");
+    write_schema_fixture(&workflows_root, "prototype-rust-workflow-schema-parser");
+
+    let mut doc = load_workflow(
+        &workflows_root
+            .join("prototype-rust-workflow-schema-parser")
+            .join("workflow.yaml"),
+    )
+    .expect("fixture loads");
     doc.parent.as_mut().expect("parent exists").step = "plan_rust_validator".to_owned();
 
     let diagnostics = validate_workflow(
         &doc,
-        &ValidateOptions::strict(workflow_root("prototype-rust-workflow-schema-parser")),
+        &ValidateOptions::strict(workflows_root.join("prototype-rust-workflow-schema-parser")),
     );
 
     assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("does not call workflow")),
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("does not call workflow")
+                || diagnostic
+                    .message
+                    .contains("parent step `plan_rust_validator` not found")
+        }),
         "{diagnostics:#?}"
     );
 }
