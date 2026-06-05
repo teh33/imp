@@ -49,7 +49,6 @@ pub(crate) struct JsonRpcError {
 pub(crate) enum JsonRpcOutbound {
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),
-    Request(JsonRpcRequest),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,17 +330,6 @@ impl JsonRpcNotification {
     pub(crate) fn new(method: impl Into<String>, params: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
-            method: method.into(),
-            params,
-        }
-    }
-}
-
-impl JsonRpcRequest {
-    pub(crate) fn new(id: JsonRpcId, method: impl Into<String>, params: Value) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
             method: method.into(),
             params,
         }

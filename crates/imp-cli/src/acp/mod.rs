@@ -11,8 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 
 use self::events::{
-    agent_event_to_session_updates, message_to_session_updates, prompt_blocks_to_text,
-    stop_reason_from_agent_status,
+    message_to_session_updates, prompt_blocks_to_text, stop_reason_from_agent_status,
 };
 use self::protocol::{
     initialize_result, parse_agent_notification, parse_agent_request, parse_message,
@@ -87,15 +86,8 @@ struct AcpSession {
     cwd: PathBuf,
     path: PathBuf,
     session: SessionManager,
-    permission_policy: PermissionPolicy,
     cancelled: bool,
     prompt_count: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionPolicy {
-    Allow,
-    Reject,
 }
 
 impl AcpServer {
@@ -203,7 +195,6 @@ impl AcpServer {
                         cwd,
                         path,
                         session,
-                        permission_policy: PermissionPolicy::Allow,
                         cancelled: false,
                         prompt_count: 0,
                     },
@@ -270,7 +261,6 @@ impl AcpServer {
                         cwd,
                         path,
                         session,
-                        permission_policy: PermissionPolicy::Allow,
                         cancelled: false,
                         prompt_count: 0,
                     },
@@ -351,27 +341,6 @@ impl AcpServer {
     }
 }
 
-pub(crate) fn session_update_message(
-    session_id: String,
-    update: self::protocol::SessionUpdate,
-) -> serde_json::Value {
-    json!({
-        "jsonrpc": "2.0",
-        "method": "session/update",
-        "params": SessionUpdateParams { session_id, update },
-    })
-}
-
-pub(crate) fn event_update_messages(
-    session_id: &str,
-    event: &imp_core::agent::AgentEvent,
-) -> Vec<serde_json::Value> {
-    agent_event_to_session_updates(event)
-        .into_iter()
-        .map(|update| session_update_message(session_id.to_string(), update))
-        .collect()
-}
-
 const ERROR_NOT_INITIALIZED: i64 = -32002;
 const ERROR_UNKNOWN_SESSION: i64 = -32003;
 const ERROR_UNSUPPORTED: i64 = -32004;
@@ -398,50 +367,6 @@ fn persist_prompt_stub_messages(session: &mut AcpSession, prompt: &str) -> imp_c
         message: Message::user(prompt),
     })?;
     Ok(())
-}
-
-fn permission_request_message(
-    id: JsonRpcId,
-    session_id: &str,
-    title: &str,
-    kind: self::protocol::ToolKind,
-) -> JsonRpcOutbound {
-    JsonRpcOutbound::Request(self::protocol::JsonRpcRequest::new(
-        id,
-        "session/request_permission",
-        json!({
-            "sessionId": session_id,
-            "toolCall": {
-                "toolCallId": "imp-acp-permission",
-                "title": title,
-                "kind": kind,
-                "status": "pending"
-            },
-            "options": [
-                {"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
-                {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}
-            ]
-        }),
-    ))
-}
-
-fn policy_denial_update(session_id: &str, message: &str) -> JsonRpcOutbound {
-    JsonRpcOutbound::Notification(JsonRpcNotification::new(
-        "session/update",
-        json!(SessionUpdateParams {
-            session_id: session_id.to_string(),
-            update: self::protocol::SessionUpdate::ToolCallUpdate {
-                tool_call_id: "imp-acp-permission".to_string(),
-                status: Some(self::protocol::ToolCallStatus::Failed),
-                content: vec![self::protocol::ToolCallContent::Content {
-                    content: self::protocol::ContentBlock::Text {
-                        text: message.to_string(),
-                    },
-                }],
-                raw_output: Some(json!({"policy": "denied"})),
-            },
-        }),
-    ))
 }
 
 fn session_path_for_id(session_id: &str) -> Result<PathBuf, String> {
@@ -485,125 +410,7 @@ fn notification_name(notification: &AgentNotification) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use futures_util::Stream;
-    use imp_core::agent::{Agent, AgentEvent};
-    use imp_llm::auth::{ApiKey, AuthStore};
-    use imp_llm::message::{AssistantMessage, ContentBlock as LlmContentBlock};
-    use imp_llm::model::{Model, ModelMeta, ModelPricing};
-    use imp_llm::provider::{Context as ProviderContext, Provider, RequestOptions};
-    use imp_llm::{StopReason, StreamEvent};
     use serde_json::Value;
-    use std::pin::Pin;
-    use std::sync::Arc;
-
-    struct StaticProvider {
-        text: String,
-    }
-
-    #[async_trait]
-    impl Provider for StaticProvider {
-        fn stream(
-            &self,
-            model: &Model,
-            _context: ProviderContext,
-            _options: RequestOptions,
-            _api_key: &str,
-        ) -> Pin<Box<dyn Stream<Item = imp_llm::Result<StreamEvent>> + Send>> {
-            let message = AssistantMessage {
-                content: vec![LlmContentBlock::Text {
-                    text: self.text.clone(),
-                }],
-                usage: None,
-                stop_reason: StopReason::EndTurn,
-                timestamp: imp_llm::now(),
-            };
-            let events = vec![
-                Ok(StreamEvent::MessageStart {
-                    model: model.meta.id.clone(),
-                }),
-                Ok(StreamEvent::TextDelta {
-                    text: self.text.clone(),
-                }),
-                Ok(StreamEvent::MessageEnd { message }),
-            ];
-            Box::pin(futures_util::stream::iter(events))
-        }
-
-        async fn resolve_auth(&self, _auth: &AuthStore) -> imp_llm::Result<ApiKey> {
-            Ok("test-key".to_string())
-        }
-
-        fn id(&self) -> &str {
-            "acp-test"
-        }
-
-        fn models(&self) -> &[ModelMeta] {
-            &[]
-        }
-    }
-
-    fn static_model(text: &str) -> Model {
-        Model {
-            meta: ModelMeta {
-                id: "acp-test-model".to_string(),
-                provider: "acp-test".to_string(),
-                name: "ACP Test Model".to_string(),
-                context_window: 4096,
-                max_output_tokens: 512,
-                pricing: ModelPricing::default(),
-                capabilities: Default::default(),
-            },
-            provider: Arc::new(StaticProvider {
-                text: text.to_string(),
-            }),
-        }
-    }
-
-    #[tokio::test]
-    async fn acp_real_agent_prompt_streams_text_update() {
-        let prompt = prompt_blocks_to_text(&[self::protocol::ContentBlock::Text {
-            text: "say hi".to_string(),
-        }])
-        .expect("prompt conversion");
-        let (mut agent, mut handle) = Agent::new(
-            static_model("hello from acp"),
-            std::env::current_dir().unwrap(),
-        );
-        agent.api_key = "test-key".to_string();
-        agent.max_tokens = Some(512);
-        agent.continue_policy = imp_core::config::ContinuePolicy::Disabled;
-
-        let run = tokio::spawn(async move {
-            let result = agent.run(prompt).await;
-            (agent, result)
-        });
-
-        let mut saw_text_update = false;
-        while let Some(event) = handle.event_rx.recv().await {
-            for update in agent_event_to_session_updates(&event) {
-                if matches!(
-                    update,
-                    self::protocol::SessionUpdate::AgentMessageChunk {
-                        content: self::protocol::ContentBlock::Text { ref text }
-                    } if text.contains("hello from acp")
-                ) {
-                    saw_text_update = true;
-                }
-            }
-            if matches!(event, AgentEvent::AgentEnd { .. }) {
-                break;
-            }
-        }
-
-        let (_agent, result) = run.await.expect("agent task");
-        result.expect("agent run");
-        assert!(
-            saw_text_update,
-            "expected ACP text update from live Agent::run event stream"
-        );
-    }
-
     #[tokio::test]
     async fn stdio_server_initialize_handshake() {
         let input = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"test"}}}
@@ -698,24 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn event_update_messages_wrap_agent_events_as_session_update_notifications() {
-        let event = imp_core::agent::AgentEvent::MessageDelta {
-            delta: imp_llm::stream::StreamEvent::TextDelta {
-                text: "hello".to_string(),
-            },
-        };
-        let messages = event_update_messages("sess", &event);
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["method"], "session/update");
-        assert_eq!(messages[0]["params"]["sessionId"], "sess");
-        assert_eq!(
-            messages[0]["params"]["update"]["sessionUpdate"],
-            "agent_message_chunk"
-        );
-    }
-
-    #[test]
     fn session_path_for_id_rejects_path_traversal() {
         assert!(session_path_for_id("../secret").is_err());
         assert!(session_path_for_id("nested/session").is_err());
@@ -781,43 +570,6 @@ mod tests {
             other => panic!("expected text block, got {other:?}"),
         };
         assert_eq!(text, "persist me");
-    }
-
-    #[test]
-    fn permission_request_message_uses_acp_request_permission_shape() {
-        let message = permission_request_message(
-            JsonRpcId::String("perm-1".to_string()),
-            "sess-1",
-            "Run command",
-            self::protocol::ToolKind::Execute,
-        );
-        let value = serde_json::to_value(message).unwrap();
-
-        assert_eq!(value["jsonrpc"], "2.0");
-        assert_eq!(value["id"], "perm-1");
-        assert_eq!(value["method"], "session/request_permission");
-        assert_eq!(value["params"]["sessionId"], "sess-1");
-        assert_eq!(value["params"]["toolCall"]["kind"], "execute");
-        assert_eq!(value["params"]["options"][0]["kind"], "allow_once");
-        assert_eq!(value["params"]["options"][1]["kind"], "reject_once");
-    }
-
-    #[test]
-    fn policy_denial_update_is_visible_tool_failure() {
-        let message = policy_denial_update("sess-1", "Denied by policy");
-        let value = serde_json::to_value(message).unwrap();
-
-        assert_eq!(value["method"], "session/update");
-        assert_eq!(value["params"]["sessionId"], "sess-1");
-        assert_eq!(
-            value["params"]["update"]["sessionUpdate"],
-            "tool_call_update"
-        );
-        assert_eq!(value["params"]["update"]["status"], "failed");
-        assert_eq!(
-            value["params"]["update"]["content"][0]["content"]["text"],
-            "Denied by policy"
-        );
     }
 
     #[test]
