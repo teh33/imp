@@ -67,6 +67,7 @@ impl crate::ui::UserInterface for AnsweringUi {
 /// Each call to `stream()` pops the next response from the queue.
 struct MockProvider {
     responses: Mutex<Vec<Vec<imp_llm::Result<StreamEvent>>>>,
+    contexts: StdMutex<Vec<Context>>,
 }
 
 impl MockProvider {
@@ -78,13 +79,19 @@ impl MockProvider {
                     .map(|events| events.into_iter().map(Ok).collect())
                     .collect(),
             ),
+            contexts: StdMutex::new(Vec::new()),
         }
     }
 
     fn new_results(responses: Vec<Vec<imp_llm::Result<StreamEvent>>>) -> Self {
         Self {
             responses: Mutex::new(responses),
+            contexts: StdMutex::new(Vec::new()),
         }
+    }
+
+    fn contexts(&self) -> Vec<Context> {
+        self.contexts.lock().expect("MockProvider contexts lock").clone()
     }
 }
 
@@ -93,10 +100,14 @@ impl Provider for MockProvider {
     fn stream(
         &self,
         _model: &Model,
-        _context: Context,
+        context: Context,
         _options: RequestOptions,
         _api_key: &str,
     ) -> Pin<Box<dyn Stream<Item = imp_llm::Result<StreamEvent>> + Send>> {
+        self.contexts
+            .lock()
+            .expect("MockProvider contexts lock")
+            .push(context);
         // We need to get the next response synchronously. Use try_lock since
         // tests are single-threaded per agent run.
         let mut responses = self.responses.try_lock().expect("MockProvider lock");
@@ -3528,18 +3539,25 @@ async fn agent_context_masking() {
     let usage = crate::context::context_usage(&usage_messages, &provisional_model);
     let context_window = ((usage.used as f64) / 0.7).ceil() as u32;
 
-    let model = test_model_with_context_window(provider, context_window.max(1));
+    let model = test_model_with_context_window(provider.clone(), context_window.max(1));
     let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
     drop(handle);
     agent.messages = seeded_messages;
 
     agent.run("trigger masking".to_string()).await.unwrap();
 
-    let masked = tool_result_text(&agent.messages[1]).expect("first tool result text");
+    let canonical = tool_result_text(&agent.messages[1]).expect("first tool result text");
+    let expected_old = "x".repeat(400);
+    assert_eq!(canonical, expected_old.as_str());
+
+    let contexts = provider.contexts();
+    let provider_context = contexts.first().expect("provider context");
+    let masked = tool_result_text(&provider_context.messages[1]).expect("first tool result text");
     assert!(masked.starts_with("[Output omitted"));
 
     let recent_index = (10 * 2) + 1;
-    let recent = tool_result_text(&agent.messages[recent_index]).expect("recent tool result text");
+    let recent = tool_result_text(&provider_context.messages[recent_index])
+        .expect("recent tool result text");
     let expected_recent = "x".repeat(400);
     assert_eq!(recent, expected_recent.as_str());
 }

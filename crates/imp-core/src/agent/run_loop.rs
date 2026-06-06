@@ -450,23 +450,30 @@ impl Agent {
             let mut usage = request_estimate.as_usage();
             if usage.ratio >= self.context_config.observation_mask_threshold {
                 crate::context::mask_observations(
-                    &mut self.messages,
+                    &mut context_messages,
                     self.context_config.mask_window,
                 );
-                self.provider_context_baseline_tokens = None;
                 self.hooks
                     .fire(&HookEvent::OnContextThreshold { ratio: usage.ratio })
                     .await;
-                // Masking can materially reduce context size, so any subsequent
-                // logic must use fresh exact-request usage rather than the
-                // pre-masking snapshot.
-                (context_messages, request_estimate) = sanitized_request_estimate(
-                    &self.messages,
+                // Masking is a provider-request projection only. Keep the
+                // canonical session history intact so future turns, manual
+                // compaction, and recovery can still use the exact observations.
+                request_estimate = crate::context::estimate_request_context(
+                    &context_messages,
                     &self.model,
                     &options,
-                    observed_input_limit,
+                );
+                apply_provider_context_baseline(
+                    &mut request_estimate,
                     self.provider_context_baseline_tokens,
                 );
+                if let Some(limit) = observed_input_limit {
+                    let effective_limit = limit.max(1);
+                    request_estimate.input_limit = request_estimate.input_limit.min(effective_limit);
+                    request_estimate.display_window =
+                        request_estimate.display_window.min(effective_limit);
+                }
                 self.emit(AgentEvent::ContextUsageUpdated {
                     used: request_estimate.input_tokens,
                     display_window: request_estimate.display_window,
@@ -491,27 +498,36 @@ impl Agent {
                     self.context_config.auto_compaction.target_ratio,
                 );
                 if let Some(compaction) = crate::compaction::compact_messages_for_auto_compaction(
-                    &self.messages,
+                    &context_messages,
                     &self.model,
                     recent_tail_tokens,
                 ) {
-                    self.messages = compaction.messages;
-                    self.provider_context_baseline_tokens = None;
+                    context_messages = compaction.messages;
                     self.emit(AgentEvent::Warning {
                         message: format!(
-                            "Auto-compacted older tool output and file dumps before the provider request ({} -> {} estimated tokens). Exact old output may need to be reread.",
+                            "Auto-compacted older tool output and file dumps for this provider request ({} -> {} estimated tokens). Canonical session history was preserved; exact old output may need to be reread if it is no longer in the active provider context.",
                             compaction.tokens_before,
                             compaction.tokens_after
                         ),
                     })
                     .await;
-                    (context_messages, request_estimate) = sanitized_request_estimate(
-                        &self.messages,
+                    crate::session::sanitize_messages(&mut context_messages);
+                    request_estimate = crate::context::estimate_request_context(
+                        &context_messages,
                         &self.model,
                         &options,
-                        observed_input_limit,
+                    );
+                    apply_provider_context_baseline(
+                        &mut request_estimate,
                         self.provider_context_baseline_tokens,
                     );
+                    if let Some(limit) = observed_input_limit {
+                        let effective_limit = limit.max(1);
+                        request_estimate.input_limit =
+                            request_estimate.input_limit.min(effective_limit);
+                        request_estimate.display_window =
+                            request_estimate.display_window.min(effective_limit);
+                    }
                     self.emit(AgentEvent::ContextUsageUpdated {
                         used: request_estimate.input_tokens,
                         display_window: request_estimate.display_window,
