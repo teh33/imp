@@ -1,13 +1,6 @@
-use std::collections::HashMap;
+pub mod projection;
 
-use imp_llm::{
-    truncate_chars_with_suffix, ContentBlock, Message, Model, ModelMeta, RequestOptions,
-    ToolDefinition,
-};
-
-fn truncate_for_display(text: &str, max_chars: usize) -> String {
-    truncate_chars_with_suffix(text, max_chars, "...")
-}
+use imp_llm::{ContentBlock, Message, Model, ModelMeta, RequestOptions, ToolDefinition};
 
 /// Context usage stats.
 #[derive(Debug, Clone)]
@@ -359,68 +352,14 @@ pub fn context_usage(messages: &[Message], model: &Model) -> ContextUsage {
 ///
 /// A "turn" is one assistant message plus its following tool results.
 /// Keeps the last `keep_recent_turns` turns fully intact. For older turns,
-/// tool result content is replaced with a summary placeholder preserving
-/// the tool name, a truncated summary of args, and the byte count. Passing
-/// `keep_recent_turns = 0` masks all observed tool results.
+/// tool result content is replaced with a stable digest preserving the tool
+/// name, a truncated summary of args, and the byte count. Passing
+/// `keep_recent_turns = 0` masks all observed tool results except the latest
+/// active tool-call/result pair.
 pub fn mask_observations(messages: &mut [Message], keep_recent_turns: usize) {
-    // Identify turn boundaries — each assistant message starts a new turn.
-    let turn_starts: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.is_assistant())
-        .map(|(i, _)| i)
-        .collect();
-
-    if turn_starts.len() <= keep_recent_turns {
-        return;
-    }
-
-    // Everything before this message index gets masked.
-    let cutoff_msg_idx = if keep_recent_turns == 0 {
-        messages.len()
-    } else {
-        let cutoff_turn = turn_starts.len() - keep_recent_turns;
-        turn_starts[cutoff_turn]
-    };
-
-    // Build a map of tool_call_id → args summary from assistant ToolCall blocks
-    // in the region we're about to mask.
-    let mut args_map: HashMap<String, String> = HashMap::new();
-    for msg in &messages[..cutoff_msg_idx] {
-        if let Message::Assistant(assistant) = msg {
-            for block in &assistant.content {
-                if let ContentBlock::ToolCall { id, arguments, .. } = block {
-                    let args_json = serde_json::to_string(arguments).unwrap_or_default();
-                    let summary = truncate_for_display(&args_json, 100);
-                    args_map.insert(id.clone(), summary);
-                }
-            }
-        }
-    }
-
-    // Replace tool result content with placeholders.
-    for msg in &mut messages[..cutoff_msg_idx] {
-        if let Message::ToolResult(ref mut result) = msg {
-            let byte_count: usize = result
-                .content
-                .iter()
-                .map(|b| match b {
-                    ContentBlock::Text { text } => text.len(),
-                    _ => 0,
-                })
-                .sum();
-
-            let args_summary = args_map
-                .get(&result.tool_call_id)
-                .map(|s| s.as_str())
-                .unwrap_or("");
-
-            let placeholder = format!(
-                "[Output omitted — ran {}({}), returned {} bytes]",
-                result.tool_name, args_summary, byte_count
-            );
-            result.content = vec![ContentBlock::Text { text: placeholder }];
-        }
+    let projected = projection::digest_old_tool_results(messages, keep_recent_turns);
+    for (message, projected_message) in messages.iter_mut().zip(projected) {
+        *message = projected_message;
     }
 }
 

@@ -509,24 +509,28 @@ fn mask_observations_replaces_content_with_placeholder() {
     mask_observations(&mut messages, 1);
 
     let text = tool_result_text(&messages[2]);
-    // Verify exact placeholder format.
+    // Verify compact digest format.
     assert!(
         text.starts_with("[Output omitted — ran read_file("),
-        "placeholder should start correctly, got: {text}"
+        "digest should start correctly, got: {text}"
     );
     assert!(
         text.contains("/src/lib.rs"),
-        "placeholder should contain args summary, got: {text}"
+        "digest should contain args summary, got: {text}"
     );
     assert!(
-        text.ends_with("bytes]"),
-        "placeholder should end with byte count, got: {text}"
+        text.contains("status: succeeded"),
+        "digest should preserve tool status, got: {text}"
+    );
+    assert!(
+        text.contains("fn main()"),
+        "digest should keep a bounded output excerpt, got: {text}"
     );
     // Verify byte count matches original content length.
     let original_len = "fn main() { println!(\"hello\"); }".len();
     assert!(
         text.contains(&format!("{original_len} bytes")),
-        "placeholder should contain correct byte count {original_len}, got: {text}"
+        "digest should contain correct byte count {original_len}, got: {text}"
     );
 }
 
