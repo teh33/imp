@@ -145,6 +145,24 @@ fn resource_discover_agents_md_global_first() {
 }
 
 #[test]
+fn resource_discover_agents_md_orders_project_ancestors_before_children() {
+    let dir = TempDir::new().unwrap();
+    let user_dir = dir.path().join("config");
+    let project = dir.path().join("project");
+    let subdir = project.join("src").join("deep");
+    fs::create_dir_all(&user_dir).unwrap();
+    fs::create_dir_all(&subdir).unwrap();
+
+    fs::write(project.join("AGENTS.md"), "project").unwrap();
+    fs::write(subdir.join("AGENTS.md"), "nested").unwrap();
+
+    let results = discover_agents_md(&subdir, &user_dir);
+    let project_idx = results.iter().position(|a| a.content == "project").unwrap();
+    let nested_idx = results.iter().position(|a| a.content == "nested").unwrap();
+    assert!(project_idx < nested_idx);
+}
+
+#[test]
 fn resource_discover_agents_md_reads_global_imp_agents_file() {
     let dir = TempDir::new().unwrap();
     let user_dir = dir.path().join("config");

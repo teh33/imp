@@ -153,12 +153,17 @@ pub fn discover_agents_md(cwd: &Path, user_config_dir: &Path) -> Vec<AgentsMd> {
         push_agents_md_if_unique(&mut results, &mut seen_paths, &mut seen_content, path);
     }
 
+    let mut dirs = Vec::new();
     let mut dir = Some(cwd);
     while let Some(d) = dir {
+        dirs.push(d);
+        dir = d.parent();
+    }
+
+    for d in dirs.into_iter().rev() {
         for path in project_agents_candidates(d) {
             push_agents_md_if_unique(&mut results, &mut seen_paths, &mut seen_content, path);
         }
-        dir = d.parent();
     }
 
     results
