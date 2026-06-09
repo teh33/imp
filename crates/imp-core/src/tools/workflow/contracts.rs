@@ -7,8 +7,8 @@ use super::{
     WorkflowWorkerAssignment, WorkflowWorkerAssignmentContract,
 };
 use crate::workflow::{
-    WorkflowDocument, WorkflowStep, WorkflowStepAction, WorkflowStepActionKind, WorkflowWorker,
-    workflow_subagent_input,
+    workflow_subagent_input, WorkflowDocument, WorkflowStep, WorkflowStepAction,
+    WorkflowStepActionKind, WorkflowWorker,
 };
 
 const DEFAULT_SUBAGENT_BATCH_ASSIGNMENTS: usize = 4;

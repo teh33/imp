@@ -2,19 +2,19 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::checks::{WorkflowCommandStepRun, run_command_checks};
+use super::checks::{run_command_checks, WorkflowCommandStepRun};
 use super::contracts::{
     action_for_runnable_step, subagent_action_for_runnable_step, subagent_batch_for_runnable_steps,
 };
 use super::files::load_selected_workflow;
 use super::readiness::blocked_steps;
-use super::render::{CaseExt, render_run_result};
+use super::render::{render_run_result, CaseExt};
 use super::{
     ToolContext, ToolOutput, WorkflowDiagnosticView, WorkflowExecutionMode, WorkflowNextAction,
     WorkflowRunResult, WorkflowValidationModeParam,
 };
 use crate::error::Result;
-use crate::workflow::{StepStatus, load_workflow, next_runnable_steps, validate_workflow};
+use crate::workflow::{load_workflow, next_runnable_steps, validate_workflow, StepStatus};
 
 fn workflow_completed_steps(doc: &crate::workflow::WorkflowDocument) -> usize {
     doc.steps

@@ -1,6 +1,6 @@
 use super::render::render_run_result;
 use super::*;
-use crate::workflow::{CheckStatus, StepStatus, load_workflow, validate_workflow};
+use crate::workflow::{load_workflow, validate_workflow, CheckStatus, StepStatus};
 use files::load_selected_workflow;
 use std::path::Path;
 use std::sync::Arc;
@@ -109,12 +109,10 @@ async fn workflow_run_returns_next_runnable_step() {
     );
     assert_eq!(contract["writes_code"], true);
     assert_eq!(contract["worktree"], "workflow");
-    assert!(
-        contract["objective"]
-            .as_str()
-            .expect("objective")
-            .contains("Complete workflow step `execute`")
-    );
+    assert!(contract["objective"]
+        .as_str()
+        .expect("objective")
+        .contains("Complete workflow step `execute`"));
     let instructions = contract["instructions"].as_array().expect("instructions");
     assert!(instructions.iter().any(|instruction| {
         instruction
@@ -880,12 +878,10 @@ fn workflow_update_status_updates_yaml_and_appends_event() {
         &ctx,
     )
     .expect("update succeeds");
-    assert!(
-        output
-            .text_content()
-            .expect("text output")
-            .contains("Updated workflow")
-    );
+    assert!(output
+        .text_content()
+        .expect("text output")
+        .contains("Updated workflow"));
 
     let workflow_path = workflows_root
         .join("implement-workflow-update-events")
@@ -932,12 +928,10 @@ async fn workflow_tool_execute_enforces_mode_action_policy() {
     assert!(output.is_error);
     let text = output.text_content().expect("text output");
     assert!(text.contains("not available in auditor mode"), "{text}");
-    assert!(
-        !workflows_root
-            .join("implement-workflow-run-engine")
-            .join("events.jsonl")
-            .exists()
-    );
+    assert!(!workflows_root
+        .join("implement-workflow-run-engine")
+        .join("events.jsonl")
+        .exists());
 }
 
 #[test]
@@ -968,12 +962,10 @@ fn workflow_update_rejects_invalid_status_without_writing() {
     assert!(error.to_string().contains("invalid YAML/schema"));
     let after = std::fs::read_to_string(&workflow_path).expect("fixture remains");
     assert_eq!(before, after);
-    assert!(
-        !workflows_root
-            .join("implement-workflow-update-events")
-            .join("events.jsonl")
-            .exists()
-    );
+    assert!(!workflows_root
+        .join("implement-workflow-update-events")
+        .join("events.jsonl")
+        .exists());
 }
 
 #[tokio::test]

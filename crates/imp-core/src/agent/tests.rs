@@ -91,7 +91,10 @@ impl MockProvider {
     }
 
     fn contexts(&self) -> Vec<Context> {
-        self.contexts.lock().expect("MockProvider contexts lock").clone()
+        self.contexts
+            .lock()
+            .expect("MockProvider contexts lock")
+            .clone()
     }
 }
 

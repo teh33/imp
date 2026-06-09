@@ -364,12 +364,10 @@ closeout:
             && reason.subject.as_deref() == Some("does_not_exist")
     }));
     assert_eq!(find("active_step").state, WorkflowReadinessState::Waiting);
-    assert!(
-        find("active_step")
-            .reasons
-            .iter()
-            .any(|reason| { reason.kind == WorkflowReadinessReasonKind::StatusNotRunnable })
-    );
+    assert!(find("active_step")
+        .reasons
+        .iter()
+        .any(|reason| { reason.kind == WorkflowReadinessReasonKind::StatusNotRunnable }));
     assert_eq!(find("failed_step").state, WorkflowReadinessState::Terminal);
 }
 

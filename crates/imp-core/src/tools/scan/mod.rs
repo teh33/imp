@@ -1041,7 +1041,6 @@ fn load_or_build_repo_structure_index(files: &[PathBuf], cwd: &Path) -> RepoStru
     index
 }
 
-
 fn build_symbol_index(files: &[PathBuf], cwd: &Path) -> Vec<IndexedSymbol> {
     static CACHE: OnceLock<Mutex<HashMap<u64, Vec<IndexedSymbol>>>> = OnceLock::new();
     let key = symbol_index_cache_key(files);
