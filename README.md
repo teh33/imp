@@ -347,8 +347,44 @@ Stable extension runtime: Lua.
 Load paths:
 
 ```text
-~/.config/imp/lua/
+~/.imp/lua/
 <project>/.imp/lua/
+```
+
+New extensions can be manifest-backed packages:
+
+```text
+~/.imp/lua/github/
+  manifest.lua
+  init.lua
+```
+
+```lua
+-- manifest.lua
+return {
+    name = "github",
+    version = "0.1.0",
+    description = "GitHub helper commands",
+    commands = {
+        { name = "review-pr", description = "Review the current PR" },
+    },
+}
+```
+
+```lua
+-- init.lua
+local imp = require("imp")
+
+imp.command("review-pr", {
+    description = "Review the current PR",
+    run = function(args) return "Reviewing " .. (args or "current PR") end,
+})
+```
+
+Manifest-backed commands are invoked through the extension slash namespace:
+
+```text
+/x github.review-pr
 ```
 
 Extension features:

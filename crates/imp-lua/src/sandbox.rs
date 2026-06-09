@@ -41,8 +41,18 @@ pub struct LuaHookHandle {
 /// Handle to a Lua-registered command.
 pub struct LuaCommandHandle {
     pub name: String,
+    pub extension: Option<String>,
     pub description: String,
     pub handler_key: mlua::RegistryKey,
+}
+
+impl LuaCommandHandle {
+    pub fn canonical_name(&self) -> String {
+        match self.extension.as_deref() {
+            Some(extension) if !extension.trim().is_empty() => format!("{extension}.{}", self.name),
+            _ => self.name.clone(),
+        }
+    }
 }
 
 /// Context passed to Lua host API functions during tool execution.
@@ -120,6 +130,8 @@ pub struct LuaRuntime {
     tools: Arc<Mutex<Vec<LuaToolHandle>>>,
     hooks: Arc<Mutex<Vec<LuaHookHandle>>>,
     commands: Arc<Mutex<Vec<LuaCommandHandle>>>,
+    /// Extension currently being loaded; used to attach ownership to registrations.
+    current_extension: Arc<Mutex<Option<String>>>,
     /// Native imp tools available via `imp.tool()` from Lua.
     native_tools: Arc<Mutex<HashMap<String, Arc<dyn Tool>>>>,
     /// Active execution context for `imp.tool()` calls.
@@ -145,6 +157,7 @@ impl LuaRuntime {
             tools: Arc::new(Mutex::new(Vec::new())),
             hooks: Arc::new(Mutex::new(Vec::new())),
             commands: Arc::new(Mutex::new(Vec::new())),
+            current_extension: Arc::new(Mutex::new(None)),
             native_tools: Arc::new(Mutex::new(HashMap::new())),
             call_context: Arc::new(Mutex::new(None)),
             allowed_env: Arc::new(Mutex::new(HashSet::new())),
@@ -173,6 +186,16 @@ impl LuaRuntime {
     /// Get a clone of the commands handle for external access.
     pub fn commands(&self) -> Arc<Mutex<Vec<LuaCommandHandle>>> {
         Arc::clone(&self.commands)
+    }
+
+    /// Get a clone of the current extension handle.
+    pub fn current_extension(&self) -> Arc<Mutex<Option<String>>> {
+        Arc::clone(&self.current_extension)
+    }
+
+    /// Set the extension currently being loaded.
+    pub fn set_current_extension(&self, extension: Option<String>) {
+        *self.current_extension.lock().unwrap() = extension;
     }
 
     /// Get a clone of the native tools map.
@@ -360,10 +383,7 @@ impl LuaRuntime {
 
     fn execute_command_inner(&self, name: &str, args: &str) -> Result<Option<String>, LuaError> {
         let commands = self.commands.lock().unwrap();
-        let handle = commands
-            .iter()
-            .find(|c| c.name == name)
-            .ok_or_else(|| LuaError::Extension(format!("command '{name}' not found")))?;
+        let handle = resolve_command_handle(&commands, name)?;
 
         let handler: mlua::Function = self
             .lua
@@ -392,7 +412,7 @@ impl LuaRuntime {
             .lock()
             .unwrap()
             .iter()
-            .map(|c| c.name.clone())
+            .map(LuaCommandHandle::canonical_name)
             .collect()
     }
 
@@ -402,12 +422,34 @@ impl LuaRuntime {
             .lock()
             .unwrap()
             .iter()
-            .map(|c| (c.name.clone(), c.description.clone()))
+            .map(|c| (c.canonical_name(), c.description.clone()))
             .collect()
     }
 
     /// Check if a command with the given name exists.
     pub fn has_command(&self, name: &str) -> bool {
-        self.commands.lock().unwrap().iter().any(|c| c.name == name)
+        let commands = self.commands.lock().unwrap();
+        resolve_command_handle(&commands, name).is_ok()
+    }
+}
+
+fn resolve_command_handle<'a>(
+    commands: &'a [LuaCommandHandle],
+    name: &str,
+) -> Result<&'a LuaCommandHandle, LuaError> {
+    if let Some(handle) = commands
+        .iter()
+        .find(|command| command.canonical_name() == name)
+    {
+        return Ok(handle);
+    }
+
+    let mut raw_matches = commands.iter().filter(|command| command.name == name);
+    match (raw_matches.next(), raw_matches.next()) {
+        (Some(handle), None) => Ok(handle),
+        (Some(_), Some(_)) => Err(LuaError::Extension(format!(
+            "command '{name}' is ambiguous; use an extension-qualified name"
+        ))),
+        _ => Err(LuaError::Extension(format!("command '{name}' not found"))),
     }
 }

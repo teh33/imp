@@ -494,23 +494,35 @@ pub fn setup_host_api(runtime: &LuaRuntime) -> Result<(), LuaError> {
 
     // ── imp.register_command(name, definition) ───────────────────
     let commands = runtime.commands();
+    let current_extension = runtime.current_extension();
     let register_command_fn =
         lua.create_function(move |lua_inner, (name, def): (String, Table)| {
             let description: String = def
                 .get::<Option<String>>("description")?
                 .unwrap_or_default();
-            let handler: Function = def.get("handler")?;
+            let handler: Function = def
+                .get::<Option<Function>>("handler")?
+                .or_else(|| def.get::<Option<Function>>("run").ok().flatten())
+                .ok_or_else(|| {
+                    mlua::Error::external("command definition requires handler or run")
+                })?;
             let key = lua_inner.create_registry_value(handler)?;
+            let extension = current_extension
+                .lock()
+                .map_err(|_| mlua::Error::external("current extension lock poisoned"))?
+                .clone();
 
             let handle = LuaCommandHandle {
                 name,
+                extension,
                 description,
                 handler_key: key,
             };
             commands.lock().unwrap().push(handle);
             Ok(())
         })?;
-    imp.set("register_command", register_command_fn)?;
+    imp.set("register_command", register_command_fn.clone())?;
+    imp.set("command", register_command_fn)?;
 
     // ── imp.events (inter-extension event bus) ───────────────────
     let events = lua.create_table()?;
@@ -806,7 +818,10 @@ pub fn setup_host_api(runtime: &LuaRuntime) -> Result<(), LuaError> {
 
     imp.set("http", http)?;
 
-    // ── Set the global ───────────────────────────────────────────
+    // ── Set the global and preload `require("imp")` ──────────────
+    let package: Table = lua.globals().get("package")?;
+    let loaded: Table = package.get("loaded")?;
+    loaded.set("imp", imp.clone())?;
     lua.globals().set("imp", imp)?;
 
     Ok(())

@@ -18,10 +18,48 @@ Most users interact with this crate by writing Lua files for imp rather than dep
 
 Lua extension load paths:
 
-- `~/.config/imp/lua/`
+- `~/.imp/lua/`
 - `<project>/.imp/lua/`
 
-Example:
+New extensions should prefer a directory package with `manifest.lua` and `init.lua`:
+
+```text
+~/.imp/lua/github/
+  manifest.lua
+  init.lua
+```
+
+`manifest.lua`:
+
+```lua
+return {
+    name = "github",
+    version = "0.1.0",
+    description = "GitHub helper commands",
+    commands = {
+        { name = "review-pr", description = "Review the current PR" },
+    },
+}
+```
+
+`init.lua`:
+
+```lua
+local imp = require("imp")
+
+imp.command("review-pr", {
+    description = "Review the current PR",
+    run = function(args) return "Reviewing " .. (args or "current PR") end,
+})
+```
+
+The manifest name becomes the command namespace. Invoke the command from the TUI as:
+
+```text
+/x github.review-pr
+```
+
+Legacy standalone files and `imp.register_command` continue to work:
 
 ```lua
 imp.register_command("greet", {

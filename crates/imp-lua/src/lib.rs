@@ -9,7 +9,10 @@ use imp_core::config::LuaCapabilityPolicy;
 use imp_core::tools::ToolRegistry;
 
 pub use bridge::{json_to_lua_value, load_lua_tools, lua_value_to_json, setup_host_api, LuaTool};
-pub use loader::{discover_extensions, load_extensions, reload, LuaExtension};
+pub use loader::{
+    discover_extensions, load_extensions, reload, LuaExtension, LuaExtensionManifest,
+    LuaManifestCommand,
+};
 pub use sandbox::{
     LuaCallContext, LuaCommandHandle, LuaError, LuaHookHandle, LuaRuntime, LuaToolHandle,
 };

@@ -746,21 +746,174 @@ fn events_handler_error_doesnt_crash() {
 // ── imp.register_command() ──────────────────────────────────
 
 #[test]
-fn register_command_creates_handle() {
+fn discover_directory_manifest_metadata() {
+    let user_dir = TempDir::new().unwrap();
+    let extension_dir = user_dir.path().join("lua").join("github-tools");
+    std::fs::create_dir_all(&extension_dir).unwrap();
+    std::fs::write(extension_dir.join("init.lua"), "-- extension").unwrap();
+    std::fs::write(
+        extension_dir.join("manifest.lua"),
+        r#"
+        return {
+            name = "github",
+            version = "0.1.0",
+            description = "GitHub helpers",
+            commands = {
+                { name = "review-pr", description = "Review current PR" },
+            },
+        }
+        "#,
+    )
+    .unwrap();
+
+    let exts = discover_extensions(user_dir.path(), None);
+
+    assert_eq!(exts.len(), 1);
+    assert_eq!(exts[0].name, "github");
+    assert_eq!(exts[0].manifest.name, "github");
+    assert_eq!(exts[0].manifest.version.as_deref(), Some("0.1.0"));
+    assert_eq!(
+        exts[0].manifest.description.as_deref(),
+        Some("GitHub helpers")
+    );
+    assert_eq!(exts[0].manifest.commands.len(), 1);
+    assert_eq!(exts[0].manifest.commands[0].name, "review-pr");
+    assert_eq!(
+        exts[0].manifest.commands[0].description.as_deref(),
+        Some("Review current PR")
+    );
+}
+
+#[test]
+fn invalid_manifest_falls_back_to_directory_name() {
+    let user_dir = TempDir::new().unwrap();
+    let extension_dir = user_dir.path().join("lua").join("broken-manifest");
+    std::fs::create_dir_all(&extension_dir).unwrap();
+    std::fs::write(extension_dir.join("init.lua"), "-- extension").unwrap();
+    std::fs::write(
+        extension_dir.join("manifest.lua"),
+        "return { version = '0.1.0' }",
+    )
+    .unwrap();
+
+    let exts = discover_extensions(user_dir.path(), None);
+
+    assert_eq!(exts.len(), 1);
+    assert_eq!(exts[0].name, "broken-manifest");
+    assert_eq!(exts[0].manifest.name, "broken-manifest");
+    assert!(exts[0].manifest.version.is_none());
+}
+
+#[test]
+fn require_imp_command_alias_with_run_registers_command() {
     let rt = make_runtime();
     rt.exec(
         r#"
-        imp.register_command("greet", {
+        local imp = require("imp")
+        imp.command("greet", {
             description = "Say hello",
-            handler = function(args, ctx)
-                return "Hello!"
-            end
+            run = function(args) return "Hello " .. args end,
         })
     "#,
     )
     .unwrap();
 
     assert_eq!(rt.command_count(), 1);
+    assert_eq!(rt.command_names(), vec!["greet"]);
+    assert_eq!(
+        rt.execute_command("greet", "world").unwrap().as_deref(),
+        Some("Hello world")
+    );
+}
+
+#[test]
+fn load_extensions_namespaces_commands_by_manifest_name() {
+    let user_dir = TempDir::new().unwrap();
+    let extension_dir = user_dir.path().join("lua").join("github-tools");
+    std::fs::create_dir_all(&extension_dir).unwrap();
+    std::fs::write(
+        extension_dir.join("manifest.lua"),
+        r#"return { name = "github", commands = { { name = "review-pr" } } }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        extension_dir.join("init.lua"),
+        r#"
+        local imp = require("imp")
+        imp.command("review-pr", {
+            description = "Review current PR",
+            run = function(args) return "review " .. args end,
+        })
+    "#,
+    )
+    .unwrap();
+
+    let exts = discover_extensions(user_dir.path(), None);
+    let rt = make_runtime();
+    let results = load_extensions(&rt, &exts);
+
+    assert!(results.iter().all(|(_, result)| result.is_ok()));
+    assert_eq!(rt.command_names(), vec!["github.review-pr"]);
+    assert_eq!(
+        rt.command_summaries(),
+        vec![(
+            "github.review-pr".to_string(),
+            "Review current PR".to_string()
+        )]
+    );
+    assert_eq!(
+        rt.execute_command("github.review-pr", "HEAD")
+            .unwrap()
+            .as_deref(),
+        Some("review HEAD")
+    );
+    assert_eq!(
+        rt.execute_command("review-pr", "HEAD").unwrap().as_deref(),
+        Some("review HEAD")
+    );
+}
+
+#[test]
+fn unqualified_extension_command_errors_when_ambiguous() {
+    let user_dir = TempDir::new().unwrap();
+    let lua_dir = user_dir.path().join("lua");
+    for extension in ["one", "two"] {
+        let extension_dir = lua_dir.join(extension);
+        std::fs::create_dir_all(&extension_dir).unwrap();
+        std::fs::write(
+            extension_dir.join("manifest.lua"),
+            format!(r#"return {{ name = "{extension}" }}"#),
+        )
+        .unwrap();
+        std::fs::write(
+            extension_dir.join("init.lua"),
+            format!(
+                r#"
+                local imp = require("imp")
+                imp.command("run", {{
+                    run = function(args) return "{extension}:" .. args end,
+                }})
+                "#
+            ),
+        )
+        .unwrap();
+    }
+
+    let exts = discover_extensions(user_dir.path(), None);
+    let rt = make_runtime();
+    load_extensions(&rt, &exts);
+
+    assert_eq!(
+        rt.execute_command("one.run", "ok").unwrap().as_deref(),
+        Some("one:ok")
+    );
+    assert_eq!(
+        rt.execute_command("two.run", "ok").unwrap().as_deref(),
+        Some("two:ok")
+    );
+    let error = rt.execute_command("run", "ok").unwrap_err().to_string();
+    assert!(error.contains("ambiguous"), "{error}");
+    assert!(error.contains("extension-qualified"), "{error}");
 }
 
 // ── JSON conversion ─────────────────────────────────────────

@@ -8,6 +8,33 @@ use crate::sandbox::{LuaError, LuaRuntime};
 pub struct LuaExtension {
     pub name: String,
     pub path: PathBuf,
+    pub manifest: LuaExtensionManifest,
+}
+
+/// Optional extension metadata loaded from `manifest.lua` beside `init.lua`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LuaExtensionManifest {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub commands: Vec<LuaManifestCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LuaManifestCommand {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+impl LuaExtensionManifest {
+    fn inferred(name: String) -> Self {
+        Self {
+            name,
+            version: None,
+            description: None,
+            commands: Vec::new(),
+        }
+    }
 }
 
 /// Discover Lua extensions from user and project directories.
@@ -35,7 +62,11 @@ pub fn discover_extensions(
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
                     if seen_names.insert(name.clone()) {
-                        extensions.push(LuaExtension { name, path });
+                        extensions.push(LuaExtension {
+                            name: name.clone(),
+                            path,
+                            manifest: LuaExtensionManifest::inferred(name),
+                        });
                     }
                     continue;
                 }
@@ -44,12 +75,18 @@ pub fn discover_extensions(
                 if path.is_dir() {
                     let init = path.join("init.lua");
                     if init.exists() {
-                        let name = path
+                        let inferred_name = path
                             .file_name()
                             .map(|s| s.to_string_lossy().to_string())
                             .unwrap_or_default();
-                        if seen_names.insert(name.clone()) {
-                            extensions.push(LuaExtension { name, path: init });
+                        let manifest = load_manifest(&path)
+                            .unwrap_or_else(|| LuaExtensionManifest::inferred(inferred_name));
+                        if seen_names.insert(manifest.name.clone()) {
+                            extensions.push(LuaExtension {
+                                name: manifest.name.clone(),
+                                path: init,
+                                manifest,
+                            });
                         }
                     }
                 }
@@ -60,6 +97,72 @@ pub fn discover_extensions(
     extensions
 }
 
+fn load_manifest(extension_dir: &Path) -> Option<LuaExtensionManifest> {
+    let path = extension_dir.join("manifest.lua");
+    if !path.exists() {
+        return None;
+    }
+
+    let source = std::fs::read_to_string(path).ok()?;
+    let lua = mlua::Lua::new();
+    let value: mlua::Value = lua.load(&source).eval().ok()?;
+    manifest_from_lua_value(value)
+}
+
+fn manifest_from_lua_value(value: mlua::Value) -> Option<LuaExtensionManifest> {
+    let table = match value {
+        mlua::Value::Table(table) => table,
+        _ => return None,
+    };
+    let name = table.get::<String>("name").ok()?.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let version = table
+        .get::<Option<String>>("version")
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty());
+    let description = table
+        .get::<Option<String>>("description")
+        .ok()
+        .flatten()
+        .filter(|value| !value.trim().is_empty());
+    let commands = table
+        .get::<Option<mlua::Table>>("commands")
+        .ok()
+        .flatten()
+        .map(manifest_commands_from_table)
+        .unwrap_or_default();
+
+    Some(LuaExtensionManifest {
+        name,
+        version,
+        description,
+        commands,
+    })
+}
+
+fn manifest_commands_from_table(commands: mlua::Table) -> Vec<LuaManifestCommand> {
+    commands
+        .sequence_values::<mlua::Table>()
+        .filter_map(Result::ok)
+        .filter_map(|command| {
+            let name = command.get::<String>("name").ok()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let description = command
+                .get::<Option<String>>("description")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty());
+            Some(LuaManifestCommand { name, description })
+        })
+        .collect()
+}
+
 /// Load all discovered extensions into a Lua runtime.
 pub fn load_extensions(
     runtime: &LuaRuntime,
@@ -68,7 +171,9 @@ pub fn load_extensions(
     extensions
         .iter()
         .map(|ext| {
+            runtime.set_current_extension(Some(ext.name.clone()));
             let result = runtime.exec_file(&ext.path);
+            runtime.set_current_extension(None);
             (ext.name.clone(), result)
         })
         .collect()
