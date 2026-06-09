@@ -555,6 +555,8 @@ pub fn workflow_subagent_completion(
     if matches!(status, SubagentStatus::Failed) {
         evidence.push(workflow_failure_summary_artifact(input));
     }
+    let failure_summary = matches!(status, SubagentStatus::Failed)
+        .then(|| workflow_failure_summary_markdown(input, final_status, &summary));
     let event = SubagentEvent::Completed {
         outcome: crate::agent::SubagentOutcome {
             child_run_id: input.child_run_id.clone(),
@@ -567,10 +569,14 @@ pub fn workflow_subagent_completion(
             verification_results: Vec::new(),
             blockers: match status {
                 SubagentStatus::Blocked => vec![summary.clone()],
+                SubagentStatus::Failed => failure_summary
+                    .as_ref()
+                    .map(|summary| vec![summary.clone()])
+                    .unwrap_or_else(|| vec![summary.clone()]),
                 _ => Vec::new(),
             },
             follow_ups: Vec::new(),
-            diagnostics: Vec::new(),
+            diagnostics: failure_summary.into_iter().collect(),
             confidence: None,
         },
     };
@@ -578,6 +584,46 @@ pub fn workflow_subagent_completion(
         status,
         summary,
         event,
+    }
+}
+
+fn workflow_failure_summary_markdown(
+    input: &SubagentInput,
+    final_status: Option<&RunFinalStatus>,
+    summary: &str,
+) -> String {
+    let failure = match final_status {
+        Some(RunFinalStatus::Failed { message }) => message.as_str(),
+        _ => summary,
+    };
+    let changed = format_path_list(&input.resource_limits.writable_paths);
+    let inspected = format_path_list(&input.resource_limits.allowed_paths);
+    let contract = input
+        .output_contract
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("No output contract was provided.");
+
+    format!(
+        "# Subagent failure summary\n\n\
+## Outcome\n\n{summary}\n\n\
+## Failure\n\n{failure}\n\n\
+## Touched files\n\n{changed}\n\n\
+## Inspected files\n\n{inspected}\n\n\
+## Output contract\n\n{contract}\n\n\
+## Next attempt guidance\n\nReview the failure, preserve useful partial findings, avoid repeating the same attempt unchanged, and rerun the required verification before marking the workflow step complete."
+    )
+}
+
+fn format_path_list(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        "- none recorded".to_string()
+    } else {
+        paths
+            .iter()
+            .map(|path| format!("- {}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 

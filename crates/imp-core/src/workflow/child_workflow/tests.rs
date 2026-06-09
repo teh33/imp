@@ -181,6 +181,15 @@ fn workflow_failure_summary_artifact_is_added_for_failed_subagent() {
                 path.ends_with("artifacts/failures/workflow-demo-build-attempt-1.md")
             })
     }));
+    let failure_summary = outcome
+        .diagnostics
+        .first()
+        .expect("structured failure summary diagnostic");
+    assert!(failure_summary.contains("# Subagent failure summary"));
+    assert!(failure_summary.contains("## Failure\n\ntests failed"));
+    assert!(failure_summary.contains("## Touched files\n\n- src/lib.rs"));
+    assert!(failure_summary.contains("## Next attempt guidance"));
+    assert_eq!(outcome.blockers, vec![failure_summary.clone()]);
 }
 
 #[test]
