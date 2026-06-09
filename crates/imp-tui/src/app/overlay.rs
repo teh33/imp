@@ -93,7 +93,7 @@ impl App {
             UiMode::CommandPalette(state) => {
                 if let Some(cmd) = state.selected_command() {
                     self.editor.clear();
-                    self.execute_command(&cmd.name.clone());
+                    self.execute_command(&cmd.invocation());
                 }
             }
             UiMode::LoginPicker(state) => {

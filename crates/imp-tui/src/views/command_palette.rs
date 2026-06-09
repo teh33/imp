@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -19,16 +19,23 @@ pub enum SlashCommandKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandPalettePage {
     Commands,
+    Extensions,
     Skills,
     Workflows,
 }
 
 impl CommandPalettePage {
-    const ALL: [Self; 3] = [Self::Commands, Self::Skills, Self::Workflows];
+    const ALL: [Self; 4] = [
+        Self::Commands,
+        Self::Extensions,
+        Self::Skills,
+        Self::Workflows,
+    ];
 
     fn title(self) -> &'static str {
         match self {
             Self::Commands => "Commands",
+            Self::Extensions => "Extensions",
             Self::Skills => "Skills",
             Self::Workflows => "Workflows",
         }
@@ -37,6 +44,7 @@ impl CommandPalettePage {
     fn label(self) -> &'static str {
         match self {
             Self::Commands => "commands",
+            Self::Extensions => "extension commands",
             Self::Skills => "skills",
             Self::Workflows => "workflows",
         }
@@ -44,10 +52,8 @@ impl CommandPalettePage {
 
     fn includes(self, kind: SlashCommandKind) -> bool {
         match self {
-            Self::Commands => matches!(
-                kind,
-                SlashCommandKind::Builtin | SlashCommandKind::Extension
-            ),
+            Self::Commands => kind == SlashCommandKind::Builtin,
+            Self::Extensions => kind == SlashCommandKind::Extension,
             Self::Skills => kind == SlashCommandKind::Skill,
             Self::Workflows => kind == SlashCommandKind::Workflow,
         }
@@ -86,54 +92,94 @@ pub struct SlashCommand {
     pub kind: SlashCommandKind,
 }
 
+impl SlashCommand {
+    pub fn invocation(&self) -> String {
+        match self.kind {
+            SlashCommandKind::Builtin => self.name.clone(),
+            SlashCommandKind::Extension => format!("x {}", self.name),
+            SlashCommandKind::Skill => format!("skill {}", self.name),
+            SlashCommandKind::Workflow => format!("workflow {}", self.name),
+        }
+    }
+}
+
+fn merge_namespaced_commands(
+    commands: &mut Vec<SlashCommand>,
+    kind: SlashCommandKind,
+    items: impl IntoIterator<Item = (String, String)>,
+    default_description: &'static str,
+    description: impl Fn(String) -> String,
+) {
+    let mut existing: BTreeSet<String> = commands
+        .iter()
+        .filter(|command| command.kind == kind)
+        .map(|command| command.name.clone())
+        .collect();
+    let mut by_name = BTreeMap::new();
+
+    for (name, item_description) in items {
+        by_name.entry(name).or_insert(item_description);
+    }
+
+    for (name, item_description) in by_name {
+        if !existing.insert(name.clone()) {
+            continue;
+        }
+        commands.push(SlashCommand {
+            name,
+            kind,
+            description: if item_description.trim().is_empty() {
+                default_description.into()
+            } else {
+                description(item_description)
+            },
+        });
+    }
+}
+
 /// Merge built-in and extension-provided slash commands for discovery menus.
 pub fn merge_extension_commands(
     mut commands: Vec<SlashCommand>,
     extension_commands: impl IntoIterator<Item = (String, String)>,
 ) -> Vec<SlashCommand> {
-    let mut by_name: BTreeMap<String, SlashCommand> = commands
-        .drain(..)
-        .map(|command| (command.name.clone(), command))
-        .collect();
-
-    for (name, description) in extension_commands {
-        by_name.entry(name.clone()).or_insert_with(|| SlashCommand {
-            name,
-            kind: SlashCommandKind::Extension,
-            description: if description.trim().is_empty() {
-                "Extension command".into()
-            } else {
-                description
-            },
-        });
-    }
-
-    by_name.into_values().collect()
+    merge_namespaced_commands(
+        &mut commands,
+        SlashCommandKind::Extension,
+        extension_commands,
+        "Extension command",
+        |description| description,
+    );
+    commands
 }
 
-/// Merge skill commands into the slash menu without overriding real commands.
+/// Merge skill entries into the slash menu.
 pub fn merge_skill_commands(
     mut commands: Vec<SlashCommand>,
     skills: impl IntoIterator<Item = (String, String)>,
 ) -> Vec<SlashCommand> {
-    let mut by_name: BTreeMap<String, SlashCommand> = commands
-        .drain(..)
-        .map(|command| (command.name.clone(), command))
-        .collect();
+    merge_namespaced_commands(
+        &mut commands,
+        SlashCommandKind::Skill,
+        skills,
+        "Skill",
+        |description| format!("Skill: {description}"),
+    );
+    commands
+}
 
-    for (name, description) in skills {
-        by_name.entry(name.clone()).or_insert_with(|| SlashCommand {
-            name,
-            kind: SlashCommandKind::Skill,
-            description: if description.trim().is_empty() {
-                "Skill".into()
-            } else {
-                format!("Skill: {description}")
-            },
-        });
-    }
-
-    by_name.into_values().collect()
+/// Merge workflow entries into the slash menu without overriding real commands.
+pub fn merge_workflow_commands(
+    mut commands: Vec<SlashCommand>,
+    workflows: impl IntoIterator<Item = (String, String)>,
+) -> Vec<SlashCommand> {
+    merge_namespaced_commands(
+        &mut commands,
+        SlashCommandKind::Workflow,
+        workflows,
+        "Workflow",
+        |description| format!("Workflow: {description}"),
+    );
+    commands
 }
 
 pub fn builtin_commands() -> Vec<SlashCommand> {
@@ -146,6 +192,9 @@ pub fn builtin_commands() -> Vec<SlashCommand> {
         ("loop", "Continue or auto-loop current intent"),
         ("stop", "Stop active work/loop"),
         ("reload", "Reload config and Lua extensions"),
+        ("x", "Run a Lua extension command"),
+        ("skill", "Run a skill"),
+        ("workflow", "Select an active workflow scope"),
         ("setup", "Run setup wizard"),
         ("secrets", "Configure API keys / service secrets"),
         ("login", "OAuth login for Anthropic, OpenAI, or Kimi Code"),
@@ -191,11 +240,12 @@ impl CommandPaletteState {
             let mut results: Vec<(usize, &SlashCommand)> = page_commands
                 .filter_map(|c| {
                     let name = c.name.to_lowercase();
+                    let invocation = c.invocation().to_lowercase();
                     let desc = c.description.to_lowercase();
                     // Exact prefix gets priority 0, contains gets 1, description match gets 2
-                    if name.starts_with(&lower) {
+                    if name.starts_with(&lower) || invocation.starts_with(&lower) {
                         Some((0, c))
-                    } else if name.contains(&lower) {
+                    } else if name.contains(&lower) || invocation.contains(&lower) {
                         Some((1, c))
                     } else if desc.contains(&lower) {
                         Some((2, c))
@@ -293,8 +343,12 @@ impl Widget for CommandPaletteView<'_> {
             return;
         }
 
-        // Find the longest command name for alignment
-        let max_name_len = filtered.iter().map(|c| c.name.len()).max().unwrap_or(0);
+        // Find the longest command invocation for alignment
+        let max_name_len = filtered
+            .iter()
+            .map(|c| c.invocation().len())
+            .max()
+            .unwrap_or(0);
 
         // Scroll to keep selected visible
         let visible = inner.height as usize;
@@ -316,8 +370,9 @@ impl Widget for CommandPaletteView<'_> {
             // Selection indicator
             let indicator = if is_selected { " ▸ " } else { "   " };
 
-            // Build the command name with / prefix, padded for alignment
-            let name_text = format!("/{:<width$}", cmd.name, width = max_name_len);
+            // Build the command invocation with / prefix, padded for alignment
+            let invocation = cmd.invocation();
+            let name_text = format!("/{:<width$}", invocation, width = max_name_len);
 
             // Build the line with full-row highlight when selected
             let row_style = if is_selected {
@@ -401,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn palette_pages_partition_commands_skills_and_workflows() {
+    fn palette_pages_partition_commands_extensions_skills_and_workflows() {
         let mut state = CommandPaletteState::new(vec![
             command("new", SlashCommandKind::Builtin),
             command("greet", SlashCommandKind::Extension),
@@ -414,7 +469,15 @@ mod tests {
             .iter()
             .map(|cmd| cmd.name.as_str())
             .collect();
-        assert_eq!(names, vec!["new", "greet"]);
+        assert_eq!(names, vec!["new"]);
+
+        state.next_page();
+        let names: Vec<&str> = state
+            .filtered()
+            .iter()
+            .map(|cmd| cmd.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["greet"]);
 
         state.next_page();
         let names: Vec<&str> = state
@@ -450,10 +513,33 @@ mod tests {
         );
 
         state.next_page();
+        assert!(state.filtered().is_empty());
+
+        state.next_page();
         assert_eq!(state.filtered().len(), 1);
         assert_eq!(
             state.selected_command().unwrap().kind,
             SlashCommandKind::Skill
+        );
+    }
+
+    #[test]
+    fn namespaced_commands_render_canonical_invocations() {
+        assert_eq!(
+            command("new", SlashCommandKind::Builtin).invocation(),
+            "new"
+        );
+        assert_eq!(
+            command("greet", SlashCommandKind::Extension).invocation(),
+            "x greet"
+        );
+        assert_eq!(
+            command("rust", SlashCommandKind::Skill).invocation(),
+            "skill rust"
+        );
+        assert_eq!(
+            command("ship", SlashCommandKind::Workflow).invocation(),
+            "workflow ship"
         );
     }
 }

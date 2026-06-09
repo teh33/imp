@@ -609,6 +609,30 @@ async fn skill_command_injects_skill_prompt() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skill_namespace_command_injects_skill_prompt() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("project");
+    let skill_dir = cwd.join(".imp").join("skills").join("explain-code");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: explain-code\ndescription: Explain code clearly\n---\n\nExplain $ARGUMENTS.",
+    )
+    .unwrap();
+    let session_dir = tmp.path().join("sessions");
+    let session = SessionManager::new(&cwd, &session_dir).unwrap();
+    let mut app = make_app_with_session(session, cwd);
+
+    app.execute_command("skill explain-code src/main.rs");
+
+    assert_eq!(app.messages[0].role, MessageRole::User);
+    assert_eq!(
+        app.messages[0].content,
+        "Use the `explain-code` skill.\n\nExplain src/main.rs."
+    );
+}
+
 #[test]
 fn command_palette_includes_skill_commands() {
     let tmp = TempDir::new().unwrap();
@@ -1134,6 +1158,52 @@ fn lua_extension_command_can_be_selected_from_palette() {
     let last = app.messages.last().expect("Lua command output");
     assert_eq!(last.role, MessageRole::System);
     assert_eq!(last.content, "Hello world");
+}
+
+#[test]
+fn lua_extension_command_runs_through_namespace() {
+    let mut app = make_app();
+    let runtime = LuaRuntime::new().unwrap();
+    imp_lua::setup_host_api(&runtime).unwrap();
+    runtime
+        .exec(
+            r#"
+                imp.register_command("greet", {
+                    description = "Say hello from Lua",
+                    handler = function(args) return "Hello " .. args end
+                })
+                "#,
+        )
+        .unwrap();
+    app.lua_runtime = Some(Arc::new(Mutex::new(runtime)));
+
+    app.execute_command("x greet world");
+
+    let last = app.messages.last().expect("Lua command output");
+    assert_eq!(last.role, MessageRole::System);
+    assert_eq!(last.content, "Hello world");
+}
+
+#[test]
+fn workflow_namespace_command_sets_active_scope() {
+    let mut app = make_app();
+    app.startup_surface_metadata.workflows = vec![StartupWorkflowItem {
+        id: "ship".into(),
+        title: "Ship feature".into(),
+        status: "active".into(),
+        kind: "feature".into(),
+        path: PathBuf::from(".imp/workflows/ship/workflow.yaml"),
+    }];
+
+    app.execute_command("workflow ship");
+
+    let scope = app
+        .active_workflow_scope
+        .as_ref()
+        .expect("active workflow scope");
+    assert_eq!(scope.id, "ship");
+    assert_eq!(scope.title, "Ship feature");
+    assert_eq!(scope.kind.as_deref(), Some("feature"));
 }
 
 #[test]

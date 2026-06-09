@@ -717,6 +717,9 @@ impl App {
                     Err(e) => self.push_system_msg(&format!("Reload failed: {e}")),
                 }
             }
+            "x" | "ext" | "lua" => self.handle_extension_command(args),
+            "skill" | "s" => self.handle_skill_namespace_command(args),
+            "workflow" | "w" => self.handle_workflow_command(args),
             "help" => {
                 self.push_system_msg(concat!(
                     "Commands:\n",
@@ -728,6 +731,9 @@ impl App {
                     "  /loop [msg] — continue or auto-loop current intent\n",
                     "  /stop       — stop active work/loop\n",
                     "  /reload     — reload config and Lua extensions\n",
+                    "  /x <cmd>    — run a Lua extension command; aliases: /ext, /lua\n",
+                    "  /skill <n>  — run a skill; alias: /s\n",
+                    "  /workflow <id> — select active workflow scope; alias: /w\n",
                     "  /setup      — run setup wizard\n",
                     "  /secrets [provider] — save/list API keys & service secrets\n",
                     "  /login [provider]   — OAuth login (Anthropic/OpenAI/Kimi Code)\n",
@@ -984,13 +990,25 @@ impl App {
     }
 
     pub(super) fn slash_commands(&self) -> Vec<crate::views::command_palette::SlashCommand> {
-        let extension_commands = self
-            .lua_runtime
+        let extension_commands = self.lua_command_summaries();
+        let commands = merge_extension_commands(builtin_commands(), extension_commands);
+        let commands = merge_skill_commands(commands, self.skill_summaries());
+        crate::views::command_palette::merge_workflow_commands(commands, self.workflow_summaries())
+    }
+
+    pub(super) fn lua_command_summaries(&self) -> Vec<(String, String)> {
+        self.lua_runtime
             .as_ref()
             .and_then(|runtime| runtime.lock().ok().map(|guard| guard.command_summaries()))
-            .unwrap_or_default();
-        let commands = merge_extension_commands(builtin_commands(), extension_commands);
-        merge_skill_commands(commands, self.skill_summaries())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn workflow_summaries(&self) -> Vec<(String, String)> {
+        self.startup_surface_metadata
+            .workflows
+            .iter()
+            .map(|workflow| (workflow.id.clone(), workflow.title.clone()))
+            .collect()
     }
 
     pub(super) fn skill_summaries(&self) -> Vec<(String, String)> {
@@ -999,6 +1017,106 @@ impl App {
             .iter()
             .map(|skill| (skill.name.clone(), skill.description.clone()))
             .collect()
+    }
+
+    pub(super) fn handle_extension_command(&mut self, args: &str) {
+        let args = args.trim();
+        if args.is_empty() {
+            let summaries = self.lua_command_summaries();
+            if summaries.is_empty() {
+                self.push_system_msg("No Lua extension commands are loaded.");
+                return;
+            }
+            let mut output = String::from("Lua extension commands:\n");
+            for (name, description) in summaries {
+                if description.trim().is_empty() {
+                    output.push_str(&format!("  /x {name}\n"));
+                } else {
+                    output.push_str(&format!("  /x {name} — {description}\n"));
+                }
+            }
+            self.push_system_msg(output.trim_end());
+            return;
+        }
+
+        if !self.try_lua_command(args) {
+            let command = args.split_whitespace().next().unwrap_or(args);
+            self.push_error_msg(&format!("Unknown extension command: /x {command}"));
+        }
+    }
+
+    pub(super) fn handle_skill_namespace_command(&mut self, args: &str) {
+        let args = args.trim();
+        if args.is_empty() {
+            let summaries = self.skill_summaries();
+            if summaries.is_empty() {
+                self.push_system_msg("No skills are loaded.");
+                return;
+            }
+            let mut output = String::from("Skills:\n");
+            for (name, description) in summaries {
+                if description.trim().is_empty() {
+                    output.push_str(&format!("  /skill {name}\n"));
+                } else {
+                    output.push_str(&format!("  /skill {name} — {description}\n"));
+                }
+            }
+            self.push_system_msg(output.trim_end());
+            return;
+        }
+
+        if !self.try_skill_command(args) {
+            let skill = args.split_whitespace().next().unwrap_or(args);
+            self.push_error_msg(&format!("Unknown skill: /skill {skill}"));
+        }
+    }
+
+    pub(super) fn handle_workflow_command(&mut self, args: &str) {
+        let args = args.trim();
+        if args.is_empty() {
+            if self.startup_surface_metadata.workflows.is_empty() {
+                self.push_system_msg("No workflows were discovered under .imp/workflows.");
+                return;
+            }
+            let mut output = String::from("Workflows:\n");
+            for workflow in &self.startup_surface_metadata.workflows {
+                output.push_str(&format!(
+                    "  /workflow {} — {} [{}]\n",
+                    workflow.id, workflow.title, workflow.status
+                ));
+            }
+            output.push_str("  /workflow clear — clear active workflow scope");
+            self.push_system_msg(&output);
+            return;
+        }
+
+        let workflow_id = args.split_whitespace().next().unwrap_or(args);
+        if matches!(workflow_id, "clear" | "off" | "none") {
+            self.active_workflow_scope = None;
+            self.push_system_msg("Active workflow scope cleared.");
+            return;
+        }
+
+        let Some(workflow) = self
+            .startup_surface_metadata
+            .workflows
+            .iter()
+            .find(|workflow| workflow.id == workflow_id)
+            .cloned()
+        else {
+            self.push_error_msg(&format!("Unknown workflow: /workflow {workflow_id}"));
+            return;
+        };
+
+        self.active_workflow_scope = Some(WorkflowUnitRef::new(
+            workflow.id.clone(),
+            workflow.title.clone(),
+            Some(workflow.kind.clone()),
+        ));
+        self.push_system_msg(&format!(
+            "Active workflow scope: {} — {}",
+            workflow.id, workflow.title
+        ));
     }
 
     pub(super) fn try_skill_command(&mut self, cmd: &str) -> bool {
