@@ -423,7 +423,7 @@ impl Agent {
                 // choose their own sensible default output budget.
                 max_tokens: self.max_tokens,
                 temperature: None,
-                system_prompt: self.system_prompt.clone(),
+                system_prompt: self.system_prompt_with_current_task_state(&turn_state),
                 tools: self.tools.definitions(),
                 cache_options: self.cache_options.clone(),
                 effort: None,
@@ -470,7 +470,8 @@ impl Agent {
                 );
                 if let Some(limit) = observed_input_limit {
                     let effective_limit = limit.max(1);
-                    request_estimate.input_limit = request_estimate.input_limit.min(effective_limit);
+                    request_estimate.input_limit =
+                        request_estimate.input_limit.min(effective_limit);
                     request_estimate.display_window =
                         request_estimate.display_window.min(effective_limit);
                 }

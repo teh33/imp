@@ -23,6 +23,7 @@ use crate::workflow::WorkflowContract;
 use crate::workflow_review::TurnWorkflowReview;
 
 mod autonomy;
+mod current_task_state;
 mod events;
 mod loop_policy;
 mod loop_state;
