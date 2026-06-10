@@ -1,3 +1,4 @@
+use super::turn_assessment::NextAction;
 use super::{LoopDecision, PostTurnAssessment, RunFinalStatus, StopReason};
 
 /// Policy seam for deciding whether a completed turn justifies another turn or
@@ -6,125 +7,17 @@ pub(super) trait LoopPolicy {
     fn decide_after_turn(&self, assessment: &PostTurnAssessment) -> LoopDecision;
 }
 
-trait LoopPolicyRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision>;
-}
-
-/// Default compatibility policy: preserve the existing post-turn assessment
-/// ordering while moving each decision behind a replaceable rule.
+/// Default loop policy: make the same next-action assessment drive both
+/// runtime behavior and debug/trace reporting.
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct DefaultLoopPolicy;
 
 impl LoopPolicy for DefaultLoopPolicy {
     fn decide_after_turn(&self, assessment: &PostTurnAssessment) -> LoopDecision {
-        RepeatedActionRule
-            .decide(assessment)
-            .or_else(|| RuntimeStopRule.decide(assessment))
-            .or_else(|| WorkCompletedRule.decide(assessment))
-            .or_else(|| OrchestrationProgressRule.decide(assessment))
-            .or_else(|| WorkflowStopRule.decide(assessment))
-            .or_else(|| TextFallbackStopRule.decide(assessment))
-            .or_else(|| ContinueRecommendationRule.decide(assessment))
-            .or_else(|| PlanningOnlyNoProgressRule.decide(assessment))
-            .unwrap_or_else(|| finish(StopReason::NoAutomaticFollowUp))
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct RepeatedActionRule;
-
-impl LoopPolicyRule for RepeatedActionRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment
-            .runtime
-            .repeated_action
-            .then(|| finish(StopReason::RepeatedAction))
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct RuntimeStopRule;
-
-impl LoopPolicyRule for RuntimeStopRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment.runtime.execution_stop_reason.map(finish)
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct WorkCompletedRule;
-
-impl LoopPolicyRule for WorkCompletedRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        if assessment.runtime.work_completed && !assessment.runtime.orchestration_started {
-            Some(finish(StopReason::WorkCompleted))
-        } else {
-            None
+        match assessment.clone().into_next_action() {
+            NextAction::Continue { prompt, reason } => LoopDecision::Continue { prompt, reason },
+            NextAction::Stop { reason } => finish(reason),
         }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct OrchestrationProgressRule;
-
-impl LoopPolicyRule for OrchestrationProgressRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment
-            .runtime
-            .orchestration_started
-            .then(|| LoopDecision::Continue {
-                prompt: super::orchestration_follow_up_text(None),
-                reason: super::ContinueReason::OrchestrationProgress,
-            })
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct WorkflowStopRule;
-
-impl LoopPolicyRule for WorkflowStopRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment.workflow.stop_reason.map(finish)
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct TextFallbackStopRule;
-
-impl LoopPolicyRule for TextFallbackStopRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment
-            .text_fallback
-            .planner_stop_reason
-            .or(assessment.text_fallback.execution_stop_reason)
-            .map(finish)
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct ContinueRecommendationRule;
-
-impl LoopPolicyRule for ContinueRecommendationRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment
-            .continue_recommendation
-            .as_ref()
-            .map(|recommendation| LoopDecision::Continue {
-                prompt: recommendation.prompt.clone(),
-                reason: recommendation.reason,
-            })
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-struct PlanningOnlyNoProgressRule;
-
-impl LoopPolicyRule for PlanningOnlyNoProgressRule {
-    fn decide(&self, assessment: &PostTurnAssessment) -> Option<LoopDecision> {
-        assessment
-            .runtime
-            .planning_only_progress
-            .then(|| finish(StopReason::NoProgress))
     }
 }
 
@@ -143,7 +36,10 @@ impl super::Agent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{ContinueReason, RuntimeEvidence, TextFallbackEvidence, WorkflowEvidence};
+    use crate::agent::{
+        ContinueReason, NextActionDebugView, RuntimeEvidence, TextFallbackEvidence,
+        WorkflowEvidence,
+    };
 
     fn assessment() -> PostTurnAssessment {
         PostTurnAssessment {
@@ -288,5 +184,51 @@ mod tests {
             final_reason(DefaultLoopPolicy.decide_after_turn(&assessment())),
             StopReason::NoAutomaticFollowUp
         );
+    }
+
+    #[test]
+    fn default_policy_matches_debug_view_decision() {
+        let mut cases = Vec::new();
+        cases.push(assessment());
+
+        let mut repeated = assessment();
+        repeated.runtime.repeated_action = true;
+        cases.push(repeated);
+
+        let mut continue_case = assessment();
+        continue_case.continue_recommendation = Some(super::super::ContinueRecommendation {
+            prompt: "continue".into(),
+            reason: ContinueReason::ExecutionDebt,
+        });
+        cases.push(continue_case);
+
+        let mut orchestration = assessment();
+        orchestration.runtime.orchestration_started = true;
+        orchestration.runtime.work_completed = true;
+        cases.push(orchestration);
+
+        for assessment in cases {
+            let expected = assessment.debug_view().chosen_action;
+            let actual = match DefaultLoopPolicy.decide_after_turn(&assessment) {
+                LoopDecision::Continue { prompt, reason } => NextActionDebugView::Continue {
+                    prompt,
+                    reason: reason.as_str().to_string(),
+                },
+                LoopDecision::Finish { status } => NextActionDebugView::Stop {
+                    reason: match status {
+                        RunFinalStatus::Done { reason }
+                        | RunFinalStatus::DoneWithConcerns { reason, .. }
+                        | RunFinalStatus::Blocked { reason, .. } => reason.as_str().to_string(),
+                        RunFinalStatus::NeedsUserInput { .. } => {
+                            StopReason::UserBlocker.as_str().to_string()
+                        }
+                        RunFinalStatus::Cancelled | RunFinalStatus::Failed { .. } => {
+                            panic!("unexpected terminal status in loop policy consistency test")
+                        }
+                    },
+                },
+            };
+            assert_eq!(actual, expected);
+        }
     }
 }
