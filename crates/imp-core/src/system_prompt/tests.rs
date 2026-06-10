@@ -73,11 +73,15 @@ fn make_skill(name: &str, desc: &str, path: &str) -> Skill {
     }
 }
 
-fn make_agents_md(content: &str) -> AgentsMd {
+fn make_agents_md_at(path: &str, content: &str) -> AgentsMd {
     AgentsMd {
-        path: PathBuf::from("/project/AGENTS.md"),
+        path: PathBuf::from(path),
         content: content.into(),
     }
+}
+
+fn make_agents_md(content: &str) -> AgentsMd {
+    make_agents_md_at("/project/AGENTS.md", content)
 }
 
 fn make_readonly_role() -> Role {
@@ -254,40 +258,56 @@ fn system_prompt_identity_only_when_all_layers_empty() {
     let result = test_assemble(&reg, &[], &[], &[], None, None);
     // Should have identity but no section headers for missing layers
     assert!(result.text.contains("You are imp"));
-    assert!(!result.text.contains("# Project Context"));
+    assert!(!result.text.contains("# Project Instructions"));
     assert!(!result.text.contains("Available skills"));
     assert!(!result.text.contains("Project facts"));
     assert!(!result.text.contains("## Task"));
 }
 
 #[test]
-fn system_prompt_agents_md_included_verbatim() {
+fn system_prompt_agents_md_included_with_source_boundary() {
     let reg = make_registry();
     let agents = vec![make_agents_md("# Rules\n\nUse snake_case everywhere.")];
     let result = test_assemble(&reg, &agents, &[], &[], None, None);
-    assert!(result.text.contains("# Project Context"));
+    assert!(result.text.contains("# Project Instructions"));
     assert!(result
         .text
-        .contains("# Rules\n\nUse snake_case everywhere."));
+        .contains("ordered from broadest to most specific"));
+    assert!(result
+        .text
+        .contains("## Instruction File 1: /project/AGENTS.md"));
+    assert!(result
+        .text
+        .contains("```markdown\n# Rules\n\nUse snake_case everywhere.\n```"));
 }
 
 #[test]
-fn system_prompt_multiple_agents_md_concatenated() {
+fn system_prompt_multiple_agents_md_labels_precedence_order() {
     let reg = make_registry();
     let agents = vec![
-        make_agents_md("Global rules here."),
-        make_agents_md("Project rules here."),
+        make_agents_md_at("/home/.imp/agents.md", "Global rules here."),
+        make_agents_md_at("/project/AGENTS.md", "Project rules here."),
     ];
     let result = test_assemble(&reg, &agents, &[], &[], None, None);
-    assert!(result.text.contains("Global rules here."));
-    assert!(result.text.contains("Project rules here."));
+    let global_pos = result
+        .text
+        .find("## Instruction File 1: /home/.imp/agents.md")
+        .unwrap();
+    let project_pos = result
+        .text
+        .find("## Instruction File 2: /project/AGENTS.md")
+        .unwrap();
+    assert!(global_pos < project_pos);
+    assert!(result
+        .text
+        .contains("Later files override earlier files when they conflict."));
 }
 
 #[test]
 fn system_prompt_empty_agents_md_skipped() {
     let reg = make_registry();
     let result = test_assemble(&reg, &[], &[], &[], None, None);
-    assert!(!result.text.contains("# Project Context"));
+    assert!(!result.text.contains("# Project Instructions"));
 }
 
 // -- Layer 3: Skills --
@@ -936,7 +956,7 @@ fn system_prompt_all_layers_present() {
 
     // All layers present in order
     let identity_pos = result.text.find("You are imp").unwrap();
-    let context_pos = result.text.find("# Project Context").unwrap();
+    let context_pos = result.text.find("# Project Instructions").unwrap();
     let skills_pos = result.text.find("Available skills").unwrap();
     let facts_pos = result.text.find("Project facts").unwrap();
     let task_pos = result.text.find("## Task").unwrap();
@@ -1076,7 +1096,7 @@ fn system_prompt_memory_after_all_other_layers() {
     });
 
     let identity_pos = result.text.find("You are imp").unwrap();
-    let context_pos = result.text.find("# Project Context").unwrap();
+    let context_pos = result.text.find("# Project Instructions").unwrap();
     let facts_pos = result.text.find("Project facts").unwrap();
     let task_pos = result.text.find("## Task").unwrap();
     let memory_pos = result.text.find("MEMORY").unwrap();

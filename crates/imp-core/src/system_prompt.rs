@@ -329,10 +329,21 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 }
 
 fn agents_md_layer(agents: &[AgentsMd]) -> String {
-    let mut s = String::from("# Project Context\n\n");
-    for agent in agents {
-        s.push_str(&agent.content);
+    let mut s = String::from("# Project Instructions\n\n");
+    s.push_str(
+        "Instruction files are ordered from broadest to most specific. Later files override earlier files when they conflict. Direct user and system instructions still take precedence over these files.\n",
+    );
+
+    for (index, agent) in agents.iter().enumerate() {
+        let precedence = index + 1;
+        s.push_str("\n## Instruction File ");
+        s.push_str(&precedence.to_string());
+        s.push_str(": ");
+        s.push_str(&agent.path.display().to_string());
         s.push('\n');
+        s.push_str("```markdown\n");
+        s.push_str(agent.content.trim());
+        s.push_str("\n```\n");
     }
     s
 }
