@@ -213,7 +213,7 @@ fn identity_layer(
     if defs.iter().any(|def| def.name == "git") {
         s.push_str("- Use `git` for local repo/worktree operations; use `bash` for uncovered git commands.\n");
     }
-    if defs.iter().any(|def| def.name == "workflow") {
+    if !matches!(mode, AgentMode::Full) && defs.iter().any(|def| def.name == "workflow") {
         s.push_str("- Use `workflow` for durable project plans, schema-checked status updates, validation, and orchestrated workflow steps.\n");
     }
     s.push_str("- Use `read` before explaining or editing specific files; use `edit`/`write` for file changes.\n");

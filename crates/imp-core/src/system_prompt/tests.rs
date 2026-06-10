@@ -127,6 +127,26 @@ fn test_assemble(
     })
 }
 
+fn test_assemble_with_mode(tools: &ToolRegistry, mode: AgentMode) -> AssembledPrompt {
+    assemble(&AssembleParams {
+        tools,
+        agents_md: &[],
+        skills: &[],
+        facts: &[],
+        project_memory_status: None,
+        soul: None,
+        task: None,
+        role: None,
+        mode: &mode,
+        memory: None,
+        user_profile: None,
+        cwd: None,
+        repo_context: None,
+        learning_enabled: false,
+        guardrail_profile: None,
+    })
+}
+
 // -- Layer 1: Identity --
 
 #[test]
@@ -198,7 +218,7 @@ fn system_prompt_identity_includes_all_tools() {
 }
 
 #[test]
-fn system_prompt_workflow_guidance_prefers_native_tool_when_available() {
+fn system_prompt_workflow_guidance_omitted_in_full_mode_even_when_tool_available() {
     let mut reg = make_registry();
     reg.register(Arc::new(FakeTool {
         name: "workflow",
@@ -207,13 +227,30 @@ fn system_prompt_workflow_guidance_prefers_native_tool_when_available() {
     }));
 
     let result = test_assemble(&reg, &[], &[], &[], None, None);
-    assert!(result
+    assert!(!result
         .text
         .contains("Use `workflow` for durable project plans"));
     assert!(!result
         .text
         .contains("Use native workflows when durable work"));
     assert!(!result.text.contains("Use workflow when durable work"));
+}
+
+#[test]
+fn system_prompt_workflow_guidance_kept_for_workflow_modes() {
+    let mut reg = make_registry();
+    reg.register(Arc::new(FakeTool {
+        name: "workflow",
+        description: "Workflowge imp-native workflows",
+        readonly: false,
+    }));
+
+    let result = test_assemble_with_mode(&reg, AgentMode::Orchestrator);
+
+    assert!(result
+        .text
+        .contains("Use `workflow` for durable project plans"));
+    assert!(result.text.contains("You are an orchestrator agent."));
 }
 
 #[test]
