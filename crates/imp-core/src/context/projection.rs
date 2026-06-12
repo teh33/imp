@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use imp_llm::{truncate_chars_with_suffix, ContentBlock, Message};
 
 const MAX_TOOL_ARGS_DIGEST_CHARS: usize = 100;
-const MAX_TOOL_OUTPUT_DIGEST_CHARS: usize = 600;
+const MAX_TOOL_OUTPUT_DIGEST_CHARS: usize = 96;
 
 fn truncate_for_digest(text: &str, max_chars: usize) -> String {
     truncate_chars_with_suffix(text, max_chars, "...")
