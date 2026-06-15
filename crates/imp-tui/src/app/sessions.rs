@@ -81,12 +81,12 @@ impl App {
         let signal_tx = self.runtime_signal_tx.clone();
         self.session_list_task = Some(tokio::spawn(async move {
             let signal = match tokio::task::spawn_blocking(move || {
-                SessionManager::list_page(&session_dir, 0, SESSION_LIST_PAGE_SIZE, None)
+                SessionManager::list(&session_dir)
                     .map(|sessions| SessionListResult {
                         sessions,
                         preferred_cwd,
                         offset: 0,
-                        limit: SESSION_LIST_PAGE_SIZE,
+                        limit: usize::MAX,
                     })
                     .map_err(|error| format!("Failed to list sessions: {error}"))
             })

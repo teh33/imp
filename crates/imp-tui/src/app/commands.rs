@@ -692,7 +692,11 @@ impl App {
                 self.open_settings();
             }
             "resume" => {
-                self.start_session_list_load();
+                if args.is_empty() {
+                    self.start_session_list_load();
+                } else {
+                    self.start_session_open(PathBuf::from(args));
+                }
             }
             "name" => {
                 let new_name = cmd.strip_prefix("name").unwrap_or("").trim();
