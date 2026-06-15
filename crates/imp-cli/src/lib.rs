@@ -215,6 +215,8 @@ enum Commands {
         #[command(subcommand)]
         command: WorkflowCommand,
     },
+    /// Repeat the same prompt until an exit condition is met
+    Loop(LoopArgs),
     /// Open or inspect run evidence artifacts
     Evidence {
         #[command(subcommand)]
@@ -315,6 +317,25 @@ impl WorkflowValidationModeArg {
             Self::Strict => "strict",
         }
     }
+}
+
+#[derive(Args, Debug, Clone)]
+struct LoopArgs {
+    /// Maximum number of prompt repetitions
+    #[arg(long)]
+    steps: Option<u32>,
+
+    /// Stop when the model output contains this text
+    #[arg(long)]
+    until: Option<String>,
+
+    /// Stop when this shell command exits successfully after an iteration
+    #[arg(long)]
+    done: Option<String>,
+
+    /// Prompt to repeat. @file arguments include file content as in one-shot mode.
+    #[arg(trailing_var_arg = true, required = true)]
+    prompt: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -916,6 +937,13 @@ pub async fn run_headless(cli: Cli) {
             }
             Commands::Workflow { command } => {
                 if let Err(e) = run_workflow_command(command).await {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            Commands::Loop(args) => {
+                if let Err(e) = run_loop_mode(&cli, args).await {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -3051,7 +3079,55 @@ fn update_verification_summary(metrics: &mut PrintRunMetrics, gate: &Verificatio
     }
 }
 
-async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_loop_mode(cli: &Cli, args: &LoopArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.until.is_none() && args.done.is_none() && args.steps.is_none() {
+        return Err(
+            "loop requires at least one exit condition: --steps, --until, or --done".into(),
+        );
+    }
+
+    let max_steps = args.steps.unwrap_or(u32::MAX);
+    if max_steps == 0 {
+        return Ok(());
+    }
+
+    let file_context = expand_file_args(&args.prompt);
+    let prompt = prompt_args(&args.prompt).join(" ");
+    if prompt.trim().is_empty() && file_context.trim().is_empty() {
+        return Err("loop requires a non-empty prompt".into());
+    }
+    let full_prompt = build_full_prompt(&prompt, &file_context, &None);
+
+    for step in 1..=max_steps {
+        eprintln!("[loop: step {step}]");
+        let outcome = run_print_mode(cli, &full_prompt).await?;
+
+        if let Some(until) = &args.until {
+            if outcome.final_text.contains(until) {
+                eprintln!("[loop: stopped because output matched --until]");
+                break;
+            }
+        }
+
+        if let Some(done) = &args.done {
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(done)
+                .status()?;
+            if status.success() {
+                eprintln!("[loop: stopped because --done command succeeded]");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_print_mode(
+    cli: &Cli,
+    prompt: &str,
+) -> Result<PrintJsonOutcome, Box<dyn std::error::Error>> {
     let run_started_at = std::time::Instant::now();
     let mut startup_timer = StartupTimer::new(cli.verbose);
     emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
@@ -3146,12 +3222,12 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
         match event {
             AgentEvent::MessageDelta { delta } => match delta {
                 StreamEvent::TextDelta { text } => {
+                    json_outcome.final_text.push_str(&text);
                     if structured_output {
                         if json_outcome.metrics.ttft_ms.is_none() {
                             json_outcome.metrics.ttft_ms =
                                 Some(run_started_at.elapsed().as_millis() as u64);
                         }
-                        json_outcome.final_text.push_str(&text);
                     } else {
                         print!("{text}");
                         printed_trailing_newline = false;
@@ -3329,9 +3405,8 @@ async fn run_print_mode(cli: &Cli, prompt: &str) -> Result<(), Box<dyn std::erro
         emit_print_jsonl_event(final_summary_jsonl(&json_outcome))?;
     }
 
-    Ok(())
+    Ok(json_outcome)
 }
-
 fn parse_thinking_level_strict(raw: &str) -> Option<ThinkingLevel> {
     match raw.trim().to_lowercase().as_str() {
         "off" => Some(ThinkingLevel::Off),

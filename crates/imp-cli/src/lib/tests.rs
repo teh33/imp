@@ -105,6 +105,33 @@ fn cli_parses_verify_command_gates() {
 }
 
 #[test]
+fn cli_parses_loop_command() {
+    let cli = Cli::try_parse_from([
+        "imp",
+        "loop",
+        "--steps",
+        "10",
+        "--until",
+        "DONE",
+        "--done",
+        "cargo test",
+        "fix",
+        "it",
+    ])
+    .expect("parse loop command");
+
+    match cli.command {
+        Some(Commands::Loop(args)) => {
+            assert_eq!(args.steps, Some(10));
+            assert_eq!(args.until.as_deref(), Some("DONE"));
+            assert_eq!(args.done.as_deref(), Some("cargo test"));
+            assert_eq!(args.prompt, vec!["fix".to_string(), "it".to_string()]);
+        }
+        other => panic!("expected loop command, got {other:?}"),
+    }
+}
+
+#[test]
 fn cli_parses_workflow_commands() {
     let cli = Cli::try_parse_from([
         "imp",
