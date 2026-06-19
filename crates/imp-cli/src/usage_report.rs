@@ -11,7 +11,7 @@ use imp_core::usage::{
 };
 use serde::Serialize;
 
-use crate::BoundKind;
+use crate::reporting::BoundKind;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum UsageCommand {

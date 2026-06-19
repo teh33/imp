@@ -9,7 +9,7 @@ use imp_core::usage::{dedupe_usage_records, SessionUsageRecord};
 use imp_llm::Message;
 use serde::Serialize;
 
-use crate::BoundKind;
+use crate::reporting::BoundKind;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum StatsCommand {

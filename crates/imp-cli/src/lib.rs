@@ -12,6 +12,7 @@ mod local_install;
 mod models;
 mod prompt;
 mod provider_secrets;
+mod reporting;
 mod secrets;
 mod settings;
 mod setup;
@@ -265,12 +266,6 @@ struct LoopArgs {
     /// Prompt to repeat. @file arguments include file content as in one-shot mode.
     #[arg(trailing_var_arg = true, required = true)]
     prompt: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BoundKind {
-    Since,
-    Until,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
