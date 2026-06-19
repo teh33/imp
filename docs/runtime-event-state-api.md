@@ -179,10 +179,10 @@ snapshot like this:
 The TUI should consume the snapshot for reusable runtime facts while preserving
 terminal-specific interaction and rendering state locally.
 
-## GUI guidance
+## Reusable UI guidance
 
-A future `imp-gui` should depend on `imp_core::runtime` types, not `imp-tui`.
-Recommended GUI adapter shape:
+Non-terminal hosts should depend on `imp_core::runtime` types, not `imp-tui`.
+Recommended adapter shape:
 
 ```rust
 pub struct GuiRunViewModel {
@@ -228,7 +228,7 @@ path. Prefer additive runtime payloads and schema-versioned tests.
 - Rewriting the agent loop.
 - Removing `AgentEvent` in this epic.
 - Moving TUI focus, scroll, pane, or render-cache state into core.
-- Making `imp-gui` depend on `imp-tui`.
+- Making non-terminal hosts depend on `imp-tui`.
 - Persisting large artifact contents in snapshots.
 - Storing secrets or full sensitive command output beyond existing surfaced
   event data.
