@@ -12,6 +12,7 @@ mod layout;
 mod options;
 mod render;
 
+pub(crate) use layout::{selected_settings_row, settings_scroll_offset, total_settings_rows};
 use options::{next_thinking, prev_thinking, theme_options};
 
 /// Which field in the settings panel is focused.

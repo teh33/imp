@@ -32,7 +32,7 @@ pub(super) fn visit_settings_rows(state: &SettingsState, mut visit: impl FnMut(S
     visit(SettingsRow::Save, row);
 }
 
-pub(super) fn total_settings_rows(state: &SettingsState) -> u16 {
+pub(crate) fn total_settings_rows(state: &SettingsState) -> u16 {
     let mut total = 0;
     visit_settings_rows(state, |_, row| {
         total = total.max(row.saturating_add(1));
@@ -40,7 +40,7 @@ pub(super) fn total_settings_rows(state: &SettingsState) -> u16 {
     total
 }
 
-pub(super) fn selected_settings_row(state: &SettingsState) -> u16 {
+pub(crate) fn selected_settings_row(state: &SettingsState) -> u16 {
     let selected = state.current_field();
     let mut selected_row = 0;
     visit_settings_rows(state, |entry, row| match entry {
@@ -51,7 +51,7 @@ pub(super) fn selected_settings_row(state: &SettingsState) -> u16 {
     selected_row
 }
 
-pub(super) fn settings_scroll_offset(state: &SettingsState, visible_rows: u16) -> u16 {
+pub(crate) fn settings_scroll_offset(state: &SettingsState, visible_rows: u16) -> u16 {
     if visible_rows == 0 {
         return 0;
     }
