@@ -201,7 +201,7 @@ enum Commands {
     /// Local statistics from persisted imp sessions
     Stats {
         #[command(subcommand)]
-        command: StatsCommand,
+        command: stats_report::StatsCommand,
     },
     /// Usage reporting and export
     Usage {
@@ -322,113 +322,6 @@ struct LoopArgs {
     /// Prompt to repeat. @file arguments include file content as in one-shot mode.
     #[arg(trailing_var_arg = true, required = true)]
     prompt: Vec<String>,
-}
-
-#[derive(Subcommand, Debug)]
-enum StatsCommand {
-    /// Show overall local imp stats
-    Summary(StatsReportArgs),
-    /// Show token and cost stats
-    Tokens(StatsReportArgs),
-    /// Show stats grouped by tool
-    Tools(StatsReportArgs),
-    /// Show file/code-change stats
-    Files(StatsReportArgs),
-    /// Show stats grouped by day
-    Daily(StatsReportArgs),
-    /// Show stats grouped by week
-    Weekly(StatsReportArgs),
-    /// Show stats grouped by project/session directory hint
-    Projects(StatsReportArgs),
-    /// Show stats grouped by session
-    Sessions(StatsReportArgs),
-    /// Show a fun local imp wrapped summary
-    Wrapped(StatsReportArgs),
-    /// Export local imp stats records in a machine-friendly format
-    Export(StatsExportArgs),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum StatsExportFormat {
-    Json,
-}
-
-#[derive(Debug, Clone, Args)]
-struct StatsReportArgs {
-    /// Include records on or after this unix timestamp or YYYY-MM-DD date
-    #[arg(long)]
-    since: Option<String>,
-    /// Include records before this unix timestamp or date
-    #[arg(long)]
-    until: Option<String>,
-    /// Only include this session id or path fragment
-    #[arg(long)]
-    session: Option<String>,
-    /// Only include this tool name
-    #[arg(long)]
-    tool: Option<String>,
-    /// Emit JSON instead of a human table when supported
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Clone, Args)]
-struct StatsExportArgs {
-    #[command(flatten)]
-    filters: StatsReportArgs,
-    /// Export format
-    #[arg(long, value_enum, default_value_t = StatsExportFormat::Json)]
-    format: StatsExportFormat,
-}
-
-#[derive(Debug, Clone)]
-struct StatsFilters {
-    since: Option<u64>,
-    until: Option<u64>,
-    session: Option<String>,
-    tool: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct StatsFilterSummary {
-    since: Option<u64>,
-    until: Option<u64>,
-    session: Option<String>,
-    tool: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct StatsSummaryJson {
-    report: &'static str,
-    generated_at: u64,
-    filters: StatsFilterSummary,
-    sessions: usize,
-    tool_calls: usize,
-    tool_errors: usize,
-    unique_tools: usize,
-    files_created: usize,
-    lines_added: usize,
-    lines_removed: usize,
-    lines_read: usize,
-    token_requests: usize,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_tokens: u64,
-    total_tokens: u64,
-    total_cost: f64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct StatsToolRow {
-    tool: String,
-    calls: usize,
-    errors: usize,
-    files_created: usize,
-    lines_added: usize,
-    lines_removed: usize,
-    lines_read: usize,
 }
 
 #[derive(Subcommand, Debug)]
