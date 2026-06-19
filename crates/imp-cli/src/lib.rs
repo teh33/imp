@@ -35,7 +35,6 @@ use imp_core::imp_session::{
 };
 use imp_core::runtime::RuntimeStateAccumulator;
 use imp_core::ui::{ComponentSpec, NotifyLevel, SelectOption, UserInterface, WidgetContent};
-use imp_core::usage::{UsageCostBreakdown, UsageRecordSource, UsageTokens};
 use imp_core::TimingEvent;
 use imp_llm::auth::AuthStore;
 use imp_llm::model::ModelRegistry;
@@ -207,7 +206,7 @@ enum Commands {
     /// Usage reporting and export
     Usage {
         #[command(subcommand)]
-        command: UsageCommand,
+        command: usage_report::UsageCommand,
     },
     /// Inspect, validate, run, and update native workflow artifacts
     Workflow {
@@ -325,173 +324,10 @@ struct LoopArgs {
     prompt: Vec<String>,
 }
 
-#[derive(Subcommand, Debug)]
-enum UsageCommand {
-    /// Show overall usage totals
-    Summary(UsageReportArgs),
-    /// Show usage grouped by day
-    Daily(UsageReportArgs),
-    /// Show usage grouped by model
-    Models(UsageReportArgs),
-    /// Show usage grouped by session
-    Sessions(UsageReportArgs),
-    /// Export usage records in a machine-friendly format
-    Export(UsageExportArgs),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum UsageExportFormat {
-    Json,
-}
-
-#[derive(Debug, Clone, Args)]
-struct UsageReportArgs {
-    /// Include records on or after this unix timestamp or YYYY-MM-DD date
-    #[arg(long)]
-    since: Option<String>,
-    /// Include records before this unix timestamp or date
-    #[arg(long)]
-    until: Option<String>,
-    /// Only include this provider
-    #[arg(long)]
-    provider: Option<String>,
-    /// Only include this model
-    #[arg(long)]
-    model: Option<String>,
-    /// Only include this session id or path fragment
-    #[arg(long)]
-    session: Option<String>,
-    /// Emit JSON instead of a human table when supported
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Clone, Args)]
-struct UsageExportArgs {
-    #[command(flatten)]
-    filters: UsageReportArgs,
-    /// Export format
-    #[arg(long, value_enum, default_value_t = UsageExportFormat::Json)]
-    format: UsageExportFormat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UsageReportKind {
-    Summary,
-    Daily,
-    Models,
-    Sessions,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum UsageGroupKind {
-    Day,
-    Model,
-    Session,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoundKind {
     Since,
     Until,
-}
-
-#[derive(Debug, Clone)]
-struct UsageFilters {
-    since: Option<u64>,
-    until: Option<u64>,
-    provider: Option<String>,
-    model: Option<String>,
-    session: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-struct UsageTotalsRow {
-    requests: usize,
-    tokens: UsageTokens,
-    cost: UsageCostBreakdown,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageGroupRow {
-    group: String,
-    group_kind: UsageGroupKind,
-    provider: Option<String>,
-    model: Option<String>,
-    session_id: Option<String>,
-    session_path: Option<String>,
-    day: Option<String>,
-    totals: UsageTotalsRow,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageSessionSummary {
-    session_id: Option<String>,
-    session_path: Option<String>,
-    messages: usize,
-    first_timestamp: Option<u64>,
-    last_timestamp: Option<u64>,
-    first_day: Option<String>,
-    last_day: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageFilterSummary {
-    since: Option<u64>,
-    until: Option<u64>,
-    provider: Option<String>,
-    model: Option<String>,
-    session: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageSummaryJson {
-    report: &'static str,
-    generated_at: u64,
-    filters: UsageFilterSummary,
-    totals: UsageTotalsRow,
-    sessions: usize,
-    providers: usize,
-    models: usize,
-    canonical_records: usize,
-    legacy_records: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageGroupedJson {
-    report: &'static str,
-    generated_at: u64,
-    filters: UsageFilterSummary,
-    totals: UsageTotalsRow,
-    rows: Vec<UsageGroupRow>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageExportJson {
-    report: &'static str,
-    generated_at: u64,
-    filters: UsageFilterSummary,
-    totals: UsageTotalsRow,
-    records: Vec<UsageExportRecord>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct UsageExportRecord {
-    request_id: String,
-    recorded_at: u64,
-    day: String,
-    provider: Option<String>,
-    model: Option<String>,
-    session: UsageSessionSummary,
-    source: UsageRecordSource,
-    tokens: UsageTokens,
-    cost: Option<UsageCostBreakdown>,
-    assistant_message_id: Option<String>,
-    turn_index: Option<u32>,
-    entry_id: String,
-    parent_id: Option<String>,
 }
 
 async fn run_workflow_command(command: &WorkflowCommand) -> imp_core::Result<()> {
