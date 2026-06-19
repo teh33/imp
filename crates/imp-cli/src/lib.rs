@@ -7,6 +7,7 @@ use std::time::Duration;
 
 mod import;
 mod local_install;
+mod models;
 mod provider_secrets;
 mod secrets;
 mod setup;
@@ -894,7 +895,7 @@ pub async fn run_headless(cli: Cli) {
 
     // List models
     if cli.list_models {
-        run_list_models();
+        models::run_list();
         return;
     }
 
@@ -974,36 +975,6 @@ pub async fn run_headless(cli: Cli) {
             eprintln!("Unknown mode: {other}. Use interactive, chat, rpc, or json.");
             std::process::exit(1);
         }
-    }
-}
-
-fn format_price(price: f64) -> String {
-    if price == 0.0 {
-        "n/a".to_string()
-    } else {
-        format!("${price:.2}")
-    }
-}
-
-fn run_list_models() {
-    let registry = ModelRegistry::with_builtins();
-    let models = registry.list();
-
-    println!(
-        "{:<40} {:<12} {:>8} {:>10} {:>10}",
-        "MODEL", "PROVIDER", "CONTEXT", "$/M IN", "$/M OUT"
-    );
-    println!("{}", "-".repeat(84));
-
-    for m in models {
-        println!(
-            "{:<40} {:<12} {:>7}k {:>10} {:>10}",
-            m.id,
-            m.provider,
-            m.context_window / 1000,
-            format_price(m.pricing.input_per_mtok),
-            format_price(m.pricing.output_per_mtok),
-        );
     }
 }
 
