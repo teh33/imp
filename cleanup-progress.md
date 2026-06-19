@@ -9,13 +9,13 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 | Metric | Value |
 | --- | ---: |
 | Baseline tracked source/docs/config LOC | 157,754 |
-| Current tracked source/docs/config LOC | 143,499 |
-| Source/docs/config insertions | 3,672 |
-| Source/docs/config deletions | 17,927 |
-| Source/docs/config net LOC | -14,255 |
-| Cleanup by net LOC reduction | 9.04% |
-| Cleanup by removed LOC | 11.36% |
-| Full diff including `Cargo.lock` | +3,748 / -20,092, net -16,344 |
+| Current tracked source/docs/config LOC | 143,514 |
+| Source/docs/config insertions | 3,813 |
+| Source/docs/config deletions | 18,053 |
+| Source/docs/config net LOC | -14,240 |
+| Cleanup by net LOC reduction | 9.03% |
+| Cleanup by removed LOC | 11.44% |
+| Full diff including `Cargo.lock` | +3,889 / -20,218, net -16,329 |
 
 ## Goal status
 

@@ -2,6 +2,7 @@ use std::io::{self, Write};
 
 use imp_core::agent::AgentEvent;
 use imp_core::config::Config;
+use imp_core::format_error_for_display;
 use imp_core::imp_session::{ImpSession, SessionChoice, SessionOptions};
 use imp_core::workflow::VerificationGate;
 use imp_llm::{truncate_chars_with_suffix, StreamEvent};
@@ -9,10 +10,11 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::prompt::{build_full_prompt, expand_file_args, prompt_args};
+use crate::rpc::rpc_agent_event_legacy_json;
 use crate::startup_timing::{emit_startup_timing, StartupStage, StartupTimer};
 use crate::{
-    build_lua_loader, cli_verification_gates, format_error_for_display, format_timing_event,
-    parse_thinking_level, rpc_agent_event_legacy_json, Cli, LoopArgs,
+    build_lua_loader, cli_verification_gates, format_timing_event, parse_thinking_level, Cli,
+    LoopArgs,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
