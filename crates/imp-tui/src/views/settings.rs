@@ -16,7 +16,9 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 use crate::theme::Theme;
 
 mod layout;
+mod options;
 use layout::{scrolled_screen_y, settings_scroll_offset, total_settings_rows};
+use options::{animation_label, next_thinking, prev_thinking, theme_options, thinking_label};
 
 /// Which field in the settings panel is focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1057,57 +1059,6 @@ impl SettingsState {
         } else {
             format!("{} chosen", self.chosen_models.len())
         }
-    }
-}
-
-fn theme_options(current: Option<&str>) -> Vec<String> {
-    let mut options = vec!["default".to_string(), "light".to_string()];
-    if let Some(current) = current.filter(|value| !value.trim().is_empty()) {
-        if !options.iter().any(|option| option == current) {
-            options.push(current.to_string());
-        }
-    }
-    options
-}
-
-fn next_thinking(level: ThinkingLevel) -> ThinkingLevel {
-    match level {
-        ThinkingLevel::Off => ThinkingLevel::Low,
-        ThinkingLevel::Minimal => ThinkingLevel::Low,
-        ThinkingLevel::Low => ThinkingLevel::Medium,
-        ThinkingLevel::Medium => ThinkingLevel::High,
-        ThinkingLevel::High => ThinkingLevel::XHigh,
-        ThinkingLevel::XHigh => ThinkingLevel::Off,
-    }
-}
-
-fn prev_thinking(level: ThinkingLevel) -> ThinkingLevel {
-    match level {
-        ThinkingLevel::Off => ThinkingLevel::XHigh,
-        ThinkingLevel::Minimal => ThinkingLevel::Off,
-        ThinkingLevel::Low => ThinkingLevel::Off,
-        ThinkingLevel::Medium => ThinkingLevel::Low,
-        ThinkingLevel::High => ThinkingLevel::Medium,
-        ThinkingLevel::XHigh => ThinkingLevel::High,
-    }
-}
-
-fn thinking_label(level: ThinkingLevel) -> &'static str {
-    match level {
-        ThinkingLevel::Off => "Off",
-        ThinkingLevel::Minimal => "Minimal",
-        ThinkingLevel::Low => "Low",
-        ThinkingLevel::Medium => "Medium",
-        ThinkingLevel::High => "High",
-        ThinkingLevel::XHigh => "XHigh",
-    }
-}
-
-fn animation_label(level: AnimationLevel) -> &'static str {
-    match level {
-        AnimationLevel::None => "none",
-        AnimationLevel::Spinner => "spinner",
-        AnimationLevel::Minimal => "minimal",
     }
 }
 
