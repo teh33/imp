@@ -15,6 +15,9 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::theme::Theme;
 
+mod layout;
+use layout::{scrolled_screen_y, settings_scroll_offset, total_settings_rows};
+
 /// Which field in the settings panel is focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
@@ -1108,84 +1111,6 @@ fn animation_label(level: AnimationLevel) -> &'static str {
     }
 }
 
-enum SettingsRow {
-    Header,
-    Tabs,
-    Field(SettingsField),
-    EmptyMessage,
-    Save,
-}
-
-fn visit_settings_rows(state: &SettingsState, mut visit: impl FnMut(SettingsRow, u16)) {
-    let mut row: u16 = 0;
-    visit(SettingsRow::Header, row);
-    row += 2;
-    visit(SettingsRow::Tabs, row);
-    row += 2;
-
-    let fields = state.visible_fields();
-    if fields.is_empty() {
-        visit(SettingsRow::EmptyMessage, row);
-        row += 1;
-    } else {
-        for field in fields {
-            visit(SettingsRow::Field(*field), row);
-            row += 1;
-        }
-    }
-
-    row += 1;
-    visit(SettingsRow::Save, row);
-}
-
-fn total_settings_rows(state: &SettingsState) -> u16 {
-    let mut total = 0;
-    visit_settings_rows(state, |_, row| {
-        total = row.saturating_add(1);
-    });
-    total
-}
-
-fn selected_settings_row(state: &SettingsState) -> u16 {
-    let selected = state.current_field();
-    let mut selected_row = 0;
-    visit_settings_rows(state, |entry, row| match entry {
-        SettingsRow::Field(field) if field == selected => selected_row = row,
-        SettingsRow::Save if selected == SettingsField::Save => selected_row = row,
-        _ => {}
-    });
-    selected_row
-}
-
-fn settings_scroll_offset(state: &SettingsState, visible_rows: u16) -> u16 {
-    if visible_rows == 0 {
-        return 0;
-    }
-
-    let total_rows = total_settings_rows(state);
-    if total_rows <= visible_rows {
-        return 0;
-    }
-
-    let selected_row = selected_settings_row(state);
-    let desired = selected_row.saturating_sub(visible_rows.saturating_sub(1));
-    desired.min(total_rows.saturating_sub(visible_rows))
-}
-
-fn scrolled_screen_y(inner: Rect, logical_row: u16, scroll_offset: u16) -> Option<u16> {
-    if logical_row < scroll_offset {
-        return None;
-    }
-
-    let visible_row = logical_row - scroll_offset;
-    if visible_row >= inner.height {
-        return None;
-    }
-
-    Some(inner.y + visible_row)
-}
-
-/// Settings overlay widget.
 pub struct SettingsView<'a> {
     state: &'a SettingsState,
     theme: &'a Theme,
