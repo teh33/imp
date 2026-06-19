@@ -31,7 +31,7 @@ Not implemented yet:
 - `session/request_permission` bridge for imp UI/tool approvals.
 - full policy-denial-to-ACP UX.
 - `session/load` / `session/resume` methods, although durable session lookup helpers exist.
-- client-supplied MCP server connections.
+- client-supplied server configuration.
 - image/audio prompt content.
 - ACP registry metadata.
 
@@ -49,7 +49,7 @@ Not implemented yet:
 ```sh
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"smoke"}}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'"$PWD"'","mcpServers":[]}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"'"$PWD"'"}}' \
   | imp acp
 ```
 
@@ -81,7 +81,6 @@ You can pass normal imp model/provider options before the subcommand when needed
 ## Troubleshooting
 
 - If the editor reports invalid JSON, make sure nothing writes logs to stdout in ACP mode.
-- If `session/new` fails, verify the client sends an absolute `cwd`.
-- If MCP server configuration fails, remove client-supplied MCP servers for now; imp does not yet advertise MCP capabilities.
+- If `session/new` fails, verify the client sends an absolute `cwd` and does not include unsupported server configuration.
 - If prompt execution appears stubbed, that is expected in the current scaffold. Live agent turn wiring is the next implementation step.
 - If auth/model setup fails once live turns are connected, configure credentials with `imp login <provider>` or pass the appropriate provider/API key options.

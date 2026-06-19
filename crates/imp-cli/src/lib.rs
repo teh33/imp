@@ -172,11 +172,6 @@ enum Commands {
     Acp,
     /// Open the fullscreen terminal UI explicitly
     Tui,
-    /// Manage Model Context Protocol server connections (planned)
-    Mcp {
-        #[command(subcommand)]
-        command: Option<McpCommand>,
-    },
     /// Open the viewer/inspector surface (planned; not fully implemented yet)
     View {
         /// Viewer area to open (planned: sessions, tree, logs, checkpoints)
@@ -248,18 +243,6 @@ enum Commands {
         /// Search provider to configure (tavily, exa, linkup, perplexity)
         provider: String,
     },
-}
-
-#[derive(Subcommand, Debug)]
-enum McpCommand {
-    /// List configured MCP servers
-    List,
-    /// Add an MCP server to configuration
-    Add,
-    /// Remove an MCP server from configuration
-    Remove,
-    /// Diagnose MCP configuration and connectivity
-    Doctor,
 }
 
 #[derive(Subcommand, Debug)]
@@ -746,36 +729,6 @@ fn print_tool_output(output: &ToolOutput) {
     }
 }
 
-fn run_mcp_command(command: Option<&McpCommand>) {
-    match command {
-        None => {
-            println!(
-                "imp mcp is planned, but MCP server management is not implemented in this build."
-            );
-            println!("Available placeholder commands: list, add, remove, doctor");
-        }
-        Some(McpCommand::List) => {
-            println!("No MCP servers: MCP server management is not implemented in this build.");
-        }
-        Some(McpCommand::Add) => {
-            eprintln!("imp mcp add is not implemented in this build.");
-            std::process::exit(2);
-        }
-        Some(McpCommand::Remove) => {
-            eprintln!("imp mcp remove is not implemented in this build.");
-            std::process::exit(2);
-        }
-        Some(McpCommand::Doctor) => {
-            println!("MCP support: not implemented in this build");
-            println!("Expected future config locations:");
-            println!("  {}", Config::user_config_dir().join("mcp.json").display());
-            if let Ok(cwd) = std::env::current_dir() {
-                println!("  {}", cwd.join(".imp/mcp.json").display());
-            }
-        }
-    }
-}
-
 fn run_evidence_command(command: Option<&EvidenceCommand>) -> imp_core::Result<()> {
     let records =
         imp_core::run_evidence::read_index_records(imp_core::storage::global_run_index_path())?;
@@ -875,10 +828,6 @@ pub async fn run_headless(cli: Cli) {
             Commands::Tui => {
                 eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
                 std::process::exit(1);
-            }
-            Commands::Mcp { command } => {
-                run_mcp_command(command.as_ref());
-                return;
             }
             Commands::View { area } => {
                 if let Err(e) = run_view_mode(&cli, area.as_deref()).await {

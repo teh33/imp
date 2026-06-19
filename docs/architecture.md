@@ -10,7 +10,6 @@ imp-core  agent loop, tools, sessions, workflows, policy, recovery, verification
 imp-llm   provider/model abstraction, streaming, auth helpers, OAuth, model metadata, pricing
 imp-lua   shipped Lua extension runtime for tools, slash commands, hooks, and capability policy
 imp-tui   terminal UI, interactive app state, rendering, input/event loop, runtime signal handling
-imp-gui   experimental GUI surface
 ```
 
 The repository root package is a source-install shim so `cargo install --path .` works from the workspace root.
@@ -95,7 +94,7 @@ ACP support is an editor-facing stdio JSON-RPC adapter. It should similarly call
 
 ## Extension runtime
 
-`imp-lua` is the shipped extension runtime. Lua extensions can register tools, slash commands, and hooks through host APIs subject to capability policy. TypeScript extension support is not shipped and should not be documented as available.
+`imp-lua` is the shipped extension runtime. Lua extensions can register tools, slash commands, and hooks through host APIs subject to capability policy.
 
 Extension safety depends on explicit capabilities, policy checks, and clear host/runtime boundaries. Extension code should not become an unreviewed path around native tool policy.
 
@@ -106,5 +105,4 @@ The following are planned or experimental and should not be described as fully s
 - workflow API access through RPC/ACP;
 - broader editor integration beyond current ACP scaffolding;
 - hosted sync/team collaboration;
-- experimental GUI surface;
-- future non-Lua extension bridges.
+- future extension bridges must be documented separately from the shipped Lua runtime.

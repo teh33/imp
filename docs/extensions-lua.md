@@ -123,4 +123,4 @@ Lua extensions can register handlers for runtime events through the host API. Ho
 
 ## Stability
 
-Lua is the current shipped extension path. TypeScript extension support exists in repository code paths but should not be documented as the stable shipped extension system.
+Lua is the current shipped extension path.

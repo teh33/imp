@@ -179,11 +179,11 @@ impl AcpServer {
         if !cwd.is_absolute() {
             return JsonRpcResponse::error(id, -32602, "session/new cwd must be an absolute path");
         }
-        if !params.mcp_servers.is_empty() {
+        if !params.unsupported_mcp_servers.is_empty() {
             return JsonRpcResponse::error(
                 id,
                 ERROR_UNSUPPORTED,
-                "ACP MCP server configuration is not supported by imp yet",
+                "ACP client-supplied server configuration is not supported by imp",
             );
         }
 
@@ -223,11 +223,11 @@ impl AcpServer {
                 "session load/resume cwd must be an absolute path",
             );
         }
-        if !params.mcp_servers.is_empty() {
+        if !params.unsupported_mcp_servers.is_empty() {
             return JsonRpcResponse::error(
                 id,
                 ERROR_UNSUPPORTED,
-                "ACP MCP server configuration is not supported by imp yet",
+                "ACP client-supplied server configuration is not supported by imp",
             );
         }
 

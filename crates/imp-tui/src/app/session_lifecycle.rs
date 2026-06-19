@@ -1542,18 +1542,6 @@ fn tool_updates_target_streaming_assistant_not_latest_message() {
     assert_eq!(system.role, MessageRole::System);
     assert_eq!(system.content, "transient note");
 }
-#[test]
-fn tui_integration_slash_memory_shows_stores() {
-    let mut app = make_app();
-
-    app.execute_command("memory");
-
-    assert_eq!(app.messages.len(), 1);
-    assert_eq!(app.messages[0].role, MessageRole::System);
-    assert!(app.messages[0].content.contains("Memory ("));
-    assert!(app.messages[0].content.contains("User profile ("));
-}
-
 #[tokio::test]
 async fn natural_prompt_sends_without_workflow_takeover_question() {
     let mut app = make_app();
@@ -1576,62 +1564,6 @@ async fn workflow_slash_commands_are_removed() {
     let last = app.messages.last().expect("unknown command message");
     assert_eq!(last.role, MessageRole::Error);
     assert!(last.content.contains("Unknown command: /plan this feature"));
-}
-
-#[test]
-fn tui_integration_slash_memory_add_and_show() {
-    let tmp = TempDir::new().unwrap();
-    // Point global config dir to temp so we don't touch real memory.
-    // Config::user_config_dir uses HOME/.imp, not XDG_CONFIG_HOME.
-    let previous_home = std::env::var_os("HOME");
-    let previous_userprofile = std::env::var_os("USERPROFILE");
-    std::env::set_var("HOME", tmp.path());
-    std::env::remove_var("USERPROFILE");
-
-    let mut app = make_app();
-
-    app.execute_command("memory add Test entry from slash command");
-    assert!(app.messages.last().unwrap().content.contains("Added"));
-
-    // Show should list the entry
-    app.execute_command("memory");
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("Test entry from slash command"));
-
-    // Clean up env vars
-    if let Some(previous_home) = previous_home {
-        std::env::set_var("HOME", previous_home);
-    } else {
-        std::env::remove_var("HOME");
-    }
-    if let Some(previous_userprofile) = previous_userprofile {
-        std::env::set_var("USERPROFILE", previous_userprofile);
-    } else {
-        std::env::remove_var("USERPROFILE");
-    }
-}
-
-#[test]
-fn tui_integration_slash_memory_help() {
-    let mut app = make_app();
-
-    app.execute_command("memory help");
-
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("/memory add"));
-    assert!(content.contains("/memory remove"));
-    assert!(content.contains("/memory clear"));
-}
-
-#[test]
-fn tui_integration_slash_memory_unknown_subcommand() {
-    let mut app = make_app();
-
-    app.execute_command("memory frobnicate");
-
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("Unknown memory subcommand"));
-    assert!(content.contains("frobnicate"));
 }
 
 #[test]

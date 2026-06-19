@@ -557,18 +557,7 @@ apply trust/autonomy policy.
 
 ## Extension guidance
 
-Lua and future TypeScript extensions are not trust boundaries. Extension manifests
-may describe capabilities, but host-owned runtime code assigns provenance and
-policy decisions.
-
-Future TypeScript extension manifests should declare:
-
-- observed content source type
-- resource mapping (path/url/unit/gate id)
-- whether outputs are generated summaries
-- whether outputs may contain instructions
-- whether outputs may be secret-adjacent
-- parent provenance ids for transformed/summarized outputs
+Extension manifests may describe capabilities, but host-owned runtime code assigns provenance and policy decisions.
 
 The host should reject or downgrade extension-provided provenance that attempts to
 upgrade low-trust content into trusted policy.
@@ -820,18 +809,7 @@ apply trust/autonomy policy.
 
 ## Extension guidance
 
-Lua and future TypeScript extensions are not trust boundaries. Extension manifests
-may describe capabilities, but host-owned runtime code assigns provenance and
-policy decisions.
-
-Future TypeScript extension manifests should declare:
-
-- observed content source type
-- resource mapping (path/url/unit/gate id)
-- whether outputs are generated summaries
-- whether outputs may contain instructions
-- whether outputs may be secret-adjacent
-- parent provenance ids for transformed/summarized outputs
+Extension manifests may describe capabilities, but host-owned runtime code assigns provenance and policy decisions.
 
 The host should reject or downgrade extension-provided provenance that attempts to
 upgrade low-trust content into trusted policy.

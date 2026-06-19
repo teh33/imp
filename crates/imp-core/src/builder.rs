@@ -399,15 +399,11 @@ impl AgentBuilder {
                 skills: &skills,
                 facts: &prompt_context.facts,
                 project_memory_status: prompt_context.project_memory_status.as_deref(),
-                soul: resources::discover_soul(&self.cwd, &user_config_dir).as_ref(),
                 task: self.task.as_ref(),
                 role: self.role.as_ref(),
                 mode: &agent.mode,
-                memory: None,
-                user_profile: None,
                 cwd: Some(&self.cwd),
                 repo_context: repo_context.as_ref(),
-                learning_enabled: false,
                 guardrail_profile: agent.guardrail_profile,
             })
             .text;
@@ -691,82 +687,6 @@ mod tests {
         assert!(!definition_names.contains(&"session_search".to_string()));
         assert!(!definition_names.contains(&"memory".to_string()));
         assert!(!definition_names.contains(&"worktree".to_string()));
-    }
-
-    #[test]
-    fn builder_filters_tower_memory_outside_tower_projects() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", temp.path());
-
-        let imp_dir = temp.path().join("imp");
-        std::fs::create_dir_all(&imp_dir).unwrap();
-        std::fs::write(
-            imp_dir.join("memory.md"),
-            "Project lives at /Users/asher/tower and uses root workflow.",
-        )
-        .unwrap();
-        std::fs::write(
-            imp_dir.join("user.md"),
-            "User prefers root workflow in /tower for Tower work.",
-        )
-        .unwrap();
-
-        let mut config = Config::default();
-        config.learning.enabled = true;
-
-        let (agent, _handle) = AgentBuilder::new(
-            config,
-            PathBuf::from("/tmp/not-tower/project"),
-            test_model(),
-            "key".into(),
-        )
-        .build()
-        .unwrap();
-
-        assert!(!agent.system_prompt.contains("/Users/asher/tower"));
-        assert!(!agent.system_prompt.contains("/tower for Tower work"));
-
-        if let Some(prev) = prev {
-            std::env::set_var("XDG_CONFIG_HOME", prev);
-        } else {
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
-    }
-
-    #[test]
-    fn builder_keeps_tower_memory_inside_tower_projects() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", temp.path());
-
-        let imp_dir = temp.path().join("imp");
-        std::fs::create_dir_all(&imp_dir).unwrap();
-        std::fs::write(
-            imp_dir.join("memory.md"),
-            "Project lives at /Users/asher/tower and uses root workflow.",
-        )
-        .unwrap();
-
-        let mut config = Config::default();
-        config.learning.enabled = true;
-
-        let (agent, _handle) = AgentBuilder::new(
-            config,
-            PathBuf::from("/Users/asher/tower/imp"),
-            test_model(),
-            "key".into(),
-        )
-        .build()
-        .unwrap();
-
-        assert!(agent.system_prompt.contains("/Users/asher/tower"));
-
-        if let Some(prev) = prev {
-            std::env::set_var("XDG_CONFIG_HOME", prev);
-        } else {
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
     }
 
     #[test]

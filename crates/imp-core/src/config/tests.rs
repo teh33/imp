@@ -225,16 +225,10 @@ fn config_merge_context_overrides_default() {
 }
 
 #[test]
-fn config_merge_includes_theme_learning_and_lua() {
+fn config_merge_includes_theme_and_lua() {
     let mut base = Config::default();
     let overlay = Config {
         theme: Some("light".into()),
-        learning: LearningConfig {
-            enabled: false,
-            skill_nudge_threshold: 3,
-            memory_char_limit: 1000,
-            user_char_limit: 700,
-        },
         lua: LuaConfig {
             allow_native_tool_calls: Some(false),
             allow_shell_exec: Some(true),
@@ -248,8 +242,6 @@ fn config_merge_includes_theme_learning_and_lua() {
     base.merge(overlay);
 
     assert_eq!(base.theme.as_deref(), Some("light"));
-    assert_eq!(base.learning.skill_nudge_threshold, 3);
-    assert!(!base.learning.enabled);
     assert_eq!(base.lua.allow_native_tool_calls, Some(false));
     assert_eq!(base.lua.allow_shell_exec, Some(true));
     assert_eq!(base.lua.allowed_env, Some(vec!["HOME".into()]));

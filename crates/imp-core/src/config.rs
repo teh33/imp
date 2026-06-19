@@ -302,6 +302,10 @@ pub enum PolicyAction {
     Deny,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Explicit runtime policy settings for tool and capability decisions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PolicyConfig {
@@ -494,10 +498,6 @@ pub struct Config {
 
     /// Theme name ("default", "light", or custom).
     pub theme: Option<String>,
-
-    /// Learning loop settings (memory, skill nudges).
-    #[serde(default)]
-    pub learning: LearningConfig,
 
     /// UI display settings.
     #[serde(default)]
@@ -776,50 +776,6 @@ impl UiConfig {
     }
 }
 
-/// Learning loop configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct LearningConfig {
-    /// Master switch for memory + skill nudges. Default: true.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-
-    /// Tool call count before suggesting skill creation. Default: 8.
-    #[serde(default = "default_nudge_threshold")]
-    pub skill_nudge_threshold: u32,
-
-    /// Character limit for memory.md. Default: 2200.
-    #[serde(default = "default_memory_limit")]
-    pub memory_char_limit: usize,
-
-    /// Character limit for user.md. Default: 1400.
-    #[serde(default = "default_user_limit")]
-    pub user_char_limit: usize,
-}
-
-fn default_true() -> bool {
-    true
-}
-fn default_nudge_threshold() -> u32 {
-    8
-}
-fn default_memory_limit() -> usize {
-    2200
-}
-fn default_user_limit() -> usize {
-    1400
-}
-
-impl Default for LearningConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_true(),
-            skill_nudge_threshold: default_nudge_threshold(),
-            memory_char_limit: default_memory_limit(),
-            user_char_limit: default_user_limit(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum AutoCompactionMode {
@@ -1027,9 +983,6 @@ impl Config {
         }
         if other.theme.is_some() {
             self.theme = other.theme;
-        }
-        if other.learning != LearningConfig::default() {
-            self.learning = other.learning;
         }
         if other.ui != UiConfig::default() {
             self.ui = other.ui;

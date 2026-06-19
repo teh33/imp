@@ -13,8 +13,7 @@ Use this guide progressively:
 3. **Add quick controls** — autonomy modes, verification commands, and closeout
    choices.
 4. **Review and audit** — evidence packets, traces, workflow ledger, runtime state.
-5. **Use advanced workflows** — worktree-auto, TypeScript extensions, roles,
-   delegation, and CI/headless output.
+5. **Use advanced workflows** — worktree-auto, roles, delegation, and CI/headless output.
 
 ## 1. Existing usage still works
 
@@ -171,29 +170,7 @@ Use:
 
 See [`worktree-auto.md`](worktree-auto.md) for details.
 
-## 9. TypeScript extensions
-
-TypeScript extensions are manifest-declared tools. Rust still owns discovery,
-policy, execution authority, environment mediation, timeout/output limits,
-tracing, and evidence.
-
-Example package:
-
-```text
-extensions/example/
-  imp.extension.json
-  src/tool.mjs
-```
-
-At the migration-guide level, the important idea is simple: extension tools feel
-like normal tools, but their side effects are declared in a manifest and checked
-by policy. Read-only tools are easiest to approve. Workspace-write, network, and
-secret-capable tools are policy-gated.
-
-See [`typescript-extension-bridge.md`](typescript-extension-bridge.md) for the
-authoring and security model.
-
-## 10. Roles and child workflow delegation
+## 9. Roles and child workflow delegation
 
 Roles and delegation are advanced workflow concepts for larger work:
 
@@ -208,7 +185,7 @@ choose roles manually. Where role/delegation behavior is still evolving, imp
 should describe it as planned or advanced rather than implying every role flow is
 fully automatic.
 
-## 11. CI/headless workflows
+## 10. CI/headless workflows
 
 Headless workflows are useful when imp runs without an interactive TUI:
 
@@ -221,7 +198,7 @@ Expect stricter policy behavior: no interactive approval prompts, clearer failur
 reporting, JSON/runtime state output when requested, and evidence artifacts for
 review.
 
-## 12. FAQ and troubleshooting
+## 11. FAQ and troubleshooting
 
 ### Do I need to learn workflow?
 
@@ -253,13 +230,6 @@ imp worktree status .imp/runs/<run-id>/worktree/worktree-metadata.json
 imp worktree apply .imp/runs/<run-id>/worktree/worktree-metadata.json
 imp worktree discard .imp/runs/<run-id>/worktree/worktree-metadata.json
 ```
-
-### Why was a TypeScript extension denied?
-
-The manifest declared network, secrets, workspace-write, external-write, or
-another side effect that current policy/autonomy did not allow. Read the TUI
-warning or evidence policy record for the exact reason code, such as
-`extension_network_denied` or `extension_secret_denied`.
 
 ### How do I run imp the old way?
 

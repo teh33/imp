@@ -4,7 +4,6 @@ pub mod code_intel;
 pub mod edit;
 pub mod git;
 pub mod lua;
-pub mod memory;
 pub mod multi_edit;
 pub mod query;
 pub mod read;

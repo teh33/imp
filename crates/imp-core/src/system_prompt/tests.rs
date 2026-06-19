@@ -114,15 +114,11 @@ fn test_assemble(
         skills,
         facts,
         project_memory_status: None,
-        soul: None,
         task,
         role,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     })
 }
@@ -134,15 +130,11 @@ fn test_assemble_with_mode(tools: &ToolRegistry, mode: AgentMode) -> AssembledPr
         skills: &[],
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &mode,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     })
 }
@@ -390,15 +382,11 @@ fn system_prompt_does_not_add_mode_aware_workflow_skill_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Planner,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -420,15 +408,11 @@ fn system_prompt_orchestrator_does_not_add_workflow_skill_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Orchestrator,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -457,15 +441,11 @@ fn system_prompt_worker_does_not_add_workflow_basics_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Worker,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -487,15 +467,11 @@ fn system_prompt_omits_workflow_trigger_without_workflow_skill() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Planner,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -516,15 +492,11 @@ fn system_prompt_reviewer_mode_omits_workflow_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Reviewer,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -581,15 +553,11 @@ fn system_prompt_project_memory_status_included() {
         project_memory_status: Some(
             "Project memory status:\nWarnings:\n- STALE: \"Lockfile drift\"\n\nWorking on:\n- [12] Refresh auth flow",
         ),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(result.text.contains("Project memory status:"));
@@ -606,15 +574,11 @@ fn system_prompt_project_memory_status_empty_string_is_skipped() {
         skills: &[],
         facts: &[],
         project_memory_status: Some(""),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(!result.text.contains("Project memory status:"));
@@ -635,15 +599,11 @@ fn system_prompt_project_memory_status_included_separately_from_facts() {
         skills: &[],
         facts: &facts,
         project_memory_status: Some(status),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -1024,15 +984,12 @@ fn system_prompt_memory_included() {
         skills: &[],
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
         memory: Some(mem),
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(result.text.contains("MEMORY"));
@@ -1050,15 +1007,12 @@ fn system_prompt_user_profile_included() {
         skills: &[],
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
         user_profile: Some(user),
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(result.text.contains("USER PROFILE"));
@@ -1074,7 +1028,6 @@ fn system_prompt_empty_memory_skipped() {
         skills: &[],
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
@@ -1082,7 +1035,6 @@ fn system_prompt_empty_memory_skipped() {
         user_profile: Some(""),
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(!result.text.contains("MEMORY"));
@@ -1120,15 +1072,12 @@ fn system_prompt_memory_after_all_other_layers() {
         skills: &skills,
         facts: &facts,
         project_memory_status: None,
-        soul: None,
         task: Some(&task),
         role: None,
         mode: &AgentMode::Full,
         memory: Some(mem),
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
