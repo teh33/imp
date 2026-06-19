@@ -10,10 +10,12 @@ use imp_llm::oauth::chatgpt::ChatGptOAuth;
 use imp_llm::oauth::kimi_code::KimiCodeOAuth;
 use imp_llm::ThinkingLevel;
 
+use crate::cli_config::{
+    prompt_input_line, save_user_config, thinking_level_label, web_search_provider_label,
+};
 use crate::provider_secrets::{
     prompt_for_secret_fields, provider_alias, search_provider_docs_url, search_provider_from_name,
 };
-use crate::{prompt_input_line, save_user_config, thinking_level_label, web_search_provider_label};
 
 fn oauth_login_success_message(auth_store: &AuthStore, provider: &str) -> String {
     auth_store

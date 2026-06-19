@@ -5,7 +5,9 @@ use imp_core::config::{Config, ToolOutputDisplay};
 use imp_core::tools::web::types::SearchProvider;
 use imp_llm::ThinkingLevel;
 
-use crate::{prompt_input_line, save_user_config, thinking_level_label, web_search_provider_label};
+use crate::cli_config::{
+    prompt_input_line, save_user_config, thinking_level_label, web_search_provider_label,
+};
 
 fn parse_thinking_level_strict(raw: &str) -> Option<ThinkingLevel> {
     match raw.trim().to_lowercase().as_str() {
