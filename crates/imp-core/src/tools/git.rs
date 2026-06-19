@@ -2,17 +2,21 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+mod output;
+
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command;
 
-use super::{resolve_path, truncate_head, Tool, ToolContext, ToolOutput};
+use super::{resolve_path, Tool, ToolContext, ToolOutput};
 use crate::config::AgentMode;
 use crate::error::Result;
+use output::{
+    display_or_unknown, git_failure, not_git_repo_message, stdout_lossy, stdout_trimmed,
+    truncate_for_display,
+};
 
 const DEFAULT_LOG_LIMIT: u32 = 10;
-const DISPLAY_MAX_LINES: usize = 400;
-const DISPLAY_MAX_BYTES: usize = 32 * 1024;
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct GitTool;
@@ -1344,81 +1348,6 @@ async fn run_git_owned_with_env(
     temp_index: Option<(&str, &Path)>,
 ) -> std::io::Result<std::process::Output> {
     run_git_with_env(cwd, args, temp_index).await
-}
-
-fn stdout_lossy(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stdout).replace('\r', "")
-}
-
-fn stderr_lossy(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stderr).replace('\r', "")
-}
-
-fn stdout_trimmed(output: &std::process::Output) -> String {
-    stdout_lossy(output).trim().to_string()
-}
-
-fn stderr_trimmed(output: &std::process::Output) -> String {
-    stderr_lossy(output).trim().to_string()
-}
-
-fn not_git_repo_message(cwd: &Path, output: &std::process::Output) -> String {
-    let stderr = stderr_trimmed(output);
-    if stderr.is_empty() {
-        format!("Not inside a git repository: {}", cwd.display())
-    } else {
-        format!("Not inside a git repository: {}\n{}", cwd.display(), stderr)
-    }
-}
-
-fn git_failure(prefix: &str, output: &std::process::Output) -> ToolOutput {
-    let stdout = stdout_trimmed(output);
-    let stderr = stderr_trimmed(output);
-    let combined = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => prefix.to_string(),
-        (false, true) => format!("{prefix}: {stdout}"),
-        (true, false) => format!("{prefix}: {stderr}"),
-        (false, false) => format!("{prefix}: {stdout}\n{stderr}"),
-    };
-    ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text { text: combined }],
-        details: json!({
-            "success": false,
-            "exit_code": output.status.code(),
-            "stdout": stdout,
-            "stderr": stderr,
-        }),
-        is_error: true,
-    }
-}
-
-fn display_or_unknown(s: &str) -> &str {
-    if s.trim().is_empty() {
-        "unknown"
-    } else {
-        s
-    }
-}
-
-fn truncate_for_display(text: &str) -> (String, String, Option<PathBuf>) {
-    let truncated = truncate_head(text, DISPLAY_MAX_LINES, DISPLAY_MAX_BYTES);
-    let content = truncated.content.trim_end().to_string();
-    let note = if truncated.truncated {
-        let base = format!(
-            "[output truncated: showing {}/{} lines, {}/{} bytes]",
-            truncated.output_lines,
-            truncated.total_lines,
-            truncated.output_bytes,
-            truncated.total_bytes,
-        );
-        match &truncated.temp_file {
-            Some(path) => format!("{base} full output: {}", path.display()),
-            None => base,
-        }
-    } else {
-        String::new()
-    };
-    (content, note, truncated.temp_file)
 }
 
 #[cfg(test)]
