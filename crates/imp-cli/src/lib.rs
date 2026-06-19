@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+mod evidence;
 mod import;
 mod local_install;
 mod models;
@@ -217,7 +218,7 @@ enum Commands {
     /// Open or inspect run evidence artifacts
     Evidence {
         #[command(subcommand)]
-        command: Option<EvidenceCommand>,
+        command: Option<evidence::EvidenceCommand>,
     },
     /// Import skills and config from other agents (pi, Claude Code, Codex)
     Import {
@@ -323,13 +324,6 @@ struct LoopArgs {
     prompt: Vec<String>,
 }
 
-#[derive(Subcommand, Debug)]
-enum EvidenceCommand {
-    /// List recent run evidence records
-    List,
-    /// Print the latest evidence HTML path
-    Latest,
-}
 #[derive(Subcommand, Debug)]
 enum StatsCommand {
     /// Show overall local imp stats
@@ -696,31 +690,6 @@ fn print_tool_output(output: &ToolOutput) {
     }
 }
 
-fn run_evidence_command(command: Option<&EvidenceCommand>) -> imp_core::Result<()> {
-    let records =
-        imp_core::run_evidence::read_index_records(imp_core::storage::global_run_index_path())?;
-    match command.unwrap_or(&EvidenceCommand::List) {
-        EvidenceCommand::List => {
-            for record in records.iter().rev().take(20) {
-                let status = record.status.as_deref().unwrap_or("running");
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    record.run_id,
-                    status,
-                    record.cwd.display(),
-                    record.evidence_html_path.display()
-                );
-            }
-        }
-        EvidenceCommand::Latest => {
-            if let Some(record) = records.last() {
-                println!("{}", record.evidence_html_path.display());
-            }
-        }
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliRunDisposition {
     Headless,
@@ -866,7 +835,7 @@ pub async fn run_headless(cli: Cli) {
                 return;
             }
             Commands::Evidence { command } => {
-                if let Err(e) = run_evidence_command(command.as_ref()) {
+                if let Err(e) = evidence::run(command.as_ref()) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
