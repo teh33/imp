@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, terminate_tokio_process_group};
+
 use imp_llm::auth::AuthStore;
 
 use super::{
@@ -523,13 +525,7 @@ async fn run_command(
         }
 
         // Create a new process group so we can kill the entire tree.
-        #[cfg(unix)]
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
+        isolate_tokio_command(&mut cmd);
 
         cmd.spawn()
             .map_err(|e| crate::error::Error::Tool(format!("failed to spawn command: {e}")))?
@@ -563,12 +559,12 @@ async fn run_command(
 
             _ = tokio::time::sleep_until(deadline) => {
                 timed_out = true;
-                kill_process_group(&child).await;
+                terminate_tokio_process_group(&child).await;
                 break;
             }
 
             _ = wait_for_cancellation(&ctx.cancelled), if !ctx.is_cancelled() => {
-                kill_process_group(&child).await;
+                terminate_tokio_process_group(&child).await;
                 break;
             }
 
@@ -702,31 +698,6 @@ async fn append_line(
             details: serde_json::Value::Null,
         })
         .await;
-}
-
-/// Kill the entire process group. Sends SIGTERM, waits briefly, then SIGKILL.
-#[cfg(unix)]
-async fn kill_process_group(child: &tokio::process::Child) {
-    if let Some(pid) = child.id() {
-        let pgid = pid as i32;
-
-        // SIGTERM the group
-        unsafe {
-            libc::kill(-pgid, libc::SIGTERM);
-        }
-
-        // Brief wait, then force-kill
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(not(unix))]
-async fn kill_process_group(_child: &tokio::process::Child) {
-    // Best-effort on non-Unix — nothing we can do portably.
 }
 
 #[cfg(test)]

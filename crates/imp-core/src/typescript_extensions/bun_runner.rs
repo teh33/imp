@@ -1,9 +1,10 @@
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use imp_llm::ContentBlock;
 
+use crate::child_process::{isolate_std_command, kill_std_process_group};
 use crate::error::{Error, Result};
 
 use super::discovery::TypeScriptExtension;
@@ -139,13 +140,7 @@ fn run_manifest_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    isolate_std_command(&mut command);
 
     let mut child = command.spawn().map_err(|err| {
         Error::Tool(format!(
@@ -184,7 +179,7 @@ fn run_manifest_command(
             return Ok(output.stdout);
         }
         if started.elapsed() >= timeout {
-            kill_process_group(&child);
+            kill_std_process_group(&child);
             let _ = child.kill();
             let _ = child.wait();
             return Err(Error::Tool(format!(
@@ -193,16 +188,6 @@ fn run_manifest_command(
             )));
         }
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn kill_process_group(child: &Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id().try_into().ok() {
-        // Negative PID targets the process group created by setsid.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
     }
 }
 
@@ -293,13 +278,7 @@ pub(super) fn run_bun_bridge(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    isolate_std_command(&mut command);
 
     let output = run_bun_bridge_command(command)?;
 
@@ -322,7 +301,7 @@ fn run_bun_bridge_command(mut command: Command) -> Result<std::process::Output> 
             return child.wait_with_output().map_err(Error::from);
         }
         if started.elapsed() >= BUN_BRIDGE_TIMEOUT {
-            kill_process_group(&child);
+            kill_std_process_group(&child);
             let _ = child.kill();
             let _ = child.wait();
             return Err(Error::Tool(format!(

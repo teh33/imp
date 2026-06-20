@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+
 use super::{
     VerificationArtifactRef, VerificationCommand, VerificationGate, VerificationGateKind,
     VerificationGateResult,
@@ -79,13 +81,7 @@ impl VerificationGateRunner {
 
         // Put verification commands in their own process group so timeout
         // cleanup can terminate grandchildren spawned by the shell too.
-        #[cfg(unix)]
-        unsafe {
-            child_command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
+        isolate_tokio_command(&mut child_command);
 
         let mut child = child_command.spawn().map_err(Error::Io)?;
 
@@ -103,13 +99,7 @@ impl VerificationGateRunner {
         let status = match tokio::time::timeout(timeout, child.wait()).await {
             Ok(wait) => wait.map_err(Error::Io)?,
             Err(_) => {
-                #[cfg(unix)]
-                if let Some(pid) = child.id() {
-                    // Negative PID targets the process group created by setsid.
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGKILL);
-                    }
-                }
+                kill_tokio_process_group(&child).await;
                 let _ = child.kill().await;
                 let stdout_bytes = join_output(stdout_task).await;
                 let stderr_bytes = join_output(stderr_task).await;

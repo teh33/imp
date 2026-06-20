@@ -147,12 +147,7 @@ pub(crate) fn run_lua_exec_command(
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    command.process_group(0);
 
     let mut child = command.spawn()?;
     let started = Instant::now();
@@ -176,8 +171,8 @@ pub(crate) fn run_lua_exec_command(
 fn kill_process_group(child: &Child) {
     #[cfg(unix)]
     if let Ok(pid) = i32::try_from(child.id()) {
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
         }
     }
 }

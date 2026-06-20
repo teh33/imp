@@ -9,6 +9,8 @@ use serde_json::{json, Map, Value};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+
 use crate::error::{Error, Result};
 use crate::tools::{truncate_head, truncate_tail, Tool, ToolContext, ToolOutput, ToolRegistry};
 
@@ -140,13 +142,7 @@ impl Tool for ShellTool {
 
         // Create a new process group so timeout cleanup can terminate
         // grandchildren spawned by TOML-defined shell tools too.
-        #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
+        isolate_tokio_command(&mut command);
 
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -192,7 +188,7 @@ impl Tool for ShellTool {
         let (status, timed_out) = tokio::select! {
             status = child.wait() => (status?, false),
             _ = tokio::time::sleep(timeout) => {
-                kill_process_group(&child).await;
+                kill_tokio_process_group(&child).await;
                 let _ = child.kill().await;
                 let status = child.wait().await?;
                 (status, true)
@@ -255,16 +251,6 @@ impl Tool for ShellTool {
             }),
             is_error: timed_out || !status.success(),
         })
-    }
-}
-
-async fn kill_process_group(child: &tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        // Negative PID targets the process group created by setsid.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
     }
 }
 

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+
 const HOOK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Reports outcomes from background non-blocking hook execution.
@@ -344,13 +346,7 @@ async fn run_hook_shell_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    isolate_tokio_command(&mut command);
 
     let mut child = command.spawn()?;
     let mut stdout = child.stdout.take();
@@ -373,21 +369,12 @@ async fn run_hook_shell_command(
             })
         }
         Err(_) => {
-            kill_process_group(&child).await;
+            kill_tokio_process_group(&child).await;
             let _ = child.kill().await;
             Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!("hook command timed out after {}s", timeout.as_secs()),
             ))
-        }
-    }
-}
-
-async fn kill_process_group(child: &tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
         }
     }
 }

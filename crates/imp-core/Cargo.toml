@@ -62,7 +62,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 tiktoken-rs = "0.12.0"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+rustix.workspace = true
 
 # rush is an optional local-only dependency for shell backend experiments.
 # To enable: clone rush locally and uncomment with your path, then build with --features rush-backend.

@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+
 const GUARDRAIL_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// How strongly guardrail failures influence agent execution.
@@ -270,13 +272,7 @@ async fn run_guardrail_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    isolate_tokio_command(&mut command);
 
     let mut child = command.spawn()?;
     let mut stdout = child.stdout.take();
@@ -299,21 +295,12 @@ async fn run_guardrail_command(
             })
         }
         Err(_) => {
-            kill_process_group(&child).await;
+            kill_tokio_process_group(&child).await;
             let _ = child.kill().await;
             Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!("guardrail command timed out after {}s", timeout.as_secs()),
             ))
-        }
-    }
-}
-
-async fn kill_process_group(child: &tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
         }
     }
 }

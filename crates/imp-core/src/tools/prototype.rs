@@ -7,6 +7,8 @@ use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+
 use super::{truncate_tail, Tool, ToolContext, ToolOutput, ToolUpdate, TruncationResult};
 use crate::error::{Error, Result};
 use crate::reference_monitor::{ToolActionKind, ToolMetadata};
@@ -639,13 +641,7 @@ async fn run_sandbox_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
+    isolate_tokio_command(&mut command);
 
     let mut child = command
         .spawn()
@@ -672,7 +668,7 @@ async fn run_sandbox_command(
             biased;
             _ = tokio::time::sleep_until(deadline) => {
                 timed_out = true;
-                kill_process_group(&child).await;
+                kill_tokio_process_group(&child).await;
                 let _ = child.kill().await;
                 break;
             }
@@ -701,16 +697,6 @@ async fn run_sandbox_command(
         exit_code,
         timed_out,
     })
-}
-
-async fn kill_process_group(child: &tokio::process::Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        // Negative PID targets the process group created by setsid.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
 }
 
 async fn append_line(
