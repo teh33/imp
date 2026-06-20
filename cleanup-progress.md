@@ -8,14 +8,14 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 
 | Metric | Value |
 | --- | ---: |
-| Baseline tracked source/docs/config LOC | 158,089 |
-| Current tracked source/docs/config LOC | 143,143 |
-| Source/docs/config insertions | 6,775 |
-| Source/docs/config deletions | 21,721 |
-| Source/docs/config net LOC | -14,946 |
-| Cleanup by net LOC reduction | 9.45% |
-| Cleanup by removed LOC | 13.74% |
-| Full diff including `Cargo.lock` | +6,851 / -23,886, net -17,035 |
+| Baseline tracked source/docs/config LOC | 157,754 |
+| Current tracked source/docs/config LOC | 143,142 |
+| Source/docs/config insertions | 7,544 |
+| Source/docs/config deletions | 22,156 |
+| Source/docs/config net LOC | -14,612 |
+| Cleanup by net LOC reduction | 9.26% |
+| Cleanup by removed LOC | 14.04% |
+| Full diff including `Cargo.lock` | +7,620 / -24,321, net -16,701 |
 
 ## Goal status
 
@@ -34,5 +34,5 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 Latest verified commands:
 
 - `cargo fmt --check`
-- `cargo check -p imp-core --lib`
+- `cargo check -p imp-tui`
 - `git diff --check`
