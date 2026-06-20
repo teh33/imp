@@ -15,7 +15,7 @@ pub(super) fn visit_settings_rows(state: &SettingsState, mut visit: impl FnMut(S
     visit(SettingsRow::Header, row);
     row += 1;
     visit(SettingsRow::Tabs, row);
-    row += 2;
+    row += 3;
 
     let fields = state.visible_fields();
     if fields.is_empty() {
