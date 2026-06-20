@@ -9,13 +9,13 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 | Metric | Value |
 | --- | ---: |
 | Baseline tracked source/docs/config LOC | 157,754 |
-| Current tracked source/docs/config LOC | 143,545 |
-| Source/docs/config insertions | 11,008 |
-| Source/docs/config deletions | 25,217 |
-| Source/docs/config net LOC | -14,209 |
-| Cleanup by net LOC reduction | 9.01% |
-| Cleanup by removed LOC | 15.99% |
-| Full diff including `Cargo.lock` | 136 files changed, 11008 insertions(+), 25217 deletions(-) |
+| Current tracked source/docs/config LOC | 143,723 |
+| Source/docs/config insertions | 11,180 |
+| Source/docs/config deletions | 25,286 |
+| Source/docs/config net LOC | -14,031 |
+| Cleanup by net LOC reduction | 8.89% |
+| Cleanup by removed LOC | 16.03% |
+| Full diff including `Cargo.lock` | 137 files changed, 11180 insertions(+), 25286 deletions(-) |
 | Non-test godfiles remaining (`>=1000` LOC) | 10 |
 | Test godfiles remaining (`>=1000` LOC) | 6 |
 
@@ -27,7 +27,7 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 | Remove TypeScript extension support/docs | Done | Removed `typescript_extensions` implementation and bridge docs. Kept `tree-sitter-typescript` for source scanning. |
 | Remove MCP support/config/docs/deps | Done | Removed MCP shim and `imp mcp`; ACP still rejects incoming `mcpServers` for protocol compatibility. |
 | Remove obsolete learning/memory/soul code | Done | Removed core modules, memory tool, TUI `/memory`, config, storage migration, and prompt injection. |
-| Decompose godfiles | In progress | Workflow tool postponed; CLI/TUI/core decomposition continues. Extracted agent context recovery helpers from `run_loop.rs`; 10 non-test godfiles remain. |
+| Decompose godfiles | In progress | Workflow tool postponed; CLI/TUI/core decomposition continues. Extracted agent context recovery and run artifact helpers from `run_loop.rs`; 10 non-test godfiles remain. |
 | Workflow tool reimagining | Postponed | User explicitly postponed this slice. |
 | Wiki-style docs cleanup | Done | Removed archival design/rebuild/proposal/plan docs from the wiki-style docs set. |
 

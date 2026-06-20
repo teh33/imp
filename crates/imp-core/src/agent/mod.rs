@@ -32,6 +32,7 @@ mod subagent;
 mod workflow_integration;
 pub(super) use workflow_integration::orchestration_follow_up_text;
 mod recovery;
+mod run_artifacts;
 mod run_loop;
 mod tool_execution;
 
