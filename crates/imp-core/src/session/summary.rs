@@ -142,7 +142,7 @@ fn topic_word_count(title: &str) -> usize {
         .count()
 }
 
-fn literal_topic_title(text: &str, max_chars: usize) -> Option<String> {
+pub(super) fn literal_topic_title(text: &str, max_chars: usize) -> Option<String> {
     let cleaned = cleanup_summary_text(text);
     if cleaned.is_empty() {
         return None;
@@ -350,7 +350,7 @@ fn concise_topic_phrase(text: &str, max_chars: usize) -> String {
     truncate_chars_with_suffix(out.trim(), max_chars, "…")
 }
 
-fn summarize_session_title(text: &str, max_chars: usize) -> String {
+pub(super) fn summarize_session_title(text: &str, max_chars: usize) -> String {
     let collapsed = text
         .lines()
         .map(str::trim)
