@@ -9,13 +9,13 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 | Metric | Value |
 | --- | ---: |
 | Baseline tracked source/docs/config LOC | 157,754 |
-| Current tracked source/docs/config LOC | 143,559 |
-| Source/docs/config insertions | 10,858 |
-| Source/docs/config deletions | 25,053 |
-| Source/docs/config net LOC | -14,195 |
-| Cleanup by net LOC reduction | 9.00% |
-| Cleanup by removed LOC | 15.88% |
-| Full diff including `Cargo.lock` | 134 files changed, 10934 insertions(+), 27218 deletions(-) |
+| Current tracked source/docs/config LOC | 143,545 |
+| Source/docs/config insertions | 11,008 |
+| Source/docs/config deletions | 25,217 |
+| Source/docs/config net LOC | -14,209 |
+| Cleanup by net LOC reduction | 9.01% |
+| Cleanup by removed LOC | 15.99% |
+| Full diff including `Cargo.lock` | 136 files changed, 11008 insertions(+), 25217 deletions(-) |
 | Non-test godfiles remaining (`>=1000` LOC) | 10 |
 | Test godfiles remaining (`>=1000` LOC) | 6 |
 
@@ -27,7 +27,7 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 | Remove TypeScript extension support/docs | Done | Removed `typescript_extensions` implementation and bridge docs. Kept `tree-sitter-typescript` for source scanning. |
 | Remove MCP support/config/docs/deps | Done | Removed MCP shim and `imp mcp`; ACP still rejects incoming `mcpServers` for protocol compatibility. |
 | Remove obsolete learning/memory/soul code | Done | Removed core modules, memory tool, TUI `/memory`, config, storage migration, and prompt injection. |
-| Decompose godfiles | In progress | Workflow tool postponed; CLI/TUI/core decomposition remains future cleanup. |
+| Decompose godfiles | In progress | Workflow tool postponed; CLI/TUI/core decomposition continues. Extracted agent context recovery helpers from `run_loop.rs`; 10 non-test godfiles remain. |
 | Workflow tool reimagining | Postponed | User explicitly postponed this slice. |
 | Wiki-style docs cleanup | Done | Removed archival design/rebuild/proposal/plan docs from the wiki-style docs set. |
 
@@ -36,5 +36,5 @@ Baseline is commit `1ddfefc9c` before this cleanup branch, excluding `Cargo.lock
 Latest verified commands:
 
 - `cargo fmt --check`
-- `cargo check -p imp-tui`
+- `cargo check -p imp-core`
 - `git diff --check`
