@@ -12,6 +12,7 @@ mod fields;
 mod layout;
 mod options;
 mod render;
+mod rows;
 
 pub(crate) use fields::{field_index, SettingsField, SettingsTab, FIELDS, SETTINGS_TABS};
 #[cfg(test)]
