@@ -125,7 +125,7 @@ pub struct Cli {
     #[arg(long, default_value = "interactive")]
     mode: String,
 
-    /// Final output format for --print: text, json, or jsonl
+    /// Final output format for --print: text, clean, json, or jsonl
     #[arg(long, default_value = "text")]
     output: String,
     /// Emit shared runtime_event/runtime_state payloads alongside legacy JSON events
@@ -2933,6 +2933,7 @@ async fn emit_protocol_error(stdout_tx: &mpsc::Sender<Value>, error: impl Into<S
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrintOutputMode {
     Text,
+    CleanText,
     Json,
     Jsonl,
 }
@@ -2941,16 +2942,21 @@ impl PrintOutputMode {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "text" | "human" => Ok(Self::Text),
+            "final" | "clean" => Ok(Self::CleanText),
             "json" => Ok(Self::Json),
             "jsonl" | "benchmark-jsonl" => Ok(Self::Jsonl),
             other => Err(format!(
-                "unknown --output mode `{other}`; use text, json, or jsonl"
+                "unknown --output mode `{other}`; use text, clean, json, or jsonl"
             )),
         }
     }
 
     fn is_structured(self) -> bool {
         matches!(self, Self::Json | Self::Jsonl)
+    }
+
+    fn suppress_transcript(self) -> bool {
+        matches!(self, Self::CleanText)
     }
 }
 
@@ -3207,6 +3213,7 @@ async fn run_print_mode(
 
     let print_output_mode = PrintOutputMode::parse(&cli.output)?;
     let structured_output = print_output_mode.is_structured();
+    let suppress_transcript = print_output_mode.suppress_transcript();
     let json_output = print_output_mode == PrintOutputMode::Json;
     let jsonl_output = print_output_mode == PrintOutputMode::Jsonl;
     let mut json_outcome = PrintJsonOutcome {
@@ -3234,7 +3241,7 @@ async fn run_print_mode(
                     }
                 }
                 StreamEvent::ThinkingDelta { text } => {
-                    if !structured_output {
+                    if !structured_output && !suppress_transcript {
                         eprint!("{text}")
                     }
                 }
@@ -3262,7 +3269,7 @@ async fn run_print_mode(
                         .to_string(),
                     _ => String::new(),
                 };
-                if !structured_output {
+                if !structured_output && !suppress_transcript {
                     if summary.is_empty() {
                         eprintln!("[tool: {tool_name}]");
                     } else {
@@ -3304,7 +3311,7 @@ async fn run_print_mode(
                         tool: tool_name,
                         status,
                     });
-                } else if result.is_error && !text.is_empty() {
+                } else if result.is_error && !text.is_empty() && !suppress_transcript {
                     eprintln!("[error: {}]", truncate_chars_with_suffix(&text, 100, ""));
                 }
             }
@@ -3312,7 +3319,7 @@ async fn run_print_mode(
                 json_outcome.metrics.turns = json_outcome.metrics.turns.max(index + 1);
             }
             AgentEvent::TurnEnd { .. } => {
-                if !structured_output && !printed_trailing_newline {
+                if !structured_output && !suppress_transcript && !printed_trailing_newline {
                     println!();
                     printed_trailing_newline = true;
                 }
@@ -3346,7 +3353,7 @@ async fn run_print_mode(
                     }
                     _ => {}
                 }
-                if cli.verbose && !structured_output {
+                if cli.verbose && !structured_output && !suppress_transcript {
                     eprintln!("{}", format_timing_event(&timing));
                 }
             }
@@ -3372,7 +3379,7 @@ async fn run_print_mode(
                 if structured_output {
                     json_outcome.usage = Some(print_usage(&usage));
                     json_outcome.cost = Some(print_cost(&cost));
-                } else {
+                } else if !suppress_transcript {
                     eprintln!(
                         "\n[tokens: raw={} effective={} (↑{} ↓{} cache_read={} cache_write={}) | cost: ${:.4}]",
                         usage.raw_total_tokens(),
