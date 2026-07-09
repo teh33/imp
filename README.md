@@ -328,6 +328,16 @@ Precedence:
 4. environment variables
 5. CLI flags
 
+Browser diagnostics and installation:
+
+```bash
+imp browser doctor
+imp browser doctor --json
+imp browser install --yes
+```
+
+The doctor checks resolved configuration, executable version, MCP compatibility, and required tools. Installation uses Homebrew on macOS and requires explicit confirmation. Direct release downloads are not used because upstream does not publish checksum assets.
+
 ```toml
 model = "sonnet"
 thinking = "medium"

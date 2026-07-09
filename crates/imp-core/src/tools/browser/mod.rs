@@ -1,6 +1,7 @@
 mod action;
 mod client;
 mod config;
+mod diagnostics;
 mod session;
 
 use std::sync::Arc;
@@ -9,6 +10,10 @@ use std::time::Duration;
 use action::BrowserAction;
 use async_trait::async_trait;
 pub use config::BrowserConfig;
+pub use diagnostics::{
+    diagnose_browser, resolve_lightpanda_binary, BrowserDiagnostic, DiagnosticCheck,
+    DiagnosticStatus,
+};
 use serde_json::{json, Value};
 use session::BrowserSessionManager;
 use tokio::sync::Mutex;

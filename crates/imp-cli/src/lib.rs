@@ -182,6 +182,11 @@ enum Commands {
         /// Viewer area to open (planned: sessions, tree, logs, checkpoints)
         area: Option<String>,
     },
+    /// Diagnose or install the Lightpanda browser runtime
+    Browser {
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// Edit a guided subset of imp settings in the terminal
     Settings,
     /// Run the terminal-native setup wizard
@@ -247,6 +252,22 @@ enum Commands {
     WebLogin {
         /// Search provider to configure (tavily, exa, linkup, perplexity)
         provider: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum BrowserCommand {
+    /// Check configuration, binary version, and MCP compatibility
+    Doctor {
+        /// Emit the diagnostic report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install Lightpanda through a supported package manager
+    Install {
+        /// Confirm package-manager execution
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -883,6 +904,13 @@ pub async fn run_headless(cli: Cli) {
             Commands::View { area } => {
                 if let Err(e) = run_view_mode(&cli, area.as_deref()).await {
                     eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            Commands::Browser { command } => {
+                if let Err(error) = run_browser_command(command).await {
+                    eprintln!("Browser command failed: {error}");
                     std::process::exit(1);
                 }
                 return;
@@ -1595,6 +1623,94 @@ fn try_import_kimi_cli_credentials() -> Option<imp_llm::auth::OAuthCredential> {
         access_token,
         refresh_token,
         expires_at,
+    })
+}
+
+async fn run_browser_command(command: &BrowserCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        BrowserCommand::Doctor { json } => run_browser_doctor(*json).await,
+        BrowserCommand::Install { yes } => run_browser_install(*yes).await,
+    }
+}
+
+async fn run_browser_doctor(json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::resolve(&Config::user_config_dir(), Some(&std::env::current_dir()?))?;
+    let report = imp_core::tools::browser::diagnose_browser(&config.browser).await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Lightpanda browser diagnostics\n");
+        for check in &report.checks {
+            let marker = match check.status {
+                imp_core::tools::browser::DiagnosticStatus::Pass => "PASS",
+                imp_core::tools::browser::DiagnosticStatus::Warn => "WARN",
+                imp_core::tools::browser::DiagnosticStatus::Fail => "FAIL",
+            };
+            println!("[{marker}] {:<13} {}", check.name, check.message);
+        }
+        println!(
+            "\nStatus: {}",
+            if report.ready { "ready" } else { "not ready" }
+        );
+        if !report.ready {
+            println!("Install: imp browser install --yes");
+            println!(
+                "Configure: {}",
+                Config::user_config_dir().join("config.toml").display()
+            );
+        }
+    }
+    if report.ready {
+        Ok(())
+    } else {
+        Err("Lightpanda browser is not ready".into())
+    }
+}
+
+async fn run_browser_install(yes: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if imp_core::tools::browser::resolve_lightpanda_binary(None).is_ok() {
+        println!("Lightpanda is already installed. Run `imp browser doctor`.");
+        return Ok(());
+    }
+    let Some((program, args, label)) = browser_install_command() else {
+        return Err(
+            "no supported package manager found; install Lightpanda from https://lightpanda.io/docs/installation/ and run `imp browser doctor`"
+                .into(),
+        );
+    };
+    println!("Install Lightpanda with: {program} {}", args.join(" "));
+    if !yes {
+        return Err("installation requires explicit confirmation; rerun with --yes".into());
+    }
+    let status = tokio::process::Command::new(program)
+        .args(&args)
+        .status()
+        .await?;
+    if !status.success() {
+        return Err(format!("{label} failed with status {status}").into());
+    }
+    println!("Lightpanda installation completed.");
+    run_browser_doctor(false).await
+}
+
+fn browser_install_command() -> Option<(&'static str, Vec<&'static str>, &'static str)> {
+    if cfg!(target_os = "macos") && command_on_path("brew") {
+        return Some((
+            "brew",
+            vec!["install", "lightpanda-io/browser/lightpanda"],
+            "Homebrew installation",
+        ));
+    }
+    None
+}
+
+fn command_on_path(command: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        let candidate = directory.join(command);
+        std::fs::metadata(candidate).is_ok_and(|metadata| metadata.is_file())
     })
 }
 

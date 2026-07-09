@@ -31,6 +31,16 @@ Read-only tools can run in parallel. Mutable or side-effecting tools are seriali
 
 Mutable operations include file writes, edits, shell commands, git mutation, workflow updates, and secret-affecting actions.
 
+Browser runtime commands:
+
+```bash
+imp browser doctor
+imp browser doctor --json
+imp browser install --yes  # Homebrew on macOS
+```
+
+`doctor` validates the resolved configuration, executable version, MCP handshake, and required Lightpanda tool surface. `install` deliberately uses a supported package manager rather than downloading an unverified release binary.
+
 Before starting a session, install Lightpanda and ensure `lightpanda version` succeeds. On macOS with Homebrew: `brew install lightpanda-io/browser/lightpanda`. Browser sessions are isolated Lightpanda subprocesses. Use `start`, retain the returned `session_id`, then call semantic actions such as `navigate`, `observe`, `markdown`, `extract`, `click`, and `fill`. Call `stop` when finished. Lightpanda does not render screenshots. Browser input defaults to `policy.browser_input = "deny"`; explicitly set it to `"allow"` for trusted interactive sessions. Observation and extraction remain read-only. imp disables Lightpanda telemetry and core dumps, bounds response sizes and operation timeouts, and can block private-network targets.
 
 ## Policy interaction

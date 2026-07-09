@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -25,10 +24,7 @@ impl LightpandaClient {
         config: &BrowserConfig,
         cwd: &std::path::Path,
     ) -> Result<Self, String> {
-        let binary = config
-            .binary
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("lightpanda"));
+        let binary = super::resolve_lightpanda_binary(config.binary.as_deref())?;
         let mut command = Command::new(&binary);
         command
             .arg("mcp")

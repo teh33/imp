@@ -132,6 +132,27 @@ fn cli_parses_loop_command() {
 }
 
 #[test]
+fn cli_parses_browser_commands() {
+    let doctor =
+        Cli::try_parse_from(["imp", "browser", "doctor", "--json"]).expect("parse browser doctor");
+    assert!(matches!(
+        doctor.command,
+        Some(Commands::Browser {
+            command: BrowserCommand::Doctor { json: true }
+        })
+    ));
+
+    let install =
+        Cli::try_parse_from(["imp", "browser", "install", "--yes"]).expect("parse browser install");
+    assert!(matches!(
+        install.command,
+        Some(Commands::Browser {
+            command: BrowserCommand::Install { yes: true }
+        })
+    ));
+}
+
+#[test]
 fn cli_parses_workflow_commands() {
     let cli = Cli::try_parse_from([
         "imp",
@@ -208,6 +229,10 @@ fn cli_disposition_routes_headless_modes_to_imp_cli() {
     let workflow_cli =
         Cli::try_parse_from(["imp", "workflow", "list"]).expect("parse workflow command");
     assert_eq!(disposition(&workflow_cli), CliRunDisposition::Headless);
+
+    let browser_cli =
+        Cli::try_parse_from(["imp", "browser", "doctor"]).expect("parse browser command");
+    assert_eq!(disposition(&browser_cli), CliRunDisposition::Headless);
 
     let bare_prompt_cli = Cli::try_parse_from(["imp", "fix", "this"]).expect("parse bare prompt");
     assert_eq!(disposition(&bare_prompt_cli), CliRunDisposition::Headless);
