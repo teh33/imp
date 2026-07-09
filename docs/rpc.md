@@ -11,9 +11,23 @@ Primary implementation area:
 ```bash
 imp --mode rpc
 imp --mode rpc --runtime-json
+imp --mode rpc --session .imp/host-session.jsonl
 ```
 
 `--runtime-json` emits the shared runtime event/state shape alongside legacy JSON fields.
+With `--session PATH`, RPC opens the existing transcript at that exact path or
+creates it there. Relaunching with the same path resumes completed conversation
+history, including consumed follow-up messages.
+
+RPC owns stdin immediately; piped stdin is never consumed as a one-shot prompt.
+After configuration and session initialization, stdout emits:
+
+```json
+{"type":"rpc_ready"}
+```
+
+Hosts must read until `rpc_ready` before sending the first command. Any earlier
+additive events should be preserved or ignored according to the host policy.
 
 After configuration and protocol initialization, stdout emits a readiness barrier:
 
@@ -52,7 +66,8 @@ Command types:
 
 RPC output is also JSON-lines. Events include agent lifecycle, streaming text, tool calls, tool results, policy checks, recovery checkpoints, evidence writes, and runtime state updates.
 
-Host applications should treat unknown event fields as forward-compatible additions.
+Host applications should treat unknown event fields as forward-compatible
+additions and use `rpc_ready` as the initialization barrier.
 
 ## Runtime JSON
 
@@ -62,6 +77,7 @@ With `--runtime-json`, output includes normalized runtime event/state payloads. 
 
 - Read stdout line-by-line and wait for `rpc_ready` before sending commands.
 - Write one JSON command per stdin line.
+- Preserve and reuse the same `--session` path to resume after process restart.
 - Do not assume a single prompt produces a single output message.
 - Handle cancellation and queued follow-ups explicitly.
 - Treat tool output as structured event data, not plain terminal text.

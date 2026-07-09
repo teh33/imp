@@ -222,6 +222,58 @@ impl SessionManager {
         })
     }
 
+    /// Create a new session at an exact caller-owned path.
+    pub fn create_at(cwd: &Path, path: &Path) -> Result<Self> {
+        if path.exists() {
+            return Err(crate::error::Error::Config(format!(
+                "session file already exists: {}",
+                path.display()
+            )));
+        }
+        let session = Self::with_path(cwd, path.to_path_buf());
+        session.write_header()?;
+        Ok(session)
+    }
+
+    /// Open an existing exact path, or create it when it does not exist.
+    pub fn open_or_create(cwd: &Path, path: &Path) -> Result<Self> {
+        if path.exists() {
+            Self::open(path)
+        } else {
+            Self::create_at(cwd, path)
+        }
+    }
+
+    fn with_path(cwd: &Path, path: PathBuf) -> Self {
+        Self {
+            entries: vec![SessionEntry::Header {
+                version: 1,
+                created_at: imp_llm::now(),
+                cwd: cwd.to_string_lossy().to_string(),
+            }],
+            path: Some(path),
+            leaf_id: None,
+            session_name: None,
+            session_summary: None,
+        }
+    }
+
+    fn write_header(&self) -> Result<()> {
+        let path = self.path.as_ref().expect("persisted session has a path");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        let header = self.entries.first().expect("new session has a header");
+        serde_json::to_writer(&mut file, header)?;
+        use std::io::Write;
+        writeln!(file)?;
+        set_private_permissions(path)
+    }
+
     /// Open an existing session file, skipping malformed lines.
     pub fn open(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;

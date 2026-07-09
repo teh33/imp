@@ -292,10 +292,14 @@ followup
 cancel
 ```
 
-Output begins with a versioned `rpc_ready` capability handshake, then includes agent, tool, stream, runtime event, and runtime state payloads. `--runtime-json` emits the shared runtime event/state shape alongside legacy JSON fields.
+Output begins with a versioned `rpc_ready` capability handshake, then includes
+agent, tool, stream, runtime event, and runtime state payloads. `--runtime-json`
+emits the shared runtime event/state shape alongside legacy JSON fields.
+`--session PATH` opens or creates an exact durable transcript that can be reused
+when the RPC process restarts.
 
 ```bash
-imp --mode rpc --runtime-json
+imp --mode rpc --runtime-json --session .imp/host-session.jsonl
 ```
 
 ## Policy

@@ -475,6 +475,7 @@ async fn recv_event_returns_none_after_agent_end_even_if_sender_is_still_owned()
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -551,6 +552,7 @@ async fn abort_marks_wait_as_cancelled() {
         })),
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -597,6 +599,7 @@ async fn prompt_uses_session_history_without_duplicate_active_prompt() {
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -702,6 +705,7 @@ async fn prompt_uses_compacted_active_history_for_follow_up_turns() {
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -760,6 +764,7 @@ fn persist_event_entries_writes_assistant_and_canonical_usage() {
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -798,6 +803,87 @@ fn persist_event_entries_writes_assistant_and_canonical_usage() {
     assert!((cost.total - 0.0031).abs() < 1e-12);
 }
 
+#[tokio::test]
+async fn steer_is_persisted_for_resume() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("project");
+    let path = tmp.path().join("session.jsonl");
+    let model = test_model();
+    let session_mgr = SessionManager::create_at(&cwd, &path).unwrap();
+    let (_agent, handle) = Agent::new(clone_model(&model), cwd.clone());
+    let mut session = ImpSession {
+        agent: None,
+        handle,
+        session_mgr,
+        config: Config::default(),
+        model,
+        auth_store: AuthStore::new(tmp.path().join("auth.json")),
+        model_registry: ModelRegistry::with_builtins(),
+        cwd,
+        agent_task: None,
+        completed_run_result: None,
+        pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
+        context_prefill: Vec::new(),
+        context_prefill_injected: false,
+    };
+    session.steer("preserve the API").await.unwrap();
+
+    let reopened = SessionManager::open(&path).unwrap();
+    let messages = reopened.get_messages();
+    match messages.as_slice() {
+        [imp_llm::Message::User(user)] => match user.content.as_slice() {
+            [ContentBlock::Text { text }] => assert_eq!(text, "preserve the API"),
+            other => panic!("unexpected steer content: {other:?}"),
+        },
+        other => panic!("unexpected messages: {other:?}"),
+    }
+}
+
+#[test]
+fn follow_up_is_persisted_after_preceding_assistant_message() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("project");
+    let path = tmp.path().join("session.jsonl");
+    let model = test_model();
+    let session_mgr = SessionManager::create_at(&cwd, &path).unwrap();
+    let (_agent, handle) = Agent::new(clone_model(&model), cwd.clone());
+    let mut session = ImpSession {
+        agent: None,
+        handle,
+        session_mgr,
+        config: Config::default(),
+        model,
+        auth_store: AuthStore::new(tmp.path().join("auth.json")),
+        model_registry: ModelRegistry::with_builtins(),
+        cwd,
+        agent_task: None,
+        completed_run_result: None,
+        pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::from(["next request".to_string()]),
+        context_prefill: Vec::new(),
+        context_prefill_injected: false,
+    };
+    session.persist_event_entries(&AgentEvent::TurnEnd {
+        index: 0,
+        message: test_assistant_message(456, None),
+        workflow_review: crate::workflow_review::TurnWorkflowReview::no_change(0),
+    });
+    session.persist_next_follow_up();
+
+    let reopened = SessionManager::open(&path).unwrap();
+    let messages = reopened.get_messages();
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(messages[0], imp_llm::Message::Assistant(_)));
+    match &messages[1] {
+        imp_llm::Message::User(user) => match user.content.as_slice() {
+            [ContentBlock::Text { text }] => assert_eq!(text, "next request"),
+            other => panic!("unexpected follow-up content: {other:?}"),
+        },
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
 #[test]
 fn persist_event_entries_skips_usage_record_when_usage_missing() {
     let tmp = TempDir::new().unwrap();
@@ -819,6 +905,7 @@ fn persist_event_entries_skips_usage_record_when_usage_missing() {
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -889,6 +976,7 @@ fn persist_event_entries_writes_tool_results() {
         agent_task: None,
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
+        pending_follow_ups: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };

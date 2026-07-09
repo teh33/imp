@@ -309,6 +309,20 @@ fn append_tool_result_message_persists_redacted_content() {
 }
 
 #[test]
+fn session_open_or_create_uses_exact_path() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("project");
+    let path = tmp.path().join("owned").join("session.jsonl");
+
+    let mut created = SessionManager::open_or_create(&cwd, &path).unwrap();
+    assert_eq!(created.path(), Some(path.as_path()));
+    created.append(make_msg_entry("m1", "hello")).unwrap();
+
+    let reopened = SessionManager::open_or_create(&cwd, &path).unwrap();
+    assert_eq!(reopened.get_messages().len(), 1);
+}
+
+#[test]
 fn session_create_append_reopen() {
     let tmp = TempDir::new().unwrap();
     let session_dir = tmp.path().join("sessions");

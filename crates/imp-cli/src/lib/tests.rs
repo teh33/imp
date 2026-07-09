@@ -543,6 +543,33 @@ fn resolve_custom_openai_model_does_not_switch_to_chatgpt_provider() {
     assert_eq!(provider, "openai");
 }
 
+#[test]
+fn rpc_session_options_open_or_create_explicit_session_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session_path = tmp.path().join("rpc-session.jsonl");
+    let mut cli = default_cli();
+    cli.session = Some(session_path.clone());
+    cli.allow_tools = vec!["read".to_string()];
+    cli.deny_tools = vec!["bash".to_string()];
+    cli.autonomy = Some(AutonomyMode::AllowAllLocal);
+    let ui = Arc::new(RpcUi::new(tokio::sync::mpsc::channel(1).0));
+
+    let options = rpc_session_options(&cli, tmp.path(), &Config::default(), ui);
+    assert!(matches!(
+        options.session,
+        SessionChoice::OpenOrCreate(path) if path == session_path
+    ));
+    assert_eq!(options.autonomy_mode, Some(AutonomyMode::AllowAllLocal));
+    assert!(matches!(
+        options.run_policy.check_tool("read"),
+        imp_core::policy::ToolPolicyDecision::Allowed
+    ));
+    assert!(matches!(
+        options.run_policy.check_tool("bash"),
+        imp_core::policy::ToolPolicyDecision::Denied(_)
+    ));
+}
+
 // ── parse_rpc_command ──────────────────────────────────────────
 
 #[test]

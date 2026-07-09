@@ -63,6 +63,8 @@ pub enum SessionChoice {
     Continue,
     /// Open a specific session file.
     Open(PathBuf),
+    /// Open a specific session file, or create it at that path.
+    OpenOrCreate(PathBuf),
 }
 
 use crate::tools::LuaToolLoader;
@@ -253,6 +255,7 @@ pub struct ImpSession {
     agent_task: Option<JoinHandle<(Agent, Result<()>)>>,
     completed_run_result: Option<Result<()>>,
     pending_persistence_errors: VecDeque<String>,
+    pending_follow_ups: VecDeque<String>,
     /// Context prefill messages, injected once before the first prompt.
     context_prefill: Vec<imp_llm::Message>,
     context_prefill_injected: bool,
@@ -433,6 +436,7 @@ impl ImpSession {
             SessionChoice::Continue => SessionManager::continue_recent(&cwd, &session_dir)?
                 .unwrap_or_else(|| SessionManager::new(&cwd, &session_dir).unwrap()),
             SessionChoice::Open(ref path) => SessionManager::open(path)?,
+            SessionChoice::OpenOrCreate(ref path) => SessionManager::open_or_create(&cwd, path)?,
         };
 
         let mut agent = agent;
@@ -454,6 +458,7 @@ impl ImpSession {
             agent_task: None,
             completed_run_result: None,
             pending_persistence_errors: VecDeque::new(),
+            pending_follow_ups: VecDeque::new(),
         })
     }
 
@@ -474,6 +479,7 @@ impl ImpSession {
 
         self.completed_run_result = None;
         self.pending_persistence_errors.clear();
+        self.pending_follow_ups.clear();
 
         // Persist user message to session
         let msg_id = uuid::Uuid::new_v4().to_string();
@@ -569,21 +575,29 @@ impl ImpSession {
 
     /// Interrupt the agent: delivered after the current tool finishes,
     /// remaining queued tools are skipped.
-    pub async fn steer(&self, text: &str) -> Result<()> {
+    pub async fn steer(&mut self, text: &str) -> Result<()> {
         self.handle
             .command_tx
             .send(AgentCommand::Steer(text.into()))
             .await
-            .map_err(|_| Error::Config("Agent not running".into()))
+            .map_err(|_| Error::Config("Agent not running".into()))?;
+        self.session_mgr.append(SessionEntry::Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
+            message: imp_llm::Message::user(text),
+        })?;
+        Ok(())
     }
 
     /// Follow-up: delivered only after the agent finishes all current work.
-    pub async fn follow_up(&self, text: &str) -> Result<()> {
+    pub async fn follow_up(&mut self, text: &str) -> Result<()> {
         self.handle
             .command_tx
             .send(AgentCommand::FollowUp(text.into()))
             .await
-            .map_err(|_| Error::Config("Agent not running".into()))
+            .map_err(|_| Error::Config("Agent not running".into()))?;
+        self.pending_follow_ups.push_back(text.to_string());
+        Ok(())
     }
 
     /// Cancel the current agent run.
@@ -620,6 +634,9 @@ impl ImpSession {
 
         let event = self.handle.event_rx.recv().await?;
         let events = self.persist_event_entries(&event);
+        if matches!(event, AgentEvent::TurnEnd { .. }) {
+            self.persist_next_follow_up();
+        }
 
         if matches!(event, AgentEvent::AgentEnd { .. }) {
             if let Some(task) = self.agent_task.take() {
@@ -639,6 +656,20 @@ impl ImpSession {
         }
 
         Some(event)
+    }
+
+    fn persist_next_follow_up(&mut self) {
+        let Some(text) = self.pending_follow_ups.pop_front() else {
+            return;
+        };
+        if let Err(error) = self.session_mgr.append(SessionEntry::Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            parent_id: None,
+            message: imp_llm::Message::user(&text),
+        }) {
+            self.pending_persistence_errors
+                .push_back(format!("failed to persist follow-up message: {error}"));
+        }
     }
 
     /// Get mutable access to the raw event receiver.

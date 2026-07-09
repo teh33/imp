@@ -13,7 +13,7 @@ pub use startup_timing::{StartupStage, StartupTiming};
 
 use async_trait::async_trait;
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use imp_core::agent::{Agent, AgentCommand, AgentEvent, AgentHandle};
+use imp_core::agent::AgentEvent;
 use imp_core::config::{AgentMode, Config, ToolOutputDisplay};
 use imp_core::format_error_for_display;
 use imp_core::tools::web::types::SearchProvider;
@@ -22,10 +22,11 @@ use imp_core::tools::{
 };
 use imp_core::workflow::{AutonomyMode, VerificationGate};
 
+#[cfg(test)]
 use imp_core::imp_session::{
-    resolve_runtime_connection, ImpSession, ResolvedRuntimeConnection, RuntimeConnectionIntent,
-    SessionChoice, SessionOptions,
+    resolve_runtime_connection, ResolvedRuntimeConnection, RuntimeConnectionIntent,
 };
+use imp_core::imp_session::{ImpSession, SessionChoice, SessionOptions};
 use imp_core::runtime::RuntimeStateAccumulator;
 use imp_core::session::{SessionEntry, SessionManager};
 use imp_core::ui::{ComponentSpec, NotifyLevel, SelectOption, UserInterface, WidgetContent};
@@ -37,13 +38,11 @@ use imp_llm::oauth::anthropic::AnthropicOAuth;
 use imp_llm::oauth::chatgpt::ChatGptOAuth;
 use imp_llm::oauth::kimi_code::KimiCodeOAuth;
 use imp_llm::provider::ThinkingLevel;
-use imp_llm::providers::create_provider;
-use imp_llm::{truncate_chars_with_suffix, Message, Model, StreamEvent};
+use imp_llm::{truncate_chars_with_suffix, Message, StreamEvent};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::task::JoinHandle;
 
 pub(crate) mod acp;
 mod stats_report;
@@ -1104,6 +1103,14 @@ pub async fn run_headless(cli: Cli) {
         std::process::exit(2);
     }
 
+    if matches!(cli.mode.as_str(), "rpc" | "json") {
+        if let Err(error) = run_rpc_mode(&cli).await {
+            eprintln!("Error: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // Expand @file args into file content context
     let file_context = expand_file_args(&cli.args);
 
@@ -1163,19 +1170,11 @@ pub async fn run_headless(cli: Cli) {
         std::process::exit(1);
     }
 
-    // RPC / JSON modes (JSON-lines stdin/stdout protocol)
-    match cli.mode.as_str() {
-        "rpc" | "json" => {
-            if let Err(e) = run_rpc_mode(&cli).await {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-        }
-        other => {
-            eprintln!("Unknown mode: {other}. Use interactive, chat, rpc, or json.");
-            std::process::exit(1);
-        }
-    }
+    eprintln!(
+        "Unknown mode: {}. Use interactive, chat, rpc, or json.",
+        cli.mode
+    );
+    std::process::exit(1);
 }
 
 fn format_price(price: f64) -> String {
@@ -2213,6 +2212,7 @@ pub fn parse_thinking_level(s: &str) -> ThinkingLevel {
     }
 }
 
+#[cfg(test)]
 fn resolve_model_and_provider(
     cli: &Cli,
     config: &Config,
@@ -2234,17 +2234,6 @@ fn resolve_model_and_provider(
     )?;
 
     Ok((model_id, provider_name))
-}
-
-async fn resolve_provider_api_key(
-    auth_store: &mut AuthStore,
-    provider_name: &str,
-) -> Result<imp_llm::auth::ApiKey, imp_llm::Error> {
-    match provider_name {
-        "openai-codex" => auth_store.resolve_chatgpt_oauth().await,
-        "anthropic" | "kimi-code" => auth_store.resolve_with_refresh(provider_name).await,
-        _ => auth_store.resolve(provider_name),
-    }
 }
 
 fn build_lua_loader(no_tools: bool, cwd: PathBuf) -> Option<imp_core::tools::LuaToolLoader> {
@@ -2316,7 +2305,6 @@ enum RpcInputCommand {
 }
 
 type UiResponseMap = Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>;
-type RpcAgentJoinHandle = JoinHandle<(Agent, imp_core::Result<()>)>;
 
 struct RpcUi {
     stdout_tx: mpsc::Sender<Value>,
@@ -2470,7 +2458,7 @@ impl UserInterface for RpcUi {
 
 const RPC_PROTOCOL: &str = "imp-rpc";
 const RPC_PROTOCOL_VERSION: u64 = 1;
-const RPC_CAPABILITIES: &[&str] = &["prompt", "followup", "steer", "cancel"];
+const RPC_CAPABILITIES: &[&str] = &["durable_sessions", "prompt", "followup", "steer", "cancel"];
 
 fn rpc_ready_event() -> Value {
     json!({
@@ -2481,6 +2469,31 @@ fn rpc_ready_event() -> Value {
     })
 }
 
+struct RpcSessionState {
+    active: bool,
+    stdin_closed: bool,
+    pending_prompts: VecDeque<String>,
+    runtime_state: RuntimeStateAccumulator,
+    sequence: u64,
+}
+
+impl RpcSessionState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            stdin_closed: false,
+            pending_prompts: VecDeque::new(),
+            runtime_state: RuntimeStateAccumulator::new("rpc"),
+            sequence: 0,
+        }
+    }
+}
+
+enum RpcStep {
+    Command(Option<RpcInputCommand>),
+    Event(Option<AgentEvent>),
+}
+
 async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut startup_timer = StartupTimer::new(cli.verbose);
     emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
@@ -2488,268 +2501,172 @@ async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     emit_startup_timing(&mut startup_timer, StartupStage::CwdResolved);
     let config = Config::resolve(&imp_core::storage::global_root(), Some(&cwd))?;
     emit_startup_timing(&mut startup_timer, StartupStage::ConfigResolved);
-    let registry = ModelRegistry::with_builtins();
-    emit_startup_timing(&mut startup_timer, StartupStage::ModelRegistryReady);
-
     let stdout_tx = spawn_json_lines_stdout_writer();
     stdout_tx
         .send(rpc_ready_event())
         .await
         .map_err(|error| io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))?;
     let rpc_ui = Arc::new(RpcUi::new(stdout_tx.clone()));
+    let pending_ui = rpc_ui.pending();
+    let options = rpc_session_options(cli, &cwd, &config, rpc_ui);
+    let mut session = ImpSession::create(options).await?;
+    emit_startup_timing(&mut startup_timer, StartupStage::SessionReady);
+    let _ = stdout_tx.send(json!({ "type": "rpc_ready" })).await;
 
     let (command_tx, mut command_rx) = mpsc::channel(64);
-    tokio::spawn(read_rpc_stdin(
-        command_tx,
-        rpc_ui.pending(),
-        stdout_tx.clone(),
-    ));
-
-    let mut history: Vec<Message> = Vec::new();
-    let mut queued_followups: VecDeque<String> = VecDeque::new();
-    let mut active_command_tx: Option<mpsc::Sender<AgentCommand>> = None;
-    let mut active_join: Option<RpcAgentJoinHandle> = None;
-    let mut stdin_closed = false;
-
-    loop {
-        if let Some(join_handle) = active_join.as_mut() {
-            tokio::select! {
-                maybe_command = command_rx.recv() => {
-                    match maybe_command {
-                        Some(command) => {
-                            process_rpc_command(
-                                command,
-                                cli,
-                                &cwd,
-                                &config,
-                                &registry,
-                                &stdout_tx,
-                                &rpc_ui,
-                                &history,
-                                &mut queued_followups,
-                                &mut active_command_tx,
-                                &mut active_join,
-                            ).await?;
-                        }
-                        None => stdin_closed = true,
-                    }
-                }
-                join_result = join_handle => {
-                    active_join = None;
-                    active_command_tx = None;
-
-                    match join_result {
-                        Ok((agent, _result)) => {
-                            history = agent.messages;
-                        }
-                        Err(error) => {
-                            emit_protocol_error(&stdout_tx, format!("agent task failed: {error}")).await;
-                        }
-                    }
-
-                    if let Some(prompt) = queued_followups.pop_front() {
-                        let (command_tx, join_handle) = spawn_rpc_agent(
-                            cli,
-                            &cwd,
-                            &config,
-                            &registry,
-                            history.clone(),
-                            rpc_ui.clone(),
-                            stdout_tx.clone(),
-                            prompt,
-                        )?;
-                        active_command_tx = Some(command_tx);
-                        active_join = Some(join_handle);
-                    } else if stdin_closed {
-                        break;
-                    }
-                }
-            }
-        } else {
-            match command_rx.recv().await {
-                Some(command) => {
-                    process_rpc_command(
-                        command,
-                        cli,
-                        &cwd,
-                        &config,
-                        &registry,
-                        &stdout_tx,
-                        &rpc_ui,
-                        &history,
-                        &mut queued_followups,
-                        &mut active_command_tx,
-                        &mut active_join,
-                    )
-                    .await?;
-                }
-                None => break,
-            }
-        }
-    }
-
+    tokio::spawn(read_rpc_stdin(command_tx, pending_ui, stdout_tx.clone()));
+    let mut state = RpcSessionState::new();
+    while rpc_step(&mut session, &mut command_rx, &stdout_tx, &mut state).await? {}
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn process_rpc_command(
-    command: RpcInputCommand,
+fn rpc_session_options(
     cli: &Cli,
     cwd: &Path,
     config: &Config,
-    registry: &ModelRegistry,
+    rpc_ui: Arc<RpcUi>,
+) -> SessionOptions {
+    let session = if cli.no_session {
+        SessionChoice::InMemory
+    } else if cli.cont {
+        SessionChoice::Continue
+    } else if let Some(path) = &cli.session {
+        SessionChoice::OpenOrCreate(path.clone())
+    } else {
+        SessionChoice::InMemory
+    };
+    let mut options = SessionOptions {
+        cwd: cwd.to_path_buf(),
+        model: cli.model.clone(),
+        provider: cli.provider.clone(),
+        api_key: cli.api_key.clone(),
+        role: cli.role.clone(),
+        thinking: cli
+            .thinking
+            .as_ref()
+            .map(|value| parse_thinking_level(value)),
+        max_turns: cli.max_turns.or(config.max_turns),
+        autonomy_mode: cli.autonomy,
+        verification_gates: cli_verification_gates(&cli.verify),
+        max_tokens: cli.max_tokens.or(config.max_tokens),
+        system_prompt: cli.system_prompt.clone(),
+        no_tools: cli.no_tools,
+        run_policy: rpc_run_policy(cli),
+        session,
+        ui: Some(rpc_ui),
+        ..Default::default()
+    };
+    if !cli.no_tools {
+        options.lua_loader = build_lua_loader(false, cwd.to_path_buf());
+    }
+    options
+}
+
+fn rpc_run_policy(cli: &Cli) -> imp_core::policy::RunPolicy {
+    let mut policy = imp_core::policy::RunPolicy::default();
+    for tool in &cli.allow_tools {
+        policy = policy.allow_tool(tool);
+    }
+    for tool in &cli.deny_tools {
+        policy = policy.deny_tool(tool);
+    }
+    for pattern in &cli.allow_writes {
+        policy = policy.allow_write(pattern);
+    }
+    for pattern in &cli.deny_writes {
+        policy = policy.deny_write(pattern);
+    }
+    policy
+}
+
+async fn rpc_step(
+    session: &mut ImpSession,
+    command_rx: &mut mpsc::Receiver<RpcInputCommand>,
     stdout_tx: &mpsc::Sender<Value>,
-    rpc_ui: &Arc<RpcUi>,
-    history: &[Message],
-    queued_followups: &mut VecDeque<String>,
-    active_command_tx: &mut Option<mpsc::Sender<AgentCommand>>,
-    active_join: &mut Option<RpcAgentJoinHandle>,
+    state: &mut RpcSessionState,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if !state.active {
+        if state.stdin_closed {
+            return Ok(false);
+        }
+        let Some(command) = command_rx.recv().await else {
+            return Ok(false);
+        };
+        process_rpc_command(command, session, stdout_tx, state).await?;
+        return Ok(true);
+    }
+    let step = tokio::select! {
+        command = command_rx.recv() => RpcStep::Command(command),
+        event = session.recv_event() => RpcStep::Event(event),
+    };
+    match step {
+        RpcStep::Command(Some(command)) => {
+            process_rpc_command(command, session, stdout_tx, state).await?;
+        }
+        RpcStep::Command(None) => state.stdin_closed = true,
+        RpcStep::Event(Some(event)) => process_rpc_event(event, session, stdout_tx, state).await?,
+        RpcStep::Event(None) => state.active = false,
+    }
+    Ok(state.active || !state.stdin_closed)
+}
+
+async fn process_rpc_command(
+    command: RpcInputCommand,
+    session: &mut ImpSession,
+    stdout_tx: &mpsc::Sender<Value>,
+    state: &mut RpcSessionState,
 ) -> Result<(), Box<dyn std::error::Error>> {
     match command {
         RpcInputCommand::Prompt(content) => {
-            if active_join.is_some() {
-                queued_followups.push_back(content);
+            if state.active {
+                state.pending_prompts.push_back(content);
             } else {
-                let (command_tx, join_handle) = spawn_rpc_agent(
-                    cli,
-                    cwd,
-                    config,
-                    registry,
-                    history.to_vec(),
-                    rpc_ui.clone(),
-                    stdout_tx.clone(),
-                    content,
-                )?;
-                *active_command_tx = Some(command_tx);
-                *active_join = Some(join_handle);
-            }
-        }
-        RpcInputCommand::Cancel => {
-            if let Some(command_tx) = active_command_tx.as_ref() {
-                let _ = command_tx.send(AgentCommand::Cancel).await;
-            }
-        }
-        RpcInputCommand::Steer(content) => {
-            if let Some(command_tx) = active_command_tx.as_ref() {
-                let _ = command_tx.send(AgentCommand::Steer(content)).await;
-            } else {
-                emit_protocol_error(stdout_tx, "cannot steer without an active agent").await;
+                session.prompt(&content).await?;
+                state.active = true;
             }
         }
         RpcInputCommand::FollowUp(content) => {
-            if active_join.is_some() {
-                queued_followups.push_back(content);
+            if state.active {
+                session.follow_up(&content).await?;
             } else {
-                let (command_tx, join_handle) = spawn_rpc_agent(
-                    cli,
-                    cwd,
-                    config,
-                    registry,
-                    history.to_vec(),
-                    rpc_ui.clone(),
-                    stdout_tx.clone(),
-                    content,
-                )?;
-                *active_command_tx = Some(command_tx);
-                *active_join = Some(join_handle);
+                session.prompt(&content).await?;
+                state.active = true;
             }
         }
+        RpcInputCommand::Steer(content) if state.active => session.steer(&content).await?,
+        RpcInputCommand::Steer(_) => {
+            emit_protocol_error(stdout_tx, "cannot steer without an active agent").await;
+        }
+        RpcInputCommand::Cancel if state.active => session.cancel().await?,
+        RpcInputCommand::Cancel => {}
     }
-
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_rpc_agent(
-    cli: &Cli,
-    cwd: &Path,
-    config: &Config,
-    registry: &ModelRegistry,
-    history: Vec<Message>,
-    rpc_ui: Arc<RpcUi>,
-    stdout_tx: mpsc::Sender<Value>,
-    prompt: String,
-) -> Result<(mpsc::Sender<AgentCommand>, RpcAgentJoinHandle), Box<dyn std::error::Error>> {
-    let mut startup_timer = StartupTimer::new(cli.verbose);
-    emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
-    let (mut agent, handle) = create_rpc_agent(cli, cwd, config, registry, history, rpc_ui)?;
-    let command_tx = handle.command_tx.clone();
-
-    tokio::spawn(forward_rpc_events(handle, stdout_tx));
-
-    emit_startup_timing(&mut startup_timer, StartupStage::PromptReady);
-    let join_handle = tokio::spawn(async move {
-        let result = agent.run(prompt).await;
-        (agent, result)
-    });
-    emit_startup_timing(&mut startup_timer, StartupStage::RunLoopStarted);
-
-    Ok((command_tx, join_handle))
-}
-
-fn create_rpc_agent(
-    cli: &Cli,
-    cwd: &Path,
-    config: &Config,
-    registry: &ModelRegistry,
-    history: Vec<Message>,
-    rpc_ui: Arc<RpcUi>,
-) -> Result<(Agent, AgentHandle), Box<dyn std::error::Error>> {
-    let mut startup_timer = StartupTimer::new(cli.verbose);
-    emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
-    let auth_path = imp_core::storage::global_auth_path();
-    let mut auth_store =
-        AuthStore::load(&auth_path).unwrap_or_else(|_| AuthStore::new(auth_path.clone()));
-    emit_startup_timing(&mut startup_timer, StartupStage::AuthLoaded);
-    let (model_id, provider_name) =
-        resolve_model_and_provider(cli, config, registry, &auth_store).map_err(io::Error::other)?;
-    emit_startup_timing(&mut startup_timer, StartupStage::ModelResolved);
-
-    let provider = create_provider(&provider_name)
-        .ok_or_else(|| io::Error::other(format!("Unknown provider: {provider_name}")))?;
-    emit_startup_timing(&mut startup_timer, StartupStage::ProviderReady);
-
-    let meta = registry
-        .resolve_meta(&model_id, Some(&provider_name))
-        .ok_or_else(|| io::Error::other(format!("Model not found: {model_id}")))?;
-
-    if let Some(ref key) = cli.api_key {
-        auth_store.set_runtime_key(&provider_name, key.clone());
+async fn process_rpc_event(
+    event: AgentEvent,
+    session: &mut ImpSession,
+    stdout_tx: &mpsc::Sender<Value>,
+    state: &mut RpcSessionState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    state.sequence += 1;
+    let runtime_event = event.to_runtime_event("rpc", state.sequence);
+    state.runtime_state.apply(&runtime_event);
+    let ended = matches!(event, AgentEvent::AgentEnd { .. });
+    let value = rpc_agent_event_to_json_with_runtime(
+        &event,
+        &runtime_event,
+        &state.runtime_state.snapshot(),
+    );
+    let _ = stdout_tx.send(value).await;
+    if ended {
+        state.active = false;
+        if let Some(prompt) = state.pending_prompts.pop_front() {
+            session.prompt(&prompt).await?;
+            state.active = true;
+        }
     }
-
-    let api_key = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(resolve_provider_api_key(&mut auth_store, &provider_name))
-    })?;
-    emit_startup_timing(&mut startup_timer, StartupStage::ApiKeyResolved);
-    let model = Model {
-        meta,
-        provider: Arc::from(provider),
-    };
-
-    // Apply CLI thinking level override to config.
-    let mut agent_config = config.clone();
-    if let Some(ref thinking) = cli.thinking {
-        agent_config.thinking = Some(parse_thinking_level(thinking));
-    }
-
-    let rpc_ui_clone = rpc_ui.clone() as Arc<dyn UserInterface>;
-    let lua_cwd = cwd.to_path_buf();
-    let mut builder =
-        imp_core::builder::AgentBuilder::new(agent_config, cwd.to_path_buf(), model, api_key)
-            .lua_tool_loader(move |policy, tools| {
-                let user_config_dir = Config::user_config_dir();
-                imp_lua::init_lua_extensions(&user_config_dir, Some(&lua_cwd), tools, policy);
-            });
-    if let Some(ref prompt) = cli.system_prompt {
-        builder = builder.system_prompt(prompt.clone());
-    }
-    let (mut agent, handle) = builder.build()?;
-    emit_startup_timing(&mut startup_timer, StartupStage::AgentBuilt);
-    agent.ui = rpc_ui_clone;
-    agent.messages = history;
-
-    Ok((agent, handle))
+    Ok(())
 }
 
 fn spawn_json_lines_stdout_writer() -> mpsc::Sender<Value> {
@@ -2865,23 +2782,6 @@ async fn deliver_ui_response(value: Value, pending_ui: &UiResponseMap) -> Result
     response_tx
         .send(result)
         .map_err(|_| format!("failed to deliver ui_response: {id}"))
-}
-
-async fn forward_rpc_events(mut handle: AgentHandle, stdout_tx: mpsc::Sender<Value>) {
-    let mut runtime_state = RuntimeStateAccumulator::new("rpc");
-    let mut sequence = 0_u64;
-    while let Some(event) = handle.event_rx.recv().await {
-        sequence += 1;
-        let runtime_event = event.to_runtime_event("rpc", sequence);
-        runtime_state.apply(&runtime_event);
-        let _ = stdout_tx
-            .send(rpc_agent_event_to_json_with_runtime(
-                &event,
-                &runtime_event,
-                &runtime_state.snapshot(),
-            ))
-            .await;
-    }
 }
 
 #[cfg(test)]
