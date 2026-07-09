@@ -24,6 +24,7 @@ fn config_default_values() {
         AutoCompactionMode::NearThreshold
     );
     assert_eq!(config.guardrails, GuardrailConfig::default());
+    assert_eq!(config.policy.browser_input, PolicyAction::Ask);
 }
 
 #[test]

@@ -322,8 +322,8 @@ pub struct PolicyConfig {
     #[serde(default)]
     pub network: PolicyAction,
     /// Policy for browser input such as click, fill, and key actions.
-    /// Defaults to deny; set to allow only for trusted interactive sessions.
-    #[serde(default = "default_policy_deny")]
+    /// Defaults to ask in interactive sessions and fails closed headlessly.
+    #[serde(default = "default_policy_ask")]
     pub browser_input: PolicyAction,
     /// Policy for secret reveal/direct secret access. Defaults to deny.
     #[serde(default = "default_policy_deny")]
@@ -344,12 +344,16 @@ impl Default for PolicyConfig {
             outside_workspace_writes: PolicyAction::Deny,
             shell: PolicyAction::Allow,
             network: PolicyAction::Allow,
-            browser_input: PolicyAction::Deny,
+            browser_input: PolicyAction::Ask,
             secrets: PolicyAction::Deny,
             extension_network: PolicyAction::Deny,
             deny_approval_required: false,
         }
     }
+}
+
+fn default_policy_ask() -> PolicyAction {
+    PolicyAction::Ask
 }
 
 fn default_policy_deny() -> PolicyAction {

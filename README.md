@@ -353,7 +353,7 @@ obey_robots = true
 block_private_networks = true
 
 [policy]
-browser_input = "deny"
+browser_input = "ask"
 
 [web]
 search_provider = "exa"

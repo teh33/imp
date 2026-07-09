@@ -10,7 +10,9 @@ use crate::agent::{
 };
 use crate::guardrails::{self, GuardrailLevel};
 use crate::hooks::HookEvent;
-use crate::reference_monitor::{PolicyReason, PolicySource, ToolPolicyContext, ToolPolicyDecision};
+use crate::reference_monitor::{
+    PolicyReason, PolicySource, PolicyTraceRecord, ToolPolicyContext, ToolPolicyDecision,
+};
 use crate::trust::{Provenance, RiskLabel};
 
 use super::{extract_file_path, RepeatedToolCallCheck, RepeatedToolCallState};
@@ -78,6 +80,24 @@ fn tool_result_provenance(tool_name: &str, args: &serde_json::Value) -> Provenan
     }
 }
 
+fn redacted_tool_args(tool_name: &str, args: &serde_json::Value) -> serde_json::Value {
+    if tool_name != "browser" {
+        return args.clone();
+    }
+    let mut redacted = args.clone();
+    let sensitive = redacted
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|action| matches!(action, "fill" | "select"));
+    if sensitive {
+        if let Some(value) = redacted.get_mut("value") {
+            let length = value.as_str().map(str::len).unwrap_or(0);
+            *value = serde_json::Value::String(format!("[redacted, {length} characters]"));
+        }
+    }
+    redacted
+}
+
 fn attach_provenance_to_result(
     mut result: imp_llm::ToolResultMessage,
     provenance: &Provenance,
@@ -120,7 +140,68 @@ fn attach_policy_trace_to_result(
     result
 }
 
+#[cfg(test)]
+mod approval_tests {
+    use super::redacted_tool_args;
+    use serde_json::json;
+
+    #[test]
+    fn browser_fill_args_are_redacted_for_events() {
+        let args = json!({"action": "fill", "selector": "#email", "value": "secret@example.com"});
+        let redacted = redacted_tool_args("browser", &args);
+        assert_eq!(redacted["value"], "[redacted, 18 characters]");
+        assert_eq!(args["value"], "secret@example.com");
+    }
+
+    #[test]
+    fn non_browser_args_are_unchanged() {
+        let args = json!({"value": "visible"});
+        assert_eq!(redacted_tool_args("other", &args), args);
+    }
+}
+
 impl Agent {
+    async fn resolve_tool_approval(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        context: &ToolPolicyContext,
+        request: PolicyTraceRecord,
+    ) -> PolicyTraceRecord {
+        let Some(tool) = self.tools.get(tool_name) else {
+            return request;
+        };
+        let approval = tool.request_approval(args, self.ui.clone()).await;
+        let decision = if approval.approved {
+            ToolPolicyDecision::Allow {
+                reasons: vec![PolicyReason::new(
+                    PolicySource::UserApproval,
+                    "user_approval_granted",
+                    format!("User approved browser input for {} scope.", approval.scope),
+                )],
+            }
+        } else {
+            ToolPolicyDecision::Deny {
+                reason: PolicyReason::new(
+                    PolicySource::UserApproval,
+                    "user_approval_denied",
+                    approval.reason.clone(),
+                ),
+            }
+        };
+        crate::reference_monitor::ReferenceMonitor.record(
+            context,
+            decision,
+            serde_json::json!({
+                "approval": {
+                    "scope": approval.scope,
+                    "approved": approval.approved,
+                    "request": request.decision,
+                }
+            }),
+        )
+    }
+
     pub(super) fn plan_tools(&self, calls: Vec<(String, String, serde_json::Value)>) -> ToolPlan {
         let calls = calls
             .into_iter()
@@ -278,11 +359,12 @@ impl Agent {
         ))
         .await;
 
+        let display_args = redacted_tool_args(tool_name, &args);
         if let RepeatedToolCallCheck::Block(loop_result) = repeat_check {
             self.emit(AgentEvent::ToolExecutionStart {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
-                args: args.clone(),
+                args: display_args.clone(),
             })
             .await;
             self.emit(AgentEvent::ToolExecutionEnd {
@@ -314,7 +396,7 @@ impl Agent {
         self.emit(AgentEvent::ToolExecutionStart {
             tool_call_id: call_id.to_string(),
             tool_name: tool_name.to_string(),
-            args: args.clone(),
+            args: display_args,
         })
         .await;
 
@@ -353,8 +435,15 @@ impl Agent {
         policy_context.policy = self.config.policy.clone();
         policy_context.apply_workflow_contract(self.workflow_contract());
 
-        let policy_record =
+        let mut policy_record =
             crate::reference_monitor::ReferenceMonitor.evaluate(&policy_context, &self.run_policy);
+        if tool_name == "browser"
+            && matches!(policy_record.decision, ToolPolicyDecision::AskUser { .. })
+        {
+            policy_record = self
+                .resolve_tool_approval(tool_name, &args, &policy_context, policy_record)
+                .await;
+        }
         let policy_block = policy_block_reason(&policy_record.decision);
         self.emit(AgentEvent::PolicyChecked {
             record: policy_record.clone(),

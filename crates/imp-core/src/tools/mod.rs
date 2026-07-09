@@ -87,6 +87,24 @@ pub trait Tool: Send + Sync {
         self.policy_metadata()
     }
 
+    /// Resolve an interactive approval request for this call.
+    async fn request_approval(
+        &self,
+        _params: &serde_json::Value,
+        ui: Arc<dyn crate::ui::UserInterface>,
+    ) -> ToolApproval {
+        if !ui.has_ui() {
+            return ToolApproval::denied("interactive approval is unavailable");
+        }
+        match ui
+            .confirm("Approve tool action", "Allow this tool action once?")
+            .await
+        {
+            Some(true) => ToolApproval::approved("once"),
+            _ => ToolApproval::denied("user denied or cancelled approval"),
+        }
+    }
+
     /// Execute the tool.
     async fn execute(
         &self,
@@ -526,6 +544,31 @@ impl ToolOutput {
             is_error: self.is_error,
             details: self.details,
             timestamp: imp_llm::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolApproval {
+    pub approved: bool,
+    pub scope: String,
+    pub reason: String,
+}
+
+impl ToolApproval {
+    pub fn approved(scope: impl Into<String>) -> Self {
+        Self {
+            approved: true,
+            scope: scope.into(),
+            reason: "user approved tool action".into(),
+        }
+    }
+
+    pub fn denied(reason: impl Into<String>) -> Self {
+        Self {
+            approved: false,
+            scope: "none".into(),
+            reason: reason.into(),
         }
     }
 }

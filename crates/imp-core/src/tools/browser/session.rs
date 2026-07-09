@@ -9,6 +9,7 @@ use super::BrowserSessionId;
 pub(crate) struct BrowserSession {
     pub(crate) client: LightpandaClient,
     pub(crate) last_used: Instant,
+    pub(crate) domain: Option<String>,
 }
 
 pub(crate) struct BrowserSessionManager {
@@ -41,6 +42,7 @@ impl BrowserSessionManager {
             BrowserSession {
                 client,
                 last_used: Instant::now(),
+                domain: None,
             },
         );
         Ok(id)
@@ -69,6 +71,22 @@ impl BrowserSessionManager {
             }
         }
         output.map_err(|error| format!("{error}; browser session terminated"))
+    }
+
+    pub(crate) fn contains(&self, id: &BrowserSessionId) -> bool {
+        self.sessions.contains_key(id)
+    }
+
+    pub(crate) fn domain(&self, id: &BrowserSessionId) -> Option<String> {
+        self.sessions
+            .get(id)
+            .and_then(|session| session.domain.clone())
+    }
+
+    pub(crate) fn set_domain(&mut self, id: &BrowserSessionId, domain: Option<String>) {
+        if let Some(session) = self.sessions.get_mut(id) {
+            session.domain = domain;
+        }
     }
 
     pub(crate) async fn stop(&mut self, id: &BrowserSessionId) -> Result<(), String> {

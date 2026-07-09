@@ -1,4 +1,5 @@
 mod action;
+mod approval;
 mod client;
 mod config;
 mod diagnostics;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use action::BrowserAction;
+use approval::{request_browser_approval, BrowserApprovalStore};
 use async_trait::async_trait;
 pub use config::BrowserConfig;
 pub use diagnostics::{
@@ -32,7 +34,7 @@ impl BrowserSessionId {
         Self(format!("browser_{}", uuid::Uuid::new_v4().simple()))
     }
 
-    fn parse(value: &str) -> std::result::Result<Self, String> {
+    pub(crate) fn parse(value: &str) -> std::result::Result<Self, String> {
         if !value.starts_with("browser_")
             || value.len() != 40
             || !value[8..]
@@ -52,6 +54,7 @@ impl BrowserSessionId {
 pub struct BrowserTool {
     config: BrowserConfig,
     sessions: Arc<Mutex<BrowserSessionManager>>,
+    approvals: Arc<Mutex<BrowserApprovalStore>>,
 }
 
 impl BrowserTool {
@@ -59,6 +62,7 @@ impl BrowserTool {
         Self {
             config,
             sessions: Arc::new(Mutex::new(BrowserSessionManager::new())),
+            approvals: Arc::new(Mutex::new(BrowserApprovalStore::default())),
         }
     }
 }
@@ -105,6 +109,7 @@ impl Tool for BrowserTool {
                 | BrowserAction::Scroll
         );
         metadata.default_requires_approval = false;
+        metadata.requires_approval = action.requires_fresh_approval(params);
         if let Some(url) = params.get("url").and_then(Value::as_str) {
             metadata.resource_scopes.push(ResourceScope::Network {
                 host: url::Url::parse(url)
@@ -113,6 +118,36 @@ impl Tool for BrowserTool {
             });
         }
         metadata
+    }
+
+    async fn request_approval(
+        &self,
+        params: &Value,
+        ui: Arc<dyn crate::ui::UserInterface>,
+    ) -> crate::tools::ToolApproval {
+        let action = match BrowserAction::parse(params) {
+            Ok(action) => action,
+            Err(error) => return crate::tools::ToolApproval::denied(error),
+        };
+        if let Err(error) = action.validate(params) {
+            return crate::tools::ToolApproval::denied(error);
+        }
+        let session_id = match session_id(params) {
+            Ok(session_id) => session_id,
+            Err(error) => return crate::tools::ToolApproval::denied(error),
+        };
+        let mut approval_params = params.clone();
+        let sessions = self.sessions.lock().await;
+        if !sessions.contains(&session_id) {
+            return crate::tools::ToolApproval::denied("browser session was not found");
+        }
+        if let Some(domain) = sessions.domain(&session_id) {
+            if let Some(params) = approval_params.as_object_mut() {
+                params.insert("approval_domain".into(), Value::String(domain));
+            }
+        }
+        drop(sessions);
+        request_browser_approval(&self.approvals, &approval_params, ui).await
     }
 
     async fn execute(&self, _call_id: &str, params: Value, ctx: ToolContext) -> Result<ToolOutput> {
@@ -155,7 +190,13 @@ impl Tool for BrowserTool {
                 .await
         };
         match output {
-            Ok(output) => Ok(tool_output(action, &session_id, call.tool, output)),
+            Ok(output) => {
+                if action == BrowserAction::Navigate {
+                    let domain = navigated_domain(&output.text);
+                    self.sessions.lock().await.set_domain(&session_id, domain);
+                }
+                Ok(tool_output(action, &session_id, call.tool, output))
+            }
             Err(error) => Ok(ToolOutput::error(error)),
         }
     }
@@ -198,6 +239,7 @@ impl BrowserTool {
     }
 
     async fn stop(&self, id: &BrowserSessionId) -> Result<ToolOutput> {
+        self.approvals.lock().await.remove_session(id);
         match self.sessions.lock().await.stop(id).await {
             Ok(()) => Ok(ToolOutput {
                 content: vec![imp_llm::ContentBlock::Text {
@@ -225,6 +267,14 @@ fn session_id(params: &Value) -> std::result::Result<BrowserSessionId, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| "browser action requires session_id".to_string())?;
     BrowserSessionId::parse(value)
+}
+
+fn navigated_domain(output: &str) -> Option<String> {
+    let url = output.lines().find_map(|line| line.strip_prefix("URL: "))?;
+    url::Url::parse(url)
+        .ok()?
+        .host_str()
+        .map(|host| host.to_ascii_lowercase())
 }
 
 fn tool_output(

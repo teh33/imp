@@ -94,6 +94,7 @@ fn action_policy_distinguishes_observation_from_input() {
     let observe =
         json!({"action": "observe", "session_id": "browser_00000000000000000000000000000000"});
     let click = json!({"action": "click", "session_id": "browser_00000000000000000000000000000000", "selector": "button"});
+    let submit = json!({"action": "click", "session_id": "browser_00000000000000000000000000000000", "selector": "button[type=submit]"});
     assert!(tool.is_readonly_call(&observe));
     assert!(!tool.is_readonly_call(&click));
     assert_eq!(
@@ -101,10 +102,10 @@ fn action_policy_distinguishes_observation_from_input() {
         crate::reference_monitor::ToolActionKind::Read
     );
     assert!(tool.policy_metadata_for(&observe).network);
-    assert_eq!(
-        tool.policy_metadata_for(&click).action_kind,
-        crate::reference_monitor::ToolActionKind::Browser
-    );
+    assert!(!tool.policy_metadata_for(&click).requires_approval);
+    assert!(tool.policy_metadata_for(&submit).requires_approval);
+    let scroll = json!({"action": "scroll", "session_id": "browser_00000000000000000000000000000000", "y": 600});
+    assert!(!tool.policy_metadata_for(&scroll).requires_approval);
 }
 
 #[tokio::test]

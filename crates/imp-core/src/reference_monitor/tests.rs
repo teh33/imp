@@ -464,12 +464,23 @@ fn config_policy_maps_representative_tool_classes() {
     );
 
     let mut browser = test_context("browser", ToolActionKind::Browser);
+    browser.metadata.requires_approval = false;
+    assert_reason_code(
+        monitor.check_tool_action(&browser, &policy),
+        "policy_browser_input_requires_approval",
+    );
+    browser.metadata.requires_approval = true;
+    assert_reason_code(
+        monitor.check_tool_action(&browser, &policy),
+        "policy_browser_input_requires_approval",
+    );
+    browser.policy.browser_input = PolicyAction::Allow;
+    assert!(monitor.check_tool_action(&browser, &policy).is_allowed());
+    browser.policy.browser_input = PolicyAction::Deny;
     assert_reason_code(
         monitor.check_tool_action(&browser, &policy),
         "policy_browser_input_denied",
     );
-    browser.policy.browser_input = PolicyAction::Allow;
-    assert!(monitor.check_tool_action(&browser, &policy).is_allowed());
 
     let mut secret = test_context("secret", ToolActionKind::Secret);
     secret.metadata.secrets = true;

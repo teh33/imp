@@ -362,7 +362,10 @@ impl ReferenceMonitor {
             "Ask the user to explicitly authorize the action or provide trusted workflow policy."
                 .into(),
         );
-        if context.action_kind == ToolActionKind::Network {
+        if matches!(
+            context.action_kind,
+            ToolActionKind::Network | ToolActionKind::Browser
+        ) {
             ToolPolicyDecision::AskUser { reason }
         } else {
             ToolPolicyDecision::Deny { reason }
@@ -407,6 +410,16 @@ impl ReferenceMonitor {
             };
         }
 
+        if context.action_kind == ToolActionKind::Browser {
+            return self.apply_policy_action(
+                context.policy.browser_input,
+                "policy_browser_input_requires_approval",
+                "Browser input requires approval by policy.",
+                "policy_browser_input_denied",
+                "Browser input is denied by policy.",
+            );
+        }
+
         if context.metadata.network
             || matches!(context.resource_scope, ResourceScope::Network { .. })
         {
@@ -416,16 +429,6 @@ impl ReferenceMonitor {
                 "Network actions require approval by policy.",
                 "policy_network_denied",
                 "Network actions are denied by policy.",
-            );
-        }
-
-        if context.action_kind == ToolActionKind::Browser {
-            return self.apply_policy_action(
-                context.policy.browser_input,
-                "policy_browser_input_requires_approval",
-                "Browser input requires approval by policy.",
-                "policy_browser_input_denied",
-                "Browser input is denied by policy.",
             );
         }
 
@@ -983,6 +986,7 @@ pub enum PolicySource {
     TrustLabel,
     ToolManifest,
     DangerousGrant,
+    UserApproval,
     Unknown,
 }
 

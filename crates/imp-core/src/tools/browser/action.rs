@@ -25,6 +25,32 @@ pub(crate) enum BrowserAction {
 }
 
 impl BrowserAction {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Navigate => "navigate",
+            Self::Observe => "observe",
+            Self::Markdown => "markdown",
+            Self::Links => "links",
+            Self::StructuredData => "structured_data",
+            Self::Forms => "forms",
+            Self::Extract => "extract",
+            Self::Click => "click",
+            Self::Fill => "fill",
+            Self::Press => "press",
+            Self::Select => "select",
+            Self::Check => "check",
+            Self::Scroll => "scroll",
+            Self::Wait => "wait",
+            Self::GetUrl => "get_url",
+            Self::Console => "console",
+        }
+    }
+
+    pub(crate) fn has_sensitive_value(self) -> bool {
+        matches!(self, Self::Fill | Self::Select)
+    }
     pub(crate) fn parse(params: &Value) -> Result<Self, String> {
         let action = params
             .get("action")
@@ -97,6 +123,24 @@ impl BrowserAction {
             Self::Wait => require_string(params, "selector"),
             Self::Extract => require_string(params, "schema"),
             _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn requires_fresh_approval(self, params: &Value) -> bool {
+        match self {
+            Self::Press => params
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| key.eq_ignore_ascii_case("enter")),
+            Self::Fill => target_contains(params, &["password", "passwd", "credential"]),
+            Self::Click => target_contains(
+                params,
+                &[
+                    "submit", "purchase", "buy", "send", "publish", "delete", "remove", "confirm",
+                    "accept", "agree",
+                ],
+            ),
+            _ => false,
         }
     }
 
@@ -177,6 +221,14 @@ impl McpCall {
             arguments: Value::Object(arguments),
         }
     }
+}
+
+fn target_contains(params: &Value, terms: &[&str]) -> bool {
+    params
+        .get("selector")
+        .and_then(Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|selector| terms.iter().any(|term| selector.contains(term)))
 }
 
 fn require_string(params: &Value, field: &str) -> Result<(), String> {
