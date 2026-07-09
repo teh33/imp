@@ -197,6 +197,21 @@ fn terminal_title_uses_nine_dot_spinner_while_streaming() {
     assert_eq!(app.terminal_title(), "⠼ — my chat");
 }
 
+#[test]
+fn terminal_title_uses_question_mark_while_waiting_for_answer() {
+    let mut app = make_app();
+    app.session.set_name("my chat");
+    app.is_streaming = true;
+    app.ask_state = Some(crate::views::ask_bar::AskState::new(
+        "Which option?".into(),
+        String::new(),
+        Vec::new(),
+        false,
+    ));
+
+    assert_eq!(app.terminal_title(), "? — my chat");
+}
+
 #[tokio::test]
 async fn terminal_title_spins_while_agent_start_is_pending() {
     let mut app = make_app();

@@ -675,7 +675,9 @@ impl App {
             .or_else(|| self.session.title(48))
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| "chat".to_string());
-        let identity = if self.loop_state.is_some() {
+        let identity = if self.ask_state.is_some() {
+            "?"
+        } else if self.loop_state.is_some() {
             if self.config.ui.animations == imp_core::config::AnimationLevel::None {
                 title_loop_glyph()
             } else {
