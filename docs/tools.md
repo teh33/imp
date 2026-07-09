@@ -20,6 +20,7 @@ Primary implementation areas:
 | `git` | status, diff, log, stage, commit, restore, worktrees |
 | `scan` | tree-sitter code search/extraction |
 | `web` | web/GitHub search and page reads |
+| `browser` | stateful JavaScript browsing through Lightpanda semantic tools |
 | `ask_user` | structured user prompts |
 | `workflow` | workflow list/show/validate/run/update |
 | `memory` | persistent agent memory |
@@ -29,6 +30,8 @@ Primary implementation areas:
 Read-only tools can run in parallel. Mutable or side-effecting tools are serialized and checked by runtime policy.
 
 Mutable operations include file writes, edits, shell commands, git mutation, workflow updates, and secret-affecting actions.
+
+Before starting a session, install Lightpanda and ensure `lightpanda version` succeeds. On macOS with Homebrew: `brew install lightpanda-io/browser/lightpanda`. Browser sessions are isolated Lightpanda subprocesses. Use `start`, retain the returned `session_id`, then call semantic actions such as `navigate`, `observe`, `markdown`, `extract`, `click`, and `fill`. Call `stop` when finished. Lightpanda does not render screenshots. Browser input defaults to `policy.browser_input = "deny"`; explicitly set it to `"allow"` for trusted interactive sessions. Observation and extraction remain read-only. imp disables Lightpanda telemetry and core dumps, bounds response sizes and operation timeouts, and can block private-network targets.
 
 ## Policy interaction
 

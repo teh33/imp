@@ -9,6 +9,7 @@ use crate::guardrails::GuardrailConfig;
 use crate::hooks::HookDef;
 use crate::roles::{RoleDef, RoleRegistry, RoleRegistryError};
 use crate::storage;
+use crate::tools::browser::BrowserConfig;
 use crate::tools::web::types::WebConfig;
 
 /// Agent mode — controls which tools and workflow actions the agent may use.
@@ -31,7 +32,7 @@ pub enum AgentMode {
 }
 
 const WORKER_TOOLS: &[&str] = &[
-    "read", "scan", "web", "write", "edit", "bash", "git", "workflow", "ask_user",
+    "read", "scan", "web", "browser", "write", "edit", "bash", "git", "workflow", "ask_user",
 ];
 const ORCHESTRATOR_TOOLS: &[&str] = &["read", "scan", "web", "workflow", "git", "ask_user"];
 const PLANNER_TOOLS: &[&str] = &["read", "scan", "web", "git", "workflow", "ask_user"];
@@ -320,6 +321,10 @@ pub struct PolicyConfig {
     /// Policy for network actions. Defaults to allow for normal user ergonomics.
     #[serde(default)]
     pub network: PolicyAction,
+    /// Policy for browser input such as click, fill, and key actions.
+    /// Defaults to deny; set to allow only for trusted interactive sessions.
+    #[serde(default = "default_policy_deny")]
+    pub browser_input: PolicyAction,
     /// Policy for secret reveal/direct secret access. Defaults to deny.
     #[serde(default = "default_policy_deny")]
     pub secrets: PolicyAction,
@@ -339,6 +344,7 @@ impl Default for PolicyConfig {
             outside_workspace_writes: PolicyAction::Deny,
             shell: PolicyAction::Allow,
             network: PolicyAction::Allow,
+            browser_input: PolicyAction::Deny,
             secrets: PolicyAction::Deny,
             extension_network: PolicyAction::Deny,
             deny_approval_required: false,
@@ -502,6 +508,10 @@ pub struct Config {
     /// UI display settings.
     #[serde(default)]
     pub ui: UiConfig,
+
+    /// Browser automation settings.
+    #[serde(default)]
+    pub browser: BrowserConfig,
 
     /// Web tool settings.
     #[serde(default)]
@@ -1033,6 +1043,9 @@ impl Config {
         }
         if other.ui != UiConfig::default() {
             self.ui = other.ui;
+        }
+        if other.browser != BrowserConfig::default() {
+            self.browser = other.browser;
         }
         if other.web != WebConfig::default() {
             self.web = other.web;

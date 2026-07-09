@@ -67,6 +67,13 @@ fn tool_result_provenance(tool_name: &str, args: &serde_json::Value) -> Provenan
             .unwrap_or_else(|| {
                 Provenance::tool_observation(tool_name).with_risk(RiskLabel::NetworkDerived)
             }),
+        "browser" => args
+            .get("url")
+            .and_then(|value| value.as_str())
+            .map(Provenance::external_web)
+            .unwrap_or_else(|| {
+                Provenance::tool_observation(tool_name).with_risk(RiskLabel::NetworkDerived)
+            }),
         _ => Provenance::tool_observation(tool_name),
     }
 }
@@ -119,7 +126,7 @@ impl Agent {
             .into_iter()
             .enumerate()
             .map(|(index, (id, name, args))| {
-                let risk = if self.tools.get(&name).is_some_and(|tool| tool.is_readonly()) {
+                let risk = if self.tools.is_readonly_call(&name, &args).unwrap_or(false) {
                     ToolRisk::ReadOnly
                 } else if matches!(name.as_str(), "bash" | "git") {
                     ToolRisk::ExternalSideEffect
@@ -322,7 +329,7 @@ impl Agent {
         let mut policy_context = ToolPolicyContext::new(
             tool_name,
             self.tools
-                .policy_metadata(tool_name)
+                .policy_metadata_for(tool_name, &args)
                 .map(|metadata| metadata.action_kind)
                 .unwrap_or_default(),
         );
@@ -337,7 +344,7 @@ impl Agent {
         policy_context.args = args.clone();
         policy_context.args_hash = Some(args_hash.clone());
         policy_context.cwd = Some(self.cwd.clone());
-        if let Some(metadata) = self.tools.policy_metadata(tool_name) {
+        if let Some(metadata) = self.tools.policy_metadata_for(tool_name, &args) {
             policy_context.resource_scope =
                 metadata.resource_scope_for_args(Some(&self.cwd), &args);
             policy_context.metadata = metadata;

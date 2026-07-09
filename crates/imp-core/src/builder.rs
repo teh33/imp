@@ -333,6 +333,7 @@ impl AgentBuilder {
 
         let phase_started = Instant::now();
         register_native_tools(&mut agent.tools);
+        register_browser_tool(&mut agent.tools, &self.config);
         if let Some(extra) = self.extra_tools {
             extra(&mut agent.tools);
         }
@@ -438,6 +439,14 @@ fn apply_role_tool_policy(tools: &mut ToolRegistry, role: &Role) {
         RoleToolPolicy::AllExcept(denied) => {
             tools.retain(|name| !denied.iter().any(|tool| tool == name))
         }
+    }
+}
+
+fn register_browser_tool(tools: &mut ToolRegistry, config: &Config) {
+    if config.browser.enabled {
+        tools.register(Arc::new(crate::tools::browser::BrowserTool::new(
+            config.browser.clone(),
+        )));
     }
 }
 

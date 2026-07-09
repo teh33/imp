@@ -106,6 +106,39 @@ search_provider = "exa"
 }
 
 #[test]
+fn browser_config_loads_from_toml() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(
+        &path,
+        r#"
+[browser]
+enabled = false
+binary = "/opt/lightpanda"
+max_sessions = 4
+timeout_ms = 5000
+idle_timeout_seconds = 60
+max_response_bytes = 65536
+obey_robots = false
+block_private_networks = false
+
+[policy]
+browser_input = "allow"
+"#,
+    )
+    .unwrap();
+    let config = Config::load(&path).unwrap();
+    assert!(!config.browser.enabled);
+    assert_eq!(
+        config.browser.binary.as_deref(),
+        Some(std::path::Path::new("/opt/lightpanda"))
+    );
+    assert_eq!(config.browser.max_sessions, 4);
+    assert_eq!(config.browser.timeout_ms, 5000);
+    assert_eq!(config.policy.browser_input, PolicyAction::Allow);
+}
+
+#[test]
 fn config_load_missing_file_returns_default() {
     let dir = TempDir::new().unwrap();
     let config_path = dir.path().join("nonexistent.toml");

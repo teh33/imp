@@ -148,6 +148,7 @@ imp secrets doctor
 | `git` | status, diff, log, stage, commit, restore, worktrees |
 | `scan` | tree-sitter code search/extraction |
 | `web` | web/GitHub search and page reads |
+| `browser` | stateful semantic browsing through Lightpanda |
 | `ask_user` | structured user prompts |
 | `workflow` | workflow list/show/validate/run/update |
 
@@ -332,6 +333,17 @@ model = "sonnet"
 thinking = "medium"
 max_turns = 100
 max_tokens = 2048
+
+[browser]
+enabled = true
+# binary = "/path/to/lightpanda"
+max_sessions = 2
+timeout_ms = 30000
+obey_robots = true
+block_private_networks = true
+
+[policy]
+browser_input = "deny"
 
 [web]
 search_provider = "exa"

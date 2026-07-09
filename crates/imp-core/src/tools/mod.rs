@@ -1,5 +1,6 @@
 pub mod ask;
 pub mod bash;
+pub mod browser;
 pub mod code_intel;
 pub mod edit;
 pub mod git;
@@ -74,6 +75,16 @@ pub trait Tool: Send + Sync {
     /// Metadata used by the runtime reference monitor.
     fn policy_metadata(&self) -> ToolMetadata {
         ToolMetadata::for_tool_name(self.name(), self.is_readonly())
+    }
+
+    /// Whether this specific call only reads state.
+    fn is_readonly_call(&self, _params: &serde_json::Value) -> bool {
+        self.is_readonly()
+    }
+
+    /// Reference-monitor metadata for this specific call.
+    fn policy_metadata_for(&self, _params: &serde_json::Value) -> ToolMetadata {
+        self.policy_metadata()
     }
 
     /// Execute the tool.
@@ -659,6 +670,20 @@ impl ToolRegistry {
     /// Lookup reference monitor metadata by canonical name or alias.
     pub fn policy_metadata(&self, name: &str) -> Option<ToolMetadata> {
         self.get(name).map(|tool| tool.policy_metadata())
+    }
+
+    /// Lookup reference-monitor metadata for a specific call.
+    pub fn policy_metadata_for(
+        &self,
+        name: &str,
+        params: &serde_json::Value,
+    ) -> Option<ToolMetadata> {
+        self.get(name).map(|tool| tool.policy_metadata_for(params))
+    }
+
+    /// Return whether a specific call is safe to parallelize as read-only.
+    pub fn is_readonly_call(&self, name: &str, params: &serde_json::Value) -> Option<bool> {
+        self.get(name).map(|tool| tool.is_readonly_call(params))
     }
 
     /// Number of registered tools.

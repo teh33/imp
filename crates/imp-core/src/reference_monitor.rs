@@ -419,6 +419,16 @@ impl ReferenceMonitor {
             );
         }
 
+        if context.action_kind == ToolActionKind::Browser {
+            return self.apply_policy_action(
+                context.policy.browser_input,
+                "policy_browser_input_requires_approval",
+                "Browser input requires approval by policy.",
+                "policy_browser_input_denied",
+                "Browser input is denied by policy.",
+            );
+        }
+
         if context.metadata.workspace_write
             || matches!(
                 context.action_kind,
@@ -570,6 +580,7 @@ impl ToolPolicyContext {
                     | ToolActionKind::Edit
                     | ToolActionKind::Execute
                     | ToolActionKind::Network
+                    | ToolActionKind::Browser
                     | ToolActionKind::Git
                     | ToolActionKind::Workflow
                     | ToolActionKind::Secret
@@ -650,6 +661,7 @@ pub enum ToolActionKind {
     Execute,
     Search,
     Network,
+    Browser,
     Git,
     Workflow,
     AskUser,
@@ -828,6 +840,7 @@ impl ToolActionKind {
             "write" => Self::Write,
             "edit" | "multi_edit" => Self::Edit,
             "bash" | "shell" => Self::Execute,
+            "browser" => Self::Browser,
             "git" => Self::Git,
             "workflow" => Self::Workflow,
             "web" => Self::Network,
