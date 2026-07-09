@@ -138,6 +138,55 @@ pub struct RecoveryCheckpoint {
     pub timestamp: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserEventKind {
+    SessionStarted,
+    Navigated,
+    Observation,
+    InputRequested,
+    InputApproved,
+    InputDenied,
+    ActionCompleted,
+    SessionFailed,
+    SessionStopped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserEvent {
+    pub kind: BrowserEventKind,
+    pub session_id: Option<String>,
+    pub engine: String,
+    pub action: Option<String>,
+    pub url: Option<String>,
+    pub domain: Option<String>,
+    pub title: Option<String>,
+    pub approval_scope: Option<String>,
+    pub outcome: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub sequence: Option<u64>,
+    pub interactive_elements: Option<u32>,
+}
+
+impl BrowserEvent {
+    pub fn new(kind: BrowserEventKind) -> Self {
+        Self {
+            kind,
+            session_id: None,
+            engine: "lightpanda".into(),
+            action: None,
+            url: None,
+            domain: None,
+            title: None,
+            approval_scope: None,
+            outcome: None,
+            duration_ms: None,
+            sequence: None,
+            interactive_elements: None,
+        }
+    }
+}
+
 /// Events emitted by the agent during execution.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -184,6 +233,9 @@ pub enum AgentEvent {
         tool_call_id: String,
         result: imp_llm::ToolResultMessage,
         provenance: Option<Provenance>,
+    },
+    Browser {
+        event: BrowserEvent,
     },
     ContextUsageUpdated {
         used: u32,
@@ -343,6 +395,9 @@ impl AgentEvent {
                     output_preview: tool_result_summary(result),
                     ..RuntimeToolCall::default()
                 },
+            },
+            AgentEvent::Browser { event } => RuntimeEventKind::BrowserUpdated {
+                event: event.clone(),
             },
             AgentEvent::ContextUsageUpdated {
                 used,
@@ -504,6 +559,11 @@ impl AgentEvent {
                 }),
             )
             .with_tool_call_id(tool_call_id.clone()),
+            AgentEvent::Browser { event } => TraceEvent::new(
+                run_id,
+                browser_trace_kind(event.kind),
+                serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+            ),
             AgentEvent::ContextUsageUpdated {
                 used,
                 display_window,
@@ -616,6 +676,20 @@ impl AgentEvent {
                 TraceEvent::new(run_id, "error", json!({ "error": error }))
             }
         }
+    }
+}
+
+fn browser_trace_kind(kind: BrowserEventKind) -> &'static str {
+    match kind {
+        BrowserEventKind::SessionStarted => "browser.session.started",
+        BrowserEventKind::Navigated => "browser.navigated",
+        BrowserEventKind::Observation => "browser.observation",
+        BrowserEventKind::InputRequested => "browser.input.requested",
+        BrowserEventKind::InputApproved => "browser.input.approved",
+        BrowserEventKind::InputDenied => "browser.input.denied",
+        BrowserEventKind::ActionCompleted => "browser.action.completed",
+        BrowserEventKind::SessionFailed => "browser.session.failed",
+        BrowserEventKind::SessionStopped => "browser.session.stopped",
     }
 }
 

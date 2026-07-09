@@ -10,6 +10,7 @@ pub(crate) struct BrowserSession {
     pub(crate) client: LightpandaClient,
     pub(crate) last_used: Instant,
     pub(crate) domain: Option<String>,
+    pub(crate) sequence: u64,
 }
 
 pub(crate) struct BrowserSessionManager {
@@ -43,6 +44,7 @@ impl BrowserSessionManager {
                 client,
                 last_used: Instant::now(),
                 domain: None,
+                sequence: 0,
             },
         );
         Ok(id)
@@ -61,6 +63,7 @@ impl BrowserSessionManager {
             .get_mut(id)
             .ok_or_else(|| format!("browser session `{}` was not found", id.as_str()))?;
         session.last_used = Instant::now();
+        session.sequence = session.sequence.saturating_add(1);
         let output = session
             .client
             .call(tool, arguments, cancelled, timeout)
@@ -75,6 +78,10 @@ impl BrowserSessionManager {
 
     pub(crate) fn contains(&self, id: &BrowserSessionId) -> bool {
         self.sessions.contains_key(id)
+    }
+
+    pub(crate) fn sequence(&self, id: &BrowserSessionId) -> Option<u64> {
+        self.sessions.get(id).map(|session| session.sequence)
     }
 
     pub(crate) fn domain(&self, id: &BrowserSessionId) -> Option<String> {

@@ -825,6 +825,29 @@ fn persist_event_entries_skips_usage_record_when_usage_missing() {
 }
 
 #[test]
+fn persist_event_entries_writes_sanitized_browser_events() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join("project");
+    let session_dir = tmp.path().join("sessions");
+    let model = test_model();
+    let mut session_mgr = SessionManager::new(&cwd, &session_dir).unwrap();
+    let mut event = crate::agent::BrowserEvent::new(crate::agent::BrowserEventKind::Navigated);
+    event.session_id = Some("browser-1".into());
+    event.domain = Some("example.com".into());
+    let persisted = session_mgr
+        .persist_agent_event_entries(&model, &AgentEvent::Browser { event })
+        .unwrap();
+    assert_eq!(persisted, vec!["browser event"]);
+    assert!(session_mgr.entries().iter().any(|entry| matches!(
+        entry,
+        SessionEntry::Custom { custom_type, data, .. }
+            if custom_type == crate::session::BROWSER_EVENT_CUSTOM_TYPE
+                && data["domain"] == "example.com"
+                && data.get("value").is_none()
+    )));
+}
+
+#[test]
 fn persist_event_entries_writes_tool_results() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().join("project");

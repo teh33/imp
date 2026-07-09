@@ -135,6 +135,18 @@ impl RunEvent {
                 run_event.tool_name = Some(result.tool_name.clone());
                 run_event.status = Some(if result.is_error { "error" } else { "ok" }.into());
             }
+            AgentEvent::Browser { event } => {
+                run_event.status = event.outcome.clone();
+                run_event.summary = Some(truncate(
+                    &format!(
+                        "{:?} session={} domain={}",
+                        event.kind,
+                        event.session_id.as_deref().unwrap_or("none"),
+                        event.domain.as_deref().unwrap_or("none")
+                    ),
+                    240,
+                ));
+            }
             AgentEvent::ContextUsageUpdated {
                 used,
                 display_window,
@@ -370,6 +382,17 @@ fn agent_event_kind(event: &AgentEvent) -> &'static str {
         AgentEvent::ToolExecutionStart { .. } => "tool.started",
         AgentEvent::ToolOutputDelta { .. } => "tool.output_delta",
         AgentEvent::ToolExecutionEnd { .. } => "tool.completed",
+        AgentEvent::Browser { event } => match event.kind {
+            crate::agent::BrowserEventKind::SessionStarted => "browser.session.started",
+            crate::agent::BrowserEventKind::Navigated => "browser.navigated",
+            crate::agent::BrowserEventKind::Observation => "browser.observation",
+            crate::agent::BrowserEventKind::InputRequested => "browser.input.requested",
+            crate::agent::BrowserEventKind::InputApproved => "browser.input.approved",
+            crate::agent::BrowserEventKind::InputDenied => "browser.input.denied",
+            crate::agent::BrowserEventKind::ActionCompleted => "browser.action.completed",
+            crate::agent::BrowserEventKind::SessionFailed => "browser.session.failed",
+            crate::agent::BrowserEventKind::SessionStopped => "browser.session.stopped",
+        },
         AgentEvent::ContextUsageUpdated { .. } => "context.usage",
         AgentEvent::Warning { .. } => "warning",
         AgentEvent::Timing { .. } => "timing",

@@ -280,6 +280,17 @@ impl App {
                 // Persist tool result to session so resume has full conversation
                 let _ = self.session.append_tool_result_message(result);
             }
+            AgentEvent::Browser { event } => {
+                self.status_items.insert(
+                    "browser".to_string(),
+                    format!(
+                        "{:?} · {}",
+                        event.kind,
+                        event.domain.as_deref().unwrap_or("Lightpanda")
+                    ),
+                );
+                self.invalidate_chat_render_cache();
+            }
             AgentEvent::ContextUsageUpdated {
                 used,
                 display_window,

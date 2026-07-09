@@ -46,6 +46,7 @@ pub(super) fn agent_event_kind(event: &AgentEvent) -> &'static str {
         AgentEvent::ToolOutputDelta { .. } => "tool_output_delta",
         AgentEvent::ToolExecutionEnd { .. } => "tool_execution_end",
         AgentEvent::AgentEnd { .. } => "agent_end",
+        AgentEvent::Browser { .. } => "browser_event",
         AgentEvent::ContextUsageUpdated { .. } => "context_usage",
         AgentEvent::Warning { .. } => "warning",
         AgentEvent::RecoveryCheckpoint { .. } => "recovery_checkpoint",

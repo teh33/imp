@@ -2900,6 +2900,10 @@ fn rpc_agent_event_legacy_json(event: &AgentEvent) -> Value {
             "timestamp": result.timestamp,
             "provenance": provenance,
         }),
+        AgentEvent::Browser { event } => json!({
+            "type": "browser_event",
+            "event": event,
+        }),
         AgentEvent::Timing { timing } => json!({
             "type": "timing",
             "turn": timing.turn,

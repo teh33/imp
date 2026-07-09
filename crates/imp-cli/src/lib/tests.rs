@@ -692,6 +692,23 @@ fn rpc_agent_event_agent_end_serializes_failed_status() {
 }
 
 #[test]
+fn rpc_agent_event_browser_event_is_structured_and_sanitized() {
+    let mut browser =
+        imp_core::agent::BrowserEvent::new(imp_core::agent::BrowserEventKind::InputApproved);
+    browser.session_id = Some("browser_01".into());
+    browser.domain = Some("example.com".into());
+    browser.action = Some("fill".into());
+    browser.approval_scope = Some("domain".into());
+    browser.outcome = Some("approved".into());
+    let json = rpc_agent_event_to_json(&AgentEvent::Browser { event: browser });
+    assert_eq!(json["type"], "browser_event");
+    assert_eq!(json["event"]["kind"], "input_approved");
+    assert_eq!(json["event"]["domain"], "example.com");
+    assert!(json.to_string().find("value").is_none());
+    assert_eq!(json["runtime_event"]["kind"]["type"], "browser_updated");
+}
+
+#[test]
 fn rpc_agent_event_timing() {
     let event = AgentEvent::Timing {
         timing: TimingEvent {

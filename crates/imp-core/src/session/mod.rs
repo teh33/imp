@@ -14,6 +14,7 @@ use crate::usage::{
     usage_records_from_session, SessionUsageRecord, UsageRecordV1, USAGE_CUSTOM_TYPE,
 };
 
+pub const BROWSER_EVENT_CUSTOM_TYPE: &str = "browser-event";
 pub const CHECKPOINT_CUSTOM_TYPE: &str = "checkpoint-record";
 pub const CHECKPOINT_RECORD_VERSION: u32 = 1;
 pub const RECOVERY_CHECKPOINT_CUSTOM_TYPE: &str = "recovery-checkpoint";
@@ -513,6 +514,16 @@ impl SessionManager {
         let mut persisted = Vec::new();
 
         match event {
+            AgentEvent::Browser { event } => {
+                let entry = SessionEntry::Custom {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    parent_id: None,
+                    custom_type: BROWSER_EVENT_CUSTOM_TYPE.into(),
+                    data: serde_json::to_value(event)?,
+                };
+                self.append(entry)?;
+                persisted.push("browser event");
+            }
             AgentEvent::ToolExecutionEnd { result, .. } => {
                 self.append_tool_result_message(result.clone())?;
                 persisted.push("tool result");

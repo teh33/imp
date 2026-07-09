@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::RunFinalStatus;
+use crate::agent::{BrowserEvent, BrowserEventKind, RunFinalStatus};
 use crate::workflow::{
     AutonomyMode, ChildWorkflowRun, ChildWorkflowStatus, VerificationGate, WorkspaceScope,
     WorktreeCloseoutResult, WorktreeRunMetadata,
@@ -75,6 +75,9 @@ pub enum RuntimeEventKind {
     },
     ToolCompleted {
         tool_call: RuntimeToolCall,
+    },
+    BrowserUpdated {
+        event: BrowserEvent,
     },
     ApprovalPending {
         approval: RuntimeApprovalRef,
@@ -282,6 +285,9 @@ impl RuntimeStateAccumulator {
                     format!("{}:{:?}", tool_call.name, tool_call.status),
                 );
             }
+            RuntimeEventKind::BrowserUpdated { event } => {
+                self.apply_browser_event(event);
+            }
             RuntimeEventKind::ApprovalPending { approval } => {
                 self.snapshot.phase = RuntimePhase::WaitingForApproval;
                 upsert_approval(&mut self.snapshot.pending_approvals, approval.clone());
@@ -395,8 +401,55 @@ impl RuntimeStateAccumulator {
         }
     }
 
+    fn apply_browser_event(&mut self, event: &BrowserEvent) {
+        self.snapshot.status_items.insert(
+            "browser".into(),
+            format!(
+                "{:?}:{}",
+                event.kind,
+                event.domain.as_deref().unwrap_or("local")
+            ),
+        );
+        let approval = browser_approval_ref(event);
+        match event.kind {
+            BrowserEventKind::InputRequested => {
+                self.snapshot.phase = RuntimePhase::WaitingForApproval;
+                upsert_approval(&mut self.snapshot.pending_approvals, approval);
+            }
+            BrowserEventKind::InputApproved | BrowserEventKind::InputDenied => {
+                self.snapshot
+                    .pending_approvals
+                    .retain(|pending| pending.id != approval.id);
+                self.snapshot.status_items.insert(
+                    "last-approval".into(),
+                    format!("{}:{:?}", approval.summary, approval.status),
+                );
+                self.snapshot.phase = RuntimePhase::Running;
+            }
+            _ => {}
+        }
+    }
+
     pub fn snapshot(&self) -> RuntimeStateSnapshot {
         self.snapshot.clone()
+    }
+}
+
+fn browser_approval_ref(event: &BrowserEvent) -> RuntimeApprovalRef {
+    let session = event.session_id.as_deref().unwrap_or("browser");
+    let action = event.action.as_deref().unwrap_or("input");
+    RuntimeApprovalRef {
+        id: format!("{session}:{action}"),
+        summary: format!(
+            "browser {action} on {}",
+            event.domain.as_deref().unwrap_or("current page")
+        ),
+        status: match event.kind {
+            BrowserEventKind::InputApproved => RuntimeApprovalStatus::Approved,
+            BrowserEventKind::InputDenied => RuntimeApprovalStatus::Denied,
+            _ => RuntimeApprovalStatus::Pending,
+        },
+        requested_by: Some("browser".into()),
     }
 }
 

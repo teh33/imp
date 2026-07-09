@@ -35,7 +35,8 @@ mod run_loop;
 mod tool_execution;
 
 pub use events::{
-    AgentEvent, RecoveryCheckpoint, RecoveryCheckpointKind, TimingEvent, TimingStage,
+    AgentEvent, BrowserEvent, BrowserEventKind, RecoveryCheckpoint, RecoveryCheckpointKind,
+    TimingEvent, TimingStage,
 };
 pub use loop_state::{
     ContinueReason, LoopDecision, PlannedToolCall, RunFinalStatus, StopReason, ToolExecutionMode,

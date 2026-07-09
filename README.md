@@ -338,6 +338,8 @@ imp browser install --yes
 
 The doctor checks resolved configuration, executable version, MCP compatibility, and required tools. Installation uses Homebrew on macOS and requires explicit confirmation. Direct release downloads are not used because upstream does not publish checksum assets.
 
+Structured browser lifecycle events are available in JSONL RPC as `browser_event` records and in the canonical runtime stream as `browser_updated`. Payloads contain sanitized lifecycle metadata rather than filled values or page content.
+
 ```toml
 model = "sonnet"
 thinking = "medium"

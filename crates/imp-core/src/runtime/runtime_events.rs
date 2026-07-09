@@ -85,6 +85,35 @@ fn runtime_state_accumulator_tracks_unknown_events_without_corrupting_state() {
 }
 
 #[test]
+fn browser_approval_events_update_runtime_state() {
+    let mut accumulator = RuntimeStateAccumulator::new("run-1");
+    let mut browser = BrowserEvent::new(BrowserEventKind::InputRequested);
+    browser.session_id = Some("browser-1".into());
+    browser.action = Some("click".into());
+    browser.domain = Some("example.com".into());
+    accumulator.apply(&RuntimeEvent {
+        kind: RuntimeEventKind::BrowserUpdated {
+            event: browser.clone(),
+        },
+        ..RuntimeEvent::default()
+    });
+    assert_eq!(
+        accumulator.snapshot().phase,
+        RuntimePhase::WaitingForApproval
+    );
+    assert_eq!(accumulator.snapshot().pending_approvals.len(), 1);
+
+    browser.kind = BrowserEventKind::InputApproved;
+    browser.approval_scope = Some("domain".into());
+    accumulator.apply(&RuntimeEvent {
+        kind: RuntimeEventKind::BrowserUpdated { event: browser },
+        ..RuntimeEvent::default()
+    });
+    assert_eq!(accumulator.snapshot().phase, RuntimePhase::Running);
+    assert!(accumulator.snapshot().pending_approvals.is_empty());
+}
+
+#[test]
 fn runtime_event_kind_names_are_stable_json_contract() {
     let cases = [
         (
@@ -103,6 +132,14 @@ fn runtime_event_kind_names_are_stable_json_contract() {
                 output_delta: "ok".into(),
             },
             "tool_output",
+        ),
+        (
+            RuntimeEventKind::BrowserUpdated {
+                event: crate::agent::BrowserEvent::new(
+                    crate::agent::BrowserEventKind::SessionStarted,
+                ),
+            },
+            "browser_updated",
         ),
         (
             RuntimeEventKind::WorktreeUpdated {

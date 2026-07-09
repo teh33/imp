@@ -5,8 +5,8 @@ use futures::future::join_all;
 use tokio::sync::mpsc;
 
 use crate::agent::{
-    Agent, AgentEvent, RecoveryCheckpointKind, TimingEvent, TimingStage, ToolExecutionMode,
-    ToolPlan, ToolRisk,
+    Agent, AgentEvent, BrowserEvent, BrowserEventKind, RecoveryCheckpointKind, TimingEvent,
+    TimingStage, ToolExecutionMode, ToolPlan, ToolRisk,
 };
 use crate::guardrails::{self, GuardrailLevel};
 use crate::hooks::HookEvent;
@@ -142,8 +142,37 @@ fn attach_policy_trace_to_result(
 
 #[cfg(test)]
 mod approval_tests {
-    use super::redacted_tool_args;
+    use super::{browser_result_event, redacted_tool_args};
+    use crate::agent::BrowserEventKind;
     use serde_json::json;
+
+    #[test]
+    fn browser_navigation_event_uses_final_url_and_sanitized_metadata() {
+        let result = imp_llm::ToolResultMessage {
+            tool_call_id: "call".into(),
+            tool_name: "browser".into(),
+            content: vec![imp_llm::ContentBlock::Text {
+                text: "URL: https://final.example/path\nTitle: Final".into(),
+            }],
+            is_error: false,
+            details: serde_json::json!({
+                "session_id": "browser_00000000000000000000000000000000",
+                "sequence": 3
+            }),
+            timestamp: 0,
+        };
+        let event = browser_result_event(
+            &json!({"action": "navigate", "url": "https://start.example"}),
+            &result,
+            std::time::Duration::from_millis(12),
+        );
+        assert_eq!(event.kind, BrowserEventKind::Navigated);
+        assert_eq!(event.url.as_deref(), Some("https://final.example/path"));
+        assert_eq!(event.domain.as_deref(), Some("final.example"));
+        assert_eq!(event.title.as_deref(), Some("Final"));
+        assert_eq!(event.sequence, Some(3));
+        assert_eq!(event.duration_ms, Some(12));
+    }
 
     #[test]
     fn browser_fill_args_are_redacted_for_events() {
@@ -158,6 +187,128 @@ mod approval_tests {
         let args = json!({"value": "visible"});
         assert_eq!(redacted_tool_args("other", &args), args);
     }
+}
+
+fn approval_event_fields(
+    record: &PolicyTraceRecord,
+) -> (BrowserEventKind, Option<&str>, &'static str) {
+    let approval = record.details.get("approval");
+    let approved = approval
+        .and_then(|value| value.get("approved"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let scope = approval
+        .and_then(|value| value.get("scope"))
+        .and_then(serde_json::Value::as_str);
+    if approved {
+        (BrowserEventKind::InputApproved, scope, "approved")
+    } else {
+        (BrowserEventKind::InputDenied, scope, "denied")
+    }
+}
+
+fn browser_event_from_args(kind: BrowserEventKind, args: &serde_json::Value) -> BrowserEvent {
+    let mut event = BrowserEvent::new(kind);
+    event.session_id = args
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    event.action = args
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    event.url = args
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    event.domain = event
+        .url
+        .as_deref()
+        .and_then(|url| url::Url::parse(url).ok())
+        .and_then(|url| url.host_str().map(str::to_string));
+    event
+}
+
+fn browser_result_event(
+    args: &serde_json::Value,
+    result: &imp_llm::ToolResultMessage,
+    duration: std::time::Duration,
+) -> BrowserEvent {
+    let action = args
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let kind = match (action, result.is_error) {
+        ("start", true) => BrowserEventKind::SessionFailed,
+        (_, true) if browser_session_failed(result) => BrowserEventKind::SessionFailed,
+        ("start", false) => BrowserEventKind::SessionStarted,
+        ("stop", false) => BrowserEventKind::SessionStopped,
+        ("navigate", false) => BrowserEventKind::Navigated,
+        ("observe", false) => BrowserEventKind::Observation,
+        _ => BrowserEventKind::ActionCompleted,
+    };
+    let mut event = browser_event_from_args(kind, args);
+    let details = &result.details;
+    if action == "navigate" && !result.is_error {
+        let navigation_text = result.content.iter().find_map(|block| match block {
+            imp_llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        });
+        event.url = navigation_text
+            .and_then(|text| text.lines().find_map(|line| line.strip_prefix("URL: ")))
+            .map(str::to_string)
+            .or(event.url);
+        event.title = navigation_text
+            .and_then(|text| text.lines().find_map(|line| line.strip_prefix("Title: ")))
+            .map(str::to_string);
+    }
+    event.duration_ms = Some(duration.as_millis() as u64);
+    event.outcome = Some(if result.is_error { "error" } else { "ok" }.into());
+    event.session_id = details
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or(event.session_id);
+    event.url = details
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or(event.url);
+    event.domain = details
+        .get("domain")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            event
+                .url
+                .as_deref()
+                .and_then(|url| url::Url::parse(url).ok())
+                .and_then(|url| url.host_str().map(str::to_string))
+        })
+        .or(event.domain);
+    event.title = details
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or(event.title);
+    event.sequence = details.get("sequence").and_then(serde_json::Value::as_u64);
+    event.interactive_elements = details
+        .get("interactive_elements")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|count| u32::try_from(count).ok());
+    event
+}
+
+fn browser_session_failed(result: &imp_llm::ToolResultMessage) -> bool {
+    result.content.iter().any(|block| match block {
+        imp_llm::ContentBlock::Text { text } => {
+            let text = text.to_ascii_lowercase();
+            text.contains("session terminated")
+                || text.contains("lightpanda exited")
+                || text.contains("could not start lightpanda")
+        }
+        _ => false,
+    })
 }
 
 impl Agent {
@@ -200,6 +351,31 @@ impl Agent {
                 }
             }),
         )
+    }
+
+    async fn emit_browser_approval_event(
+        &self,
+        kind: BrowserEventKind,
+        args: &serde_json::Value,
+        scope: Option<&str>,
+        outcome: Option<&str>,
+    ) {
+        let mut event = browser_event_from_args(kind, args);
+        event.approval_scope = scope.map(str::to_string);
+        event.outcome = outcome.map(str::to_string);
+        self.emit(AgentEvent::Browser { event }).await;
+    }
+
+    async fn emit_browser_result_event(
+        &self,
+        args: &serde_json::Value,
+        result: &imp_llm::ToolResultMessage,
+        duration: std::time::Duration,
+    ) {
+        self.emit(AgentEvent::Browser {
+            event: browser_result_event(args, result, duration),
+        })
+        .await;
     }
 
     pub(super) fn plan_tools(&self, calls: Vec<(String, String, serde_json::Value)>) -> ToolPlan {
@@ -437,11 +613,17 @@ impl Agent {
 
         let mut policy_record =
             crate::reference_monitor::ReferenceMonitor.evaluate(&policy_context, &self.run_policy);
-        if tool_name == "browser"
-            && matches!(policy_record.decision, ToolPolicyDecision::AskUser { .. })
-        {
+        let browser_approval_requested = tool_name == "browser"
+            && policy_context.action_kind == crate::reference_monitor::ToolActionKind::Browser
+            && matches!(policy_record.decision, ToolPolicyDecision::AskUser { .. });
+        if browser_approval_requested {
+            self.emit_browser_approval_event(BrowserEventKind::InputRequested, &args, None, None)
+                .await;
             policy_record = self
                 .resolve_tool_approval(tool_name, &args, &policy_context, policy_record)
+                .await;
+            let (kind, scope, outcome) = approval_event_fields(&policy_record);
+            self.emit_browser_approval_event(kind, &args, scope, Some(outcome))
                 .await;
         }
         let policy_block = policy_block_reason(&policy_record.decision);
@@ -450,6 +632,18 @@ impl Agent {
         })
         .await;
         if let Some(reason) = policy_block {
+            if tool_name == "browser"
+                && policy_context.action_kind == crate::reference_monitor::ToolActionKind::Browser
+                && !browser_approval_requested
+            {
+                self.emit_browser_approval_event(
+                    BrowserEventKind::InputDenied,
+                    &args,
+                    None,
+                    Some("denied"),
+                )
+                .await;
+            }
             let mut result = crate::tools::ToolOutput::error(legacy_policy_error_message(
                 tool_name, self.mode, &reason,
             ))
@@ -633,6 +827,10 @@ impl Agent {
         let provenance = tool_result_provenance(tool_name, &args);
         result = attach_provenance_to_result(result, &provenance);
         result = attach_policy_trace_to_result(result, &policy_record);
+        if tool_name == "browser" {
+            self.emit_browser_result_event(&args, &result, tool_started_at.elapsed())
+                .await;
+        }
         self.emit(AgentEvent::ToolExecutionEnd {
             tool_call_id: call_id.to_string(),
             result: result.clone(),

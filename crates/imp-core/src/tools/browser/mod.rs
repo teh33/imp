@@ -189,13 +189,35 @@ impl Tool for BrowserTool {
                 )
                 .await
         };
+        let (domain, sequence) = {
+            let sessions = self.sessions.lock().await;
+            (sessions.domain(&session_id), sessions.sequence(&session_id))
+        };
         match output {
             Ok(output) => {
                 if action == BrowserAction::Navigate {
                     let domain = navigated_domain(&output.text);
-                    self.sessions.lock().await.set_domain(&session_id, domain);
+                    self.sessions
+                        .lock()
+                        .await
+                        .set_domain(&session_id, domain.clone());
+                    return Ok(tool_output(
+                        action,
+                        &session_id,
+                        call.tool,
+                        output,
+                        domain,
+                        sequence,
+                    ));
                 }
-                Ok(tool_output(action, &session_id, call.tool, output))
+                Ok(tool_output(
+                    action,
+                    &session_id,
+                    call.tool,
+                    output,
+                    domain,
+                    sequence,
+                ))
             }
             Err(error) => Ok(ToolOutput::error(error)),
         }
@@ -230,6 +252,7 @@ impl BrowserTool {
                     "action": "start",
                     "engine": "lightpanda",
                     "session_id": id.as_str(),
+                    "sequence": 0,
                     "capabilities": {"semantic": true, "screenshots": false}
                 }),
                 is_error: false,
@@ -245,7 +268,7 @@ impl BrowserTool {
                 content: vec![imp_llm::ContentBlock::Text {
                     text: format!("Stopped browser session `{}`.", id.as_str()),
                 }],
-                details: json!({"action": "stop", "session_id": id.as_str()}),
+                details: json!({"action": "stop", "session_id": id.as_str(), "sequence": null}),
                 is_error: false,
             }),
             Err(error) => Ok(ToolOutput::error(error)),
@@ -282,6 +305,8 @@ fn tool_output(
     id: &BrowserSessionId,
     backend_tool: &str,
     output: client::McpOutput,
+    domain: Option<String>,
+    sequence: Option<u64>,
 ) -> ToolOutput {
     let mut text = output.text;
     let total_bytes = text.len();
@@ -293,6 +318,8 @@ fn tool_output(
         text.truncate(boundary);
         text.push_str("\n[truncated]");
     }
+    let interactive_elements = (action == BrowserAction::Observe)
+        .then(|| text.lines().filter(|line| !line.trim().is_empty()).count());
     ToolOutput {
         content: vec![imp_llm::ContentBlock::Text { text }],
         details: json!({
@@ -301,6 +328,9 @@ fn tool_output(
             "session_id": id.as_str(),
             "backend_tool": backend_tool,
             "total_bytes": total_bytes,
+            "domain": domain,
+            "sequence": sequence,
+            "interactive_elements": interactive_elements,
             "truncated": total_bytes > MAX_TOOL_OUTPUT_BYTES
         }),
         is_error: output.is_error,
