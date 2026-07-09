@@ -80,7 +80,10 @@ impl ContextBudget {
 
 /// Resolve the budget for a model metadata entry.
 pub fn context_budget_for_meta(meta: &imp_llm::ModelMeta) -> ContextBudget {
-    if meta.id == "gpt-5.5" {
+    if matches!(
+        meta.id.as_str(),
+        "gpt-5.5" | "gpt-5.6" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna"
+    ) {
         return ContextBudget {
             total_window: 1_050_000,
             input_limit: 922_000,

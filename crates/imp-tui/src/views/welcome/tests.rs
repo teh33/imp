@@ -44,6 +44,20 @@ fn setup_hides_kimi_code_provider_under_moonshot() {
 }
 
 #[test]
+fn openai_setup_models_include_gpt_5_6() {
+    let registry = ModelRegistry::with_builtins();
+    let models = filter_models_for_provider(registry.list(), "openai");
+
+    for id in ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] {
+        let model = models
+            .iter()
+            .find(|model| model.id == id)
+            .unwrap_or_else(|| panic!("OpenAI setup model list should include {id}"));
+        assert_eq!(model.provider, "openai");
+    }
+}
+
+#[test]
 fn openai_setup_models_include_gpt_5_5() {
     let registry = ModelRegistry::with_builtins();
     let models = filter_models_for_provider(registry.list(), "openai");

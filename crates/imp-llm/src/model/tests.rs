@@ -38,6 +38,17 @@ fn find_by_alias_resolves_gpt5() {
 }
 
 #[test]
+fn resolve_meta_synthesizes_gpt_5_6_alias() {
+    let reg = ModelRegistry::with_builtins();
+    let model = reg
+        .resolve_meta("gpt5.6", None)
+        .expect("gpt5.6 alias should resolve");
+    assert_eq!(model.id, "gpt-5.6");
+    assert_eq!(model.provider, "openai");
+    assert_eq!(model.context_window, 1_050_000);
+}
+
+#[test]
 fn resolve_meta_synthesizes_gpt_5_5_alias() {
     let reg = ModelRegistry::with_builtins();
     let model = reg
