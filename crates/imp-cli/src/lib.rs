@@ -48,6 +48,7 @@ use tokio::task::JoinHandle;
 pub(crate) mod acp;
 mod stats_report;
 mod usage_report;
+mod workspace;
 
 /// A coding agent engine
 #[derive(Parser)]
@@ -190,6 +191,11 @@ enum Commands {
         #[command(subcommand)]
         command: BrowserCommand,
     },
+    /// Manage isolated, imp-owned agent workspaces
+    Workspace {
+        #[command(subcommand)]
+        command: WorkspaceCommand,
+    },
     /// Edit a guided subset of imp settings in the terminal
     Settings,
     /// Run the terminal-native setup wizard
@@ -255,6 +261,71 @@ enum Commands {
     WebLogin {
         /// Search provider to configure (tavily, exa, linkup, perplexity)
         provider: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkspaceCommand {
+    /// Create and register an isolated workspace from a committed base
+    Create {
+        /// Stable workspace identifier
+        #[arg(long)]
+        id: Option<String>,
+        /// Owning run identifier
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Human-readable task summary
+        #[arg(long)]
+        task: Option<String>,
+        /// Committed base reference (default: HEAD)
+        #[arg(long)]
+        base: Option<String>,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// List managed workspaces for the current repository
+    List {
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect one managed workspace
+    Inspect {
+        id: String,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark a managed workspace ready for explicit integration
+    Ready {
+        id: String,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fast-forward a clean target branch to a ready workspace commit
+    Integrate {
+        id: String,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reconcile the registry with Git worktrees
+    Doctor {
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Permanently discard an imp-owned workspace and branch
+    Discard {
+        id: String,
+        /// Confirm destructive removal
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -921,6 +992,13 @@ pub async fn run_headless(cli: Cli) {
             Commands::Browser { command } => {
                 if let Err(error) = run_browser_command(command).await {
                     eprintln!("Browser command failed: {error}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            Commands::Workspace { command } => {
+                if let Err(error) = workspace::run(command).await {
+                    eprintln!("Workspace command failed: {error}");
                     std::process::exit(1);
                 }
                 return;

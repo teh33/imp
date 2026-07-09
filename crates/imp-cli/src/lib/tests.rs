@@ -830,3 +830,51 @@ fn rpc_ready_event_advertises_truthful_v1_capabilities() {
         .iter()
         .any(|value| value == "durable_sessions"));
 }
+
+#[test]
+fn cli_parses_workspace_commands() {
+    let create = Cli::try_parse_from([
+        "imp",
+        "workspace",
+        "create",
+        "--id",
+        "eval-agent",
+        "--run-id",
+        "run-123",
+        "--task",
+        "compare against pi",
+        "--base",
+        "nightly",
+        "--json",
+    ])
+    .expect("parse workspace create");
+    assert!(matches!(
+        create.command,
+        Some(Commands::Workspace {
+            command: WorkspaceCommand::Create {
+                id: Some(ref id),
+                run_id: Some(ref run_id),
+                json: true,
+                ..
+            }
+        }) if id == "eval-agent" && run_id == "run-123"
+    ));
+
+    let discard = Cli::try_parse_from(["imp", "workspace", "discard", "eval-agent", "--yes"])
+        .expect("parse workspace discard");
+    assert!(matches!(
+        discard.command,
+        Some(Commands::Workspace {
+            command: WorkspaceCommand::Discard { ref id, yes: true, .. }
+        }) if id == "eval-agent"
+    ));
+
+    let integrate = Cli::try_parse_from(["imp", "workspace", "integrate", "eval-agent"])
+        .expect("parse workspace integrate");
+    assert!(matches!(
+        integrate.command,
+        Some(Commands::Workspace {
+            command: WorkspaceCommand::Integrate { ref id, json: false }
+        }) if id == "eval-agent"
+    ));
+}

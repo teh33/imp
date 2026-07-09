@@ -145,7 +145,7 @@ imp secrets doctor
 | `write` | file creation/overwrite |
 | `edit` / `multi_edit` | exact and transactional edits |
 | `bash` | shell commands with timeout/cancellation |
-| `git` | status, diff, log, stage, commit, restore, worktrees |
+| `git` | status, diff, log, stage, commit, restore, and read-only worktree inspection |
 | `scan` | tree-sitter code search/extraction |
 | `web` | web/GitHub search and page reads |
 | `browser` | stateful semantic browsing through Lightpanda |
@@ -153,6 +153,17 @@ imp secrets doctor
 | `workflow` | workflow list/show/validate/run/update |
 
 The model uses native tools instead of relying only on shell commands. This gives imp narrower, policy-checkable operations for common development tasks.
+
+Managed write workspaces are host-owned rather than model-managed:
+
+```bash
+imp workspace create --id eval-agent --run-id run-123 --task "compare against pi"
+imp workspace doctor
+imp workspace ready eval-agent
+imp workspace integrate eval-agent
+```
+
+See [Managed agent workspaces](docs/managed-workspaces.md) for lifecycle, ownership, cleanup, and current scheduling limitations.
 
 Tool execution rules:
 

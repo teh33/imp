@@ -20,6 +20,7 @@ pub mod hooks;
 pub mod imp_session;
 pub mod import;
 pub mod learning;
+pub mod managed_workspace;
 pub mod memory;
 pub mod policy;
 pub mod reference_monitor;

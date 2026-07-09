@@ -9,6 +9,7 @@ These pages document imp's current shipped or intentionally exposed behavior. St
 - [Autonomy modes](autonomy-modes.md) — approval levels, hard rails, and worktree isolation.
 - [Sessions and evidence](sessions.md) — durable sessions, compaction, recovery, traces, and evidence artifacts.
 - [Runtime event and state API](runtime-event-state-api.md) — shared typed events and frontend-neutral snapshots.
+- [Managed agent workspaces](managed-workspaces.md) — host-owned worktree lifecycle, ownership, integration, and cleanup.
 - [Trust labels and provenance](trust-labels-and-provenance.md) — authority boundaries for workspace, tool, and external context.
 
 ## Tools and orchestration

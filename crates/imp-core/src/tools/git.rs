@@ -51,9 +51,7 @@ impl Tool for GitTool {
                         "stage",
                         "commit",
                         "restore",
-                        "worktree_list",
-                        "worktree_add",
-                        "worktree_remove"
+                        "worktree_list"
                     ],
                     "description": "Git action"
                 },
@@ -112,26 +110,6 @@ impl Tool for GitTool {
                     "type": "string",
                     "description": "Restore source ref"
                 },
-                "worktree_path": {
-                    "type": "string",
-                    "description": "Worktree path for worktree_add/worktree_remove"
-                },
-                "branch": {
-                    "type": "string",
-                    "description": "Branch name for worktree_add or explicit branch deletion"
-                },
-                "start_point": {
-                    "type": "string",
-                    "description": "Starting ref for worktree_add"
-                },
-                "force": {
-                    "type": "boolean",
-                    "description": "Force worktree_remove or branch deletion"
-                },
-                "delete_branch": {
-                    "type": "boolean",
-                    "description": "Also delete branch during worktree_remove"
-                }
             },
             "required": ["action"]
         })
@@ -186,8 +164,6 @@ impl Tool for GitTool {
             "stage" => stage_action(&cwd, &repo_root, &params).await,
             "commit" => commit_action(&cwd, &repo_root, &params).await,
             "restore" => restore_action(&cwd, &repo_root, &params, &ctx).await,
-            "worktree_add" => worktree_add_action(&cwd, &repo_root, &params).await,
-            "worktree_remove" => worktree_remove_action(&cwd, &repo_root, &params).await,
             _ => Ok(ToolOutput::error(format!(
                 "Unsupported git action `{action}`"
             ))),
@@ -200,9 +176,7 @@ fn action_class(action: &str) -> Option<GitActionClass> {
         "status" | "diff" | "log" | "merge_base" | "worktree_list" => {
             Some(GitActionClass::ReadOnly)
         }
-        "stage" | "commit" | "restore" | "worktree_add" | "worktree_remove" => {
-            Some(GitActionClass::Mutating)
-        }
+        "stage" | "commit" | "restore" => Some(GitActionClass::Mutating),
         _ => None,
     }
 }
@@ -366,18 +340,6 @@ fn validate_ref(value: &str, field_name: &str) -> std::result::Result<(), crate:
     Ok(())
 }
 
-fn validate_path_string(
-    value: &str,
-    field_name: &str,
-) -> std::result::Result<(), crate::error::Error> {
-    if value.chars().any(|c| c == '\0' || c.is_control()) {
-        return Err(crate::error::Error::Tool(format!(
-            "{field_name} must be a safe path string"
-        )));
-    }
-    Ok(())
-}
-
 async fn worktree_list_action(cwd: &Path, repo_root: &Path) -> Result<ToolOutput> {
     let output = run_git(cwd, ["worktree", "list", "--porcelain"]).await?;
     if !output.status.success() {
@@ -441,181 +403,6 @@ async fn worktree_list_action(cwd: &Path, repo_root: &Path) -> Result<ToolOutput
                 "is_bare": entry.is_bare,
                 "is_detached": entry.is_detached,
             })).collect::<Vec<_>>(),
-        }),
-        is_error: false,
-    })
-}
-
-async fn worktree_add_action(
-    cwd: &Path,
-    repo_root: &Path,
-    params: &serde_json::Value,
-) -> Result<ToolOutput> {
-    let Some(raw_worktree_path) = non_empty_param(params, "worktree_path") else {
-        return Ok(ToolOutput::error(
-            "Missing required parameter: worktree_path",
-        ));
-    };
-    validate_path_string(raw_worktree_path, "worktree_path")?;
-    let Some(branch) = non_empty_param(params, "branch") else {
-        return Ok(ToolOutput::error("Missing required parameter: branch"));
-    };
-    validate_ref(branch, "branch")?;
-
-    let start_point = non_empty_param(params, "start_point").unwrap_or("HEAD");
-    validate_ref(start_point, "start_point")?;
-    let worktree_path = resolve_path(cwd, raw_worktree_path);
-
-    let output = run_git_owned(
-        cwd,
-        vec![
-            "worktree".to_string(),
-            "add".to_string(),
-            "-b".to_string(),
-            branch.to_string(),
-            worktree_path.display().to_string(),
-            start_point.to_string(),
-        ],
-    )
-    .await?;
-
-    if !output.status.success() {
-        return Ok(git_failure("git worktree add failed", &output));
-    }
-
-    let summary = format!(
-        "Created worktree {} on branch {}",
-        worktree_path.display(),
-        branch
-    );
-
-    Ok(ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text {
-            text: summary.clone(),
-        }],
-        details: json!({
-            "action": "worktree_add",
-            "repo_root": repo_root.display().to_string(),
-            "worktree_path": worktree_path.display().to_string(),
-            "branch": branch,
-            "start_point": start_point,
-            "recovery": {
-                "undo": "git worktree_remove",
-                "worktree_path": worktree_path.display().to_string(),
-                "branch": branch,
-                "delete_branch": true,
-            },
-            "summary": summary,
-        }),
-        is_error: false,
-    })
-}
-
-async fn worktree_remove_action(
-    cwd: &Path,
-    repo_root: &Path,
-    params: &serde_json::Value,
-) -> Result<ToolOutput> {
-    let Some(raw_worktree_path) = non_empty_param(params, "worktree_path") else {
-        return Ok(ToolOutput::error(
-            "Missing required parameter: worktree_path",
-        ));
-    };
-    validate_path_string(raw_worktree_path, "worktree_path")?;
-    let worktree_path = resolve_path(cwd, raw_worktree_path);
-    let force = params["force"].as_bool().unwrap_or(false);
-    let delete_branch = params["delete_branch"].as_bool().unwrap_or(false);
-
-    if same_path(&worktree_path, repo_root) {
-        return Ok(ToolOutput::error(
-            "Refusing to remove the main worktree/root checkout",
-        ));
-    }
-    if same_path(&worktree_path, cwd) {
-        return Ok(ToolOutput::error(
-            "Refusing to remove the current working directory worktree",
-        ));
-    }
-
-    let entries_output = run_git(cwd, ["worktree", "list", "--porcelain"]).await?;
-    if !entries_output.status.success() {
-        return Ok(git_failure("git worktree list failed", &entries_output));
-    }
-    let entries = parse_worktree_list(&stdout_lossy(&entries_output));
-    let explicit_branch = non_empty_param(params, "branch");
-    if let Some(branch) = explicit_branch {
-        validate_ref(branch, "branch")?;
-    }
-    if delete_branch && explicit_branch.is_none() {
-        return Ok(ToolOutput::error(
-            "delete_branch=true requires explicit branch",
-        ));
-    }
-    let matched_branch = explicit_branch.map(str::to_string).or_else(|| {
-        entries
-            .iter()
-            .find(|entry| same_path(Path::new(&entry.path), &worktree_path))
-            .and_then(|entry| entry.branch.clone())
-    });
-
-    let mut args = vec!["worktree".to_string(), "remove".to_string()];
-    if force {
-        args.push("--force".to_string());
-    }
-    args.push(worktree_path.display().to_string());
-
-    let output = run_git_owned(cwd, args).await?;
-    if !output.status.success() {
-        return Ok(git_failure("git worktree remove failed", &output));
-    }
-
-    let mut branch_deleted = false;
-    if delete_branch {
-        if let Some(branch) = matched_branch.as_deref() {
-            let branch_output = run_git_owned(
-                cwd,
-                vec![
-                    "branch".to_string(),
-                    if force { "-D" } else { "-d" }.to_string(),
-                    branch.to_string(),
-                ],
-            )
-            .await?;
-            if !branch_output.status.success() {
-                return Ok(git_failure("git branch delete failed", &branch_output));
-            }
-            branch_deleted = true;
-        }
-    }
-
-    let summary = if branch_deleted {
-        format!(
-            "Removed worktree {} and deleted branch {}",
-            worktree_path.display(),
-            matched_branch.as_deref().unwrap_or("(unknown)")
-        )
-    } else {
-        format!("Removed worktree {}", worktree_path.display())
-    };
-
-    Ok(ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text {
-            text: summary.clone(),
-        }],
-        details: json!({
-            "action": "worktree_remove",
-            "repo_root": repo_root.display().to_string(),
-            "worktree_path": worktree_path.display().to_string(),
-            "force": force,
-            "delete_branch": delete_branch,
-            "branch": matched_branch,
-            "branch_deleted": branch_deleted,
-            "recovery": {
-                "guidance": "Recreate removed worktree with git worktree_add if needed; deleted branches may be recoverable from reflog.",
-                "worktree_path": worktree_path.display().to_string(),
-                "branch_deleted": branch_deleted,
-            },
-            "summary": summary,
         }),
         is_error: false,
     })

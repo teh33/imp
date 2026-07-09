@@ -118,3 +118,9 @@ The TUI renders compact tool cards in the timeline and detailed output in the si
 ## Choosing a tool
 
 Prefer native tools for precise reads/edits, git operations, structural code lookup, workflow/task state, and user questions. Use `bash` for builds, tests, project scripts, package managers, and raw `rg` text search.
+
+## Managed workspaces
+
+Git worktree creation, integration, and deletion belong to the host-owned
+`imp workspace` lifecycle rather than the model-facing Git tool. The Git tool
+retains read-only worktree inspection. See [Managed agent workspaces](managed-workspaces.md).
