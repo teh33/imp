@@ -14,6 +14,7 @@ These pages document imp's current shipped or intentionally exposed behavior. St
 ## Tools and orchestration
 
 - [Native tools](tools.md) — built-in model-facing tools and policy behavior.
+- [Browser beta](browser-beta.md) — Lightpanda setup, scope, security boundaries, operations, and troubleshooting.
 - [Scan tool](scan-tool.md) — structural code search, extraction, related symbols, and tests.
 - [Workflows](workflows.md) — durable workflow artifacts, validation, execution, and closeout.
 - [Worktree-auto](worktree-auto.md) — isolated autonomous development and closeout behavior.

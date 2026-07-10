@@ -340,7 +340,7 @@ The doctor checks resolved configuration, executable version, MCP compatibility,
 
 ## Browser settings
 
-The TUI settings overlay includes a **Browser** tab for Lightpanda health, confirmed package-manager installation, enablement, binary path, session and timeout bounds, response size, `robots.txt`, private-network blocking, and browser-input policy. The health row runs the same asynchronous diagnostic API used by `imp browser doctor`; invalid values are rejected before saving.
+The TUI settings overlay includes a **Browser** tab for Lightpanda health, confirmed package-manager installation, enablement, binary path, session and timeout bounds, response size, `robots.txt`, private-network blocking, and browser-input policy. The health row runs the same asynchronous diagnostic API used by `imp browser doctor`; invalid values are rejected before saving. See the [Browser beta guide](docs/browser-beta.md) for support boundaries, security behavior, and troubleshooting.
 
 Structured browser lifecycle events are available in JSONL RPC as `browser_event` records and in the canonical runtime stream as `browser_updated`. Payloads contain sanitized lifecycle metadata rather than filled values or page content.
 

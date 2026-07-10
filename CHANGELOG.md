@@ -10,9 +10,15 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ### Added
 
+- Added an opt-in Lightpanda semantic browser beta with stateful JavaScript navigation, extraction, approved interaction, diagnostics, sanitized lifecycle events, reliability tests, and TUI cards/settings.
+- Added `imp browser doctor`, JSON diagnostics, and confirmed Homebrew installation through `imp browser install --yes` and the TUI Browser settings tab.
 - Added Kimi K2.7 model metadata, aliases, and provider-specific thinking behavior.
 - Added runtime-owned task state with task lifecycle tools and durable evidence projection.
 - Added typed audit configuration, requirement discovery, doctor reporting, and finding summaries.
+
+### Security
+
+- Added private-network blocking, HTTP/HTTPS-only navigation, bounded browser sessions, fail-closed headless input, scoped approvals, sensitive-action confirmation, and redaction of filled values from events and durable records.
 
 ### Changed
 
