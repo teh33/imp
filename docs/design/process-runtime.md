@@ -107,7 +107,9 @@ SIGTERM, waits for its bounded grace period, then sends SIGKILL if necessary. Ou
 drained before terminal state is visible.
 
 The manager does not hold blocking mutex guards across `.await`. Control messages and
-notifications separate state mutation from asynchronous effects.
+notifications separate state mutation from asynchronous effects. Non-interactive callers
+can explicitly close stdin through the manager so child reads observe EOF without
+inheriting the host terminal.
 
 ## Bash
 
@@ -147,6 +149,10 @@ Blocking and non-blocking shell hooks use the same one-shot manager path. Existi
 ordering, callbacks, timeout, stdout/stderr capture, process-tree cleanup, and
 background failure reporting remain unchanged. The hook protocol was not redesigned.
 
+TOML-defined shell tools also use a shared `ProcessManager`. They preserve parameter
+interpolation, install hints, stdout-before-stderr composition, truncation, timeouts,
+and result details while adding in-flight cancellation and explicit stdin EOF.
+
 ## Remaining subprocess inventory
 
 The following production paths still launch processes directly and are not migrated in
@@ -154,7 +160,6 @@ this phase:
 
 - `crates/imp-core/src/workflow/verification_runner.rs` — verification shell commands;
 - `crates/imp-core/src/guardrails.rs` — guardrail shell commands;
-- `crates/imp-core/src/tools/shell.rs` — extension-defined shell tools;
 - `crates/imp-lua/src/bridge.rs` — Lua tool subprocess execution;
 - `crates/imp-core/src/typescript_extensions/bun_runner.rs` — TypeScript/Bun hosts;
 - `crates/imp-core/src/tools/prototype.rs` — prototype execution and runtime probes;
