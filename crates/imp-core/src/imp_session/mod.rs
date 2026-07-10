@@ -119,6 +119,9 @@ pub struct SessionOptions {
     /// Skip native tool registration.
     pub no_tools: bool,
 
+    /// Optional canonical tool allowlist applied after registration.
+    pub enabled_tools: Option<Vec<String>>,
+
     /// Session persistence strategy.
     pub session: SessionChoice,
 
@@ -166,6 +169,7 @@ impl Default for SessionOptions {
             max_tokens: None,
             system_prompt: None,
             no_tools: false,
+            enabled_tools: None,
             session: SessionChoice::default(),
             task: None,
             facts: Vec::new(),
@@ -380,6 +384,7 @@ impl ImpSession {
         if let Some(prompt) = &options.system_prompt {
             builder = builder.system_prompt(prompt.clone());
         }
+        builder = builder.no_tools(options.no_tools);
         if let Some(lua_loader) = options.lua_loader {
             builder = builder.lua_tool_loader(move |policy, tools| lua_loader(policy, tools));
         }
@@ -391,12 +396,21 @@ impl ImpSession {
 
         let (mut agent, handle) = builder.build()?;
 
-        if let Some(resume_run_id) = &options.resume_run_id {
-            agent.resume_workflow_controller_from_project_run(resume_run_id)?;
+        if let Some(enabled_tools) = &options.enabled_tools {
+            agent
+                .tools
+                .retain(|name| enabled_tools.iter().any(|enabled| enabled == name));
+            if !enabled_tools.iter().any(|enabled| enabled == "task") {
+                agent
+                    .task_state
+                    .lock()
+                    .expect("session task state lock")
+                    .disable();
+            }
         }
 
-        if options.no_tools {
-            agent.tools.retain(|_| false);
+        if let Some(resume_run_id) = &options.resume_run_id {
+            agent.resume_workflow_controller_from_project_run(resume_run_id)?;
         }
 
         if options.no_tools {

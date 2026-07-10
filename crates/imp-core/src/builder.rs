@@ -51,6 +51,8 @@ pub struct AgentBuilder {
     /// Additional tool registrar called after native tools are registered.
     #[allow(clippy::type_complexity)]
     extra_tools: Option<Box<dyn FnOnce(&mut ToolRegistry) + Send>>,
+    /// Skip native and Lua tool registration before system prompt assembly.
+    no_tools: bool,
     /// Preloaded Lua extension tool registrar.
     preloaded_lua_tools: Option<ToolRegistry>,
     /// Lua extension tool loader — called after native and extra tools.
@@ -84,6 +86,7 @@ impl AgentBuilder {
             facts: Vec::new(),
             system_prompt_override: None,
             extra_tools: None,
+            no_tools: false,
             preloaded_lua_tools: None,
             preloaded_prompt_context: None,
             lua_tool_loader: None,
@@ -126,6 +129,12 @@ impl AgentBuilder {
         F: FnOnce(&mut ToolRegistry) + Send + 'static,
     {
         self.extra_tools = Some(Box::new(f));
+        self
+    }
+
+    /// Skip native and Lua tool registration before system prompt assembly.
+    pub fn no_tools(mut self, no_tools: bool) -> Self {
+        self.no_tools = no_tools;
         self
     }
 
@@ -332,15 +341,20 @@ impl AgentBuilder {
         agent.lua_tool_loader = self.lua_tool_loader.clone();
 
         let phase_started = Instant::now();
-        register_native_tools(&mut agent.tools);
-        register_browser_tool(&mut agent.tools, &self.config);
+        if !self.no_tools {
+            register_native_tools_with_task_state(&mut agent.tools, Arc::clone(&agent.task_state));
+            register_browser_tool(&mut agent.tools, &self.config);
+        }
         if let Some(extra) = self.extra_tools {
             extra(&mut agent.tools);
         }
         trace_phase("native_extra_tools", phase_started);
 
         let phase_started = Instant::now();
-        if let Some(preloaded_lua_tools) = self.preloaded_lua_tools {
+        if self.no_tools {
+            // Keep the registry empty before prompt assembly so no-tools runs do
+            // not pay for stale tool descriptions in the system prompt.
+        } else if let Some(preloaded_lua_tools) = self.preloaded_lua_tools {
             agent.tools.extend(preloaded_lua_tools);
         } else if let Some(lua_loader) = self.lua_tool_loader {
             let lua_policy = self.config.lua.resolve_policy(agent.mode);
@@ -349,7 +363,7 @@ impl AgentBuilder {
         trace_phase("lua_tools", phase_started);
 
         let phase_started = Instant::now();
-        if agent.mode != crate::config::AgentMode::Full {
+        if !self.no_tools && agent.mode != crate::config::AgentMode::Full {
             let mode = agent.mode;
             agent.tools.retain(|name| mode.allows_tool(name));
         }
@@ -442,6 +456,18 @@ fn apply_role_tool_policy(tools: &mut ToolRegistry, role: &Role) {
     }
 }
 
+/// Register the standard set of native tools onto a tool registry.
+///
+/// This is the canonical list — update here when adding or removing tools.
+pub fn register_native_tools(tools: &mut ToolRegistry) {
+    register_native_tools_with_task_state(
+        tools,
+        Arc::new(std::sync::Mutex::new(
+            crate::agent::task_state::SessionTaskState::default(),
+        )),
+    );
+}
+
 fn register_browser_tool(tools: &mut ToolRegistry, config: &Config) {
     if config.browser.enabled {
         tools.register(Arc::new(crate::tools::browser::BrowserTool::new(
@@ -450,13 +476,14 @@ fn register_browser_tool(tools: &mut ToolRegistry, config: &Config) {
     }
 }
 
-/// Register the standard set of native tools onto a tool registry.
-///
-/// This is the canonical list — update here when adding or removing tools.
-pub fn register_native_tools(tools: &mut ToolRegistry) {
+fn register_native_tools_with_task_state(
+    tools: &mut ToolRegistry,
+    task_state: Arc<std::sync::Mutex<crate::agent::task_state::SessionTaskState>>,
+) {
     use crate::tools::{
         ask::AskTool, bash::BashTool, edit::EditTool, git::GitTool, read::ReadTool, scan::ScanTool,
-        subagent::SubagentTool, web::WebTool, workflow::WorkflowTool, write::WriteTool,
+        subagent::SubagentTool, task::TaskTool, web::WebTool, workflow::WorkflowTool,
+        write::WriteTool,
     };
 
     tools.register(Arc::new(AskTool));
@@ -468,6 +495,7 @@ pub fn register_native_tools(tools: &mut ToolRegistry) {
     tools.register(Arc::new(ScanTool));
     tools.register(Arc::new(WebTool));
     tools.register(Arc::new(SubagentTool));
+    tools.register(Arc::new(TaskTool::new(Arc::clone(&task_state))));
     tools.register(Arc::new(WorkflowTool));
 }
 

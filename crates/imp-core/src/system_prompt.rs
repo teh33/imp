@@ -193,10 +193,13 @@ fn identity_layer(
     }
     s.push_str("\n\nAvailable tools:\n");
 
-    let defs = match role {
+    let mut defs = match role {
         Some(r) if r.readonly => tools.readonly_definitions(),
         _ => tools.definitions_for_mode(mode),
     };
+    // `task` is a dormant planning tool. It is advertised dynamically when
+    // the session enters planning mode, not as a default one-shot tool.
+    defs.retain(|definition| definition.name != "task");
 
     for def in &defs {
         s.push_str(&format!("- {}: {}\n", def.name, def.description));

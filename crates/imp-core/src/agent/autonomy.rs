@@ -1,4 +1,20 @@
-use super::ContinueReason;
+use super::{Agent, ContinueReason};
+
+impl Agent {
+    pub(crate) fn task_closeout_follow_up(&self) -> Option<String> {
+        let issues = self
+            .task_state
+            .lock()
+            .expect("session task state lock")
+            .closeout_issues();
+        (!issues.is_empty()).then(|| {
+            format!(
+                "Task closeout is incomplete: {}. Continue working, resolve the runtime evidence, and update task steps before finishing.",
+                issues.join("; ")
+            )
+        })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObjectiveKind {

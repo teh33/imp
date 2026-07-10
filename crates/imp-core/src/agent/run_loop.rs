@@ -301,6 +301,10 @@ impl Agent {
     }
 
     pub async fn run(&mut self, prompt: String) -> Result<()> {
+        self.task_state
+            .lock()
+            .expect("session task state lock")
+            .begin_prompt(prompt.clone());
         let trace_path = std::env::var_os("IMP_TUI_TRACE").map(std::path::PathBuf::from);
         let trace_run = |phase: &str, started: std::time::Instant| {
             if let Some(path) = trace_path.as_ref() {
@@ -438,20 +442,35 @@ impl Agent {
             .await;
             let context_assembly_started_at = Instant::now();
 
+            let task_planning_active = self
+                .task_state
+                .lock()
+                .expect("session task state lock")
+                .planning_active();
+            let tool_definitions = if task_planning_active {
+                self.tools.definitions()
+            } else {
+                self.tools.definitions_excluding("task")
+            };
             let options = RequestOptions {
                 thinking_level: self.thinking_level,
                 // Use configured output cap when present; otherwise let providers
                 // choose their own sensible default output budget.
                 max_tokens: self.max_tokens,
                 temperature: None,
-                system_prompt: self.system_prompt_with_current_task_state(&turn_state),
-                tools: self.tools.definitions(),
+                system_prompt: self.system_prompt.clone(),
+                tools: tool_definitions,
                 cache_options: self.cache_options.clone(),
                 effort: None,
             };
 
+            let task_messages = self
+                .task_state
+                .lock()
+                .expect("session task state lock")
+                .project_messages(&self.messages);
             let (mut context_messages, mut request_estimate) = sanitized_request_estimate(
-                &self.messages,
+                &task_messages,
                 &self.model,
                 &options,
                 observed_input_limit,
@@ -582,8 +601,13 @@ impl Agent {
                             ),
                         })
                         .await;
+                        let task_messages = self
+                            .task_state
+                            .lock()
+                            .expect("session task state lock")
+                            .project_messages(&self.messages);
                         (context_messages, request_estimate) = sanitized_request_estimate(
-                            &self.messages,
+                            &task_messages,
                             &self.model,
                             &options,
                             observed_input_limit,
@@ -1137,9 +1161,17 @@ impl Agent {
                 })
                 .await;
                 turn_state.enter(TurnPhase::DecideNext);
-                let decision = self.override_finish_with_workflow_decision(
+                let mut decision = self.override_finish_with_workflow_decision(
                     self.loop_decision_after_turn(&assessment),
                 );
+                if matches!(decision, LoopDecision::Finish { .. }) {
+                    if let Some(prompt) = self.task_closeout_follow_up() {
+                        decision = LoopDecision::Continue {
+                            prompt,
+                            reason: super::ContinueReason::CloseoutIncomplete,
+                        };
+                    }
+                }
                 match decision {
                     LoopDecision::Continue { prompt, reason } => {
                         self.mark_continue_reason(reason);
@@ -1198,6 +1230,12 @@ impl Agent {
             }
 
             self.record_turn_workflow_mutations(&results);
+            {
+                let mut task_state = self.task_state.lock().expect("session task state lock");
+                for result in &results {
+                    task_state.record_tool_result(result, &self.cwd);
+                }
+            }
             self.record_obligations_from_tool_results(&results);
             self.record_workflow_obligations_from_tool_results(&results);
             let workflow_review = self.finish_turn_workflow_review(turn);
@@ -1292,6 +1330,8 @@ impl Agent {
         }
         if !cancelled {
             status = self.enforce_workflow_closeout_status(status);
+            let task_state = self.task_state.lock().expect("session task state lock");
+            status = crate::agent::task_state::enforce_task_closeout(status, &task_state);
         }
         let worktree_metadata = if let Some(artifacts) = &run_artifacts {
             self.capture_worktree_run_artifacts(artifacts).await

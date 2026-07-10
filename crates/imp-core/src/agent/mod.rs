@@ -23,11 +23,11 @@ use crate::workflow::WorkflowContract;
 use crate::workflow_review::TurnWorkflowReview;
 
 mod autonomy;
-mod current_task_state;
 mod events;
 mod loop_policy;
 mod loop_state;
 mod subagent;
+pub mod task_state;
 mod workflow_integration;
 pub(super) use workflow_integration::orchestration_follow_up_text;
 mod recovery;
@@ -109,6 +109,8 @@ pub struct Agent {
     pub checkpoint_state: Arc<crate::tools::CheckpointState>,
     /// Tracks which files have been read; used for staleness and unread-edit warnings.
     pub file_tracker: Arc<std::sync::Mutex<crate::tools::FileTracker>>,
+    /// Runtime-owned current task plan and evidence ledger.
+    pub task_state: Arc<std::sync::Mutex<task_state::SessionTaskState>>,
     /// Session-local anchors emitted by read and consumed by anchored edit mode.
     pub anchor_store: Arc<crate::tools::AnchorStore>,
     /// Max lines the read tool may return before truncating. 0 means unlimited.
@@ -224,6 +226,9 @@ impl Agent {
             file_cache: Arc::new(crate::tools::FileCache::new()),
             checkpoint_state: Arc::new(crate::tools::CheckpointState::new()),
             file_tracker: Arc::new(std::sync::Mutex::new(crate::tools::FileTracker::new())),
+            task_state: Arc::new(std::sync::Mutex::new(
+                task_state::SessionTaskState::default(),
+            )),
             anchor_store: Arc::new(crate::tools::AnchorStore::new()),
             read_max_lines: 500,
             auth_store: None,
@@ -384,7 +389,8 @@ impl Agent {
                 self.obligation_ledger
                     .resolve_kind(autonomy::ObligationKind::EditedFilesVerification);
             }
-            ContinueReason::ToolResultsNeedInterpretation
+            ContinueReason::CloseoutIncomplete
+            | ContinueReason::ToolResultsNeedInterpretation
             | ContinueReason::QueuedUserFollowUp
             | ContinueReason::OrchestrationProgress
             | ContinueReason::WorkflowProgress

@@ -376,7 +376,10 @@ impl ReferenceMonitor {
         if !context.policy.allow_side_effects
             && !matches!(
                 context.action_kind,
-                ToolActionKind::Read | ToolActionKind::Search | ToolActionKind::AskUser
+                ToolActionKind::Read
+                    | ToolActionKind::Search
+                    | ToolActionKind::AskUser
+                    | ToolActionKind::Task
             )
         {
             return ToolPolicyDecision::Deny {
@@ -667,6 +670,7 @@ pub enum ToolActionKind {
     Browser,
     Git,
     Workflow,
+    Task,
     AskUser,
     Secret,
     Extension,
@@ -846,6 +850,7 @@ impl ToolActionKind {
             "browser" => Self::Browser,
             "git" => Self::Git,
             "workflow" => Self::Workflow,
+            "task" => Self::Task,
             "web" => Self::Network,
             "ask" | "ask_user" => Self::AskUser,
             "extend" => Self::Extension,

@@ -3250,6 +3250,19 @@ async fn run_loop_mode(cli: &Cli, args: &LoopArgs) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+fn parse_enabled_tools(value: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let tools = value
+        .split(',')
+        .map(str::trim)
+        .filter(|tool| !tool.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        return Err("--tools must contain at least one tool name".into());
+    }
+    Ok(tools)
+}
+
 async fn run_print_mode(
     cli: &Cli,
     prompt: &str,
@@ -3307,6 +3320,7 @@ async fn run_print_mode(
         max_tokens: cli.max_tokens.or(config.max_tokens),
         system_prompt: cli.system_prompt.clone(),
         no_tools: cli.no_tools,
+        enabled_tools: cli.tools.as_deref().map(parse_enabled_tools).transpose()?,
         run_policy,
         session: session_choice,
         ..Default::default()

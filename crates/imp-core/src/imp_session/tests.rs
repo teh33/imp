@@ -425,6 +425,15 @@ async fn no_tools_session_builds_assembled_system_prompt_when_task_present() {
     assert!(!prompt.trim().is_empty());
     assert!(prompt.contains("Test task"));
     assert!(prompt.contains("Verify headless prompt assembly"));
+    assert!(prompt.contains("Available tools:"));
+    assert!(!prompt.contains("- bash:"));
+    assert!(!prompt.contains("- read:"));
+    assert!(session
+        .agent
+        .as_ref()
+        .expect("agent present")
+        .tools
+        .is_empty());
 }
 
 #[tokio::test]

@@ -32,12 +32,13 @@ pub enum AgentMode {
 }
 
 const WORKER_TOOLS: &[&str] = &[
-    "read", "scan", "web", "browser", "write", "edit", "bash", "git", "workflow", "ask_user",
+    "read", "scan", "web", "browser", "write", "edit", "bash", "git", "workflow", "task",
+    "ask_user",
 ];
-const ORCHESTRATOR_TOOLS: &[&str] = &["read", "scan", "web", "workflow", "git", "ask_user"];
-const PLANNER_TOOLS: &[&str] = &["read", "scan", "web", "git", "workflow", "ask_user"];
-const REVIEWER_TOOLS: &[&str] = &["read", "scan", "web", "git", "ask_user"];
-const AUDITOR_TOOLS: &[&str] = &["read", "scan", "web", "git", "workflow"];
+const ORCHESTRATOR_TOOLS: &[&str] = &["read", "scan", "web", "workflow", "task", "git", "ask_user"];
+const PLANNER_TOOLS: &[&str] = &["read", "scan", "web", "git", "workflow", "task", "ask_user"];
+const REVIEWER_TOOLS: &[&str] = &["read", "scan", "web", "git", "task", "ask_user"];
+const AUDITOR_TOOLS: &[&str] = &["read", "scan", "web", "git", "workflow", "task"];
 
 const WORKER_WORKFLOW_ACTIONS: &[&str] = &["show", "update", "list", "validate"];
 const ORCHESTRATOR_WORKFLOW_ACTIONS: &[&str] = &["list", "show", "validate", "run", "update"];

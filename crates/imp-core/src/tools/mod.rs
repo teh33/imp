@@ -12,6 +12,7 @@ pub mod read;
 pub mod scan;
 pub mod shell;
 pub mod subagent;
+pub mod task;
 pub mod web;
 pub mod workflow;
 pub mod write;
@@ -652,6 +653,13 @@ impl ToolRegistry {
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));
         defs
+    }
+
+    pub fn definitions_excluding(&self, excluded: &str) -> Vec<ToolDefinition> {
+        self.definitions()
+            .into_iter()
+            .filter(|definition| definition.name != excluded)
+            .collect()
     }
 
     /// Get only readonly tool definitions (for readonly roles).

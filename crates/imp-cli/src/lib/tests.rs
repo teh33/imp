@@ -132,6 +132,19 @@ fn cli_parses_loop_command() {
 }
 
 #[test]
+fn parse_enabled_tools_rejects_empty_value() {
+    assert!(parse_enabled_tools(" , ").is_err());
+}
+
+#[test]
+fn parse_enabled_tools_normalizes_csv() {
+    assert_eq!(
+        parse_enabled_tools("read, bash,read").unwrap(),
+        vec!["read", "bash", "read"]
+    );
+}
+
+#[test]
 fn cli_parses_browser_commands() {
     let doctor =
         Cli::try_parse_from(["imp", "browser", "doctor", "--json"]).expect("parse browser doctor");

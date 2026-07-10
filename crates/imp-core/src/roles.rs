@@ -560,6 +560,7 @@ fn known_tool(name: &str) -> bool {
             | "edit"
             | "extend"
             | "git"
+            | "task"
             | "workflow"
             | "openrouter_secret_run"
             | "read"
