@@ -1,4 +1,5 @@
 target/
+site/
 
 # OS/editor noise.
 .DS_Store
@@ -8,6 +9,7 @@ target/
 
 # Local imp runtime/dev state.
 .imp/
+.worktrees/
 
 # Local mana runtime/work graph state. Existing tracked mana files remain tracked until removed from the index.
 .mana/
