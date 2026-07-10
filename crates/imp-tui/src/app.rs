@@ -372,6 +372,13 @@ struct GitLabelCache {
     label: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ContextTokenEstimateCache {
+    messages_epoch: u64,
+    model_name: String,
+    tokens: u32,
+}
+
 #[derive(Debug)]
 struct StartupSkillDetailCache {
     skill_path: PathBuf,
@@ -463,6 +470,7 @@ pub struct App {
     current_oauth_display_info_model: String,
     current_model_meta_for_persistence: Option<ModelMeta>,
     current_model_meta_for_persistence_model: String,
+    context_token_estimate_cache: Option<ContextTokenEstimateCache>,
     git_label_cache: Option<GitLabelCache>,
     startup_skill_detail_cache: Option<StartupSkillDetailCache>,
     startup_surface_metadata: StartupSurfaceMetadata,
@@ -624,6 +632,7 @@ impl App {
             current_oauth_display_info_model: String::new(),
             current_model_meta_for_persistence: None,
             current_model_meta_for_persistence_model: String::new(),
+            context_token_estimate_cache: None,
             git_label_cache: None,
             startup_skill_detail_cache: None,
             startup_surface_metadata,

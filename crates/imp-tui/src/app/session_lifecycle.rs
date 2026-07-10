@@ -109,6 +109,11 @@ fn filtered_model_options_includes_chatgpt_oauth_only_models() {
         .find(|model| model.id == "gpt-5.5")
         .expect("gpt-5.5 should be visible for ChatGPT OAuth users");
     assert_eq!(model.provider, "openai");
+    let gpt_5_6 = models
+        .iter()
+        .find(|model| model.id == "gpt-5.6-sol")
+        .expect("gpt-5.6-sol should be visible for ChatGPT OAuth users");
+    assert_eq!(gpt_5_6.provider, "openai");
 
     let openai_model_index = models
         .iter()
@@ -2881,6 +2886,28 @@ fn chat_waiting_cache_changes_across_animation_ticks() {
     let second = app.chat_render_cache_key(80, None, app.config.ui.chat_tool_display, activity);
 
     assert_ne!(first, second);
+}
+
+#[test]
+fn chat_cache_ignores_animation_ticks_when_messages_are_already_visible() {
+    let mut app = make_app();
+    app.messages.push(DisplayMessage {
+        role: MessageRole::Assistant,
+        content: "done".into(),
+        thinking: None,
+        tool_calls: Vec::new(),
+        assistant_blocks: Vec::new(),
+        is_streaming: true,
+        timestamp: imp_llm::now(),
+    });
+    app.is_streaming = true;
+    let activity = app.current_activity_state();
+
+    let first = app.chat_render_cache_key(80, None, app.config.ui.chat_tool_display, activity);
+    app.tick = 4;
+    let second = app.chat_render_cache_key(80, None, app.config.ui.chat_tool_display, activity);
+
+    assert_eq!(first, second);
 }
 
 #[test]

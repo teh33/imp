@@ -1,4 +1,4 @@
-use ignore::{WalkBuilder, WalkState};
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
@@ -49,6 +49,7 @@ fn count_project(root: &Path) -> io::Result<HashMap<&'static str, Stats>> {
         .git_ignore(true)
         .git_exclude(true)
         .ignore(true)
+        .filter_entry(should_scan_entry)
         .build_parallel()
         .run(|| {
             let totals = Arc::clone(&totals);
@@ -76,6 +77,13 @@ fn count_project(root: &Path) -> io::Result<HashMap<&'static str, Stats>> {
         .expect("walk workers finished")
         .into_inner()
         .expect("language totals mutex poisoned"))
+}
+
+fn should_scan_entry(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+        return true;
+    }
+    entry.file_name() != ".git" && !entry.path().join(".git").exists()
 }
 
 fn language_for(path: &Path) -> Option<&'static str> {
@@ -156,6 +164,32 @@ mod tests {
     #[test]
     fn recognizes_uppercase_extensions() {
         assert_eq!(language_for(Path::new("BUILD.RS")), Some("Rust"));
+    }
+
+    #[test]
+    fn excludes_nested_git_repositories_and_worktrees() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        fs::create_dir_all(temp.path().join("src")).expect("create root source directory");
+        fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").expect("write root source");
+
+        let nested_repo = temp.path().join("vendor/repo");
+        fs::create_dir_all(nested_repo.join(".git")).expect("create nested repository");
+        fs::write(nested_repo.join("lib.rs"), "fn nested_repo() {}\n")
+            .expect("write nested repository source");
+
+        let nested_worktree = temp.path().join("worktrees/worker");
+        fs::create_dir_all(&nested_worktree).expect("create nested worktree");
+        fs::write(nested_worktree.join(".git"), "gitdir: elsewhere\n")
+            .expect("write worktree marker");
+        fs::write(nested_worktree.join("lib.rs"), "fn nested_worktree() {}\n")
+            .expect("write nested worktree source");
+
+        let stats = scan_repo(temp.path())
+            .expect("scan repository")
+            .expect("find source files");
+        assert_eq!(stats.primary_language, "Rust");
+        assert_eq!(stats.code_lines, 1);
+        assert_eq!(stats.files, 1);
     }
 
     #[test]

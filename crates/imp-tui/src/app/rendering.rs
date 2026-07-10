@@ -21,27 +21,40 @@ use super::*;
 impl App {
     // ── Rendering ───────────────────────────────────────────────
 
-    pub(super) fn estimated_active_context_tokens(&self) -> u32 {
-        let Some(meta) = self.current_model_meta_for_persistence() else {
-            return self
-                .session
+    pub(super) fn estimated_active_context_tokens(&mut self) -> u32 {
+        if let Some(cache) = self.context_token_estimate_cache.as_ref() {
+            if cache.messages_epoch == self.chat_render_epoch && cache.model_name == self.model_name
+            {
+                return cache.tokens;
+            }
+        }
+
+        let tokens = if let Some(meta) = self.current_model_meta_for_persistence() {
+            self.session
+                .get_active_messages()
+                .iter()
+                .map(|message| imp_core::context::estimate_message_tokens_for_model(message, &meta))
+                .sum()
+        } else {
+            self.session
                 .get_active_messages()
                 .iter()
                 .map(|message| {
                     let json = serde_json::to_string(message).unwrap_or_default();
                     imp_core::context::estimate_tokens(&json)
                 })
-                .sum();
+                .sum()
         };
 
-        self.session
-            .get_active_messages()
-            .iter()
-            .map(|message| imp_core::context::estimate_message_tokens_for_model(message, &meta))
-            .sum()
+        self.context_token_estimate_cache = Some(ContextTokenEstimateCache {
+            messages_epoch: self.chat_render_epoch,
+            model_name: self.model_name.clone(),
+            tokens,
+        });
+        tokens
     }
 
-    pub(super) fn display_context_tokens(&self) -> u32 {
+    pub(super) fn display_context_tokens(&mut self) -> u32 {
         self.current_context_tokens
             .max(self.estimated_active_context_tokens())
     }
@@ -81,6 +94,18 @@ impl App {
         )
     }
 
+    fn chat_render_animation_tick(&self, activity_state: AnimationState) -> u64 {
+        match activity_state {
+            AnimationState::WaitingForResponse | AnimationState::Thinking => self.tick,
+            AnimationState::ExecutingTools { .. }
+                if self.config.ui.animations != imp_core::config::AnimationLevel::None =>
+            {
+                self.tick
+            }
+            _ => 0,
+        }
+    }
+
     pub(super) fn theme_kind(&self) -> ThemeKind {
         ThemeKind {
             is_light: self.theme.bg == Theme::light().bg,
@@ -105,7 +130,7 @@ impl App {
             animation_level: self.config.ui.animations,
             activity_state,
             theme: self.theme_kind(),
-            tick: self.tick,
+            tick: self.chat_render_animation_tick(activity_state),
         }
     }
 
@@ -138,6 +163,7 @@ impl App {
                 activity_state,
             );
             self.chat_render_cache = Some(ChatRenderCache { key, render });
+            self.context_token_estimate_cache = None;
         }
 
         &self
@@ -149,6 +175,7 @@ impl App {
 
     pub(super) fn invalidate_chat_render_cache(&mut self) {
         self.chat_render_cache = None;
+        self.context_token_estimate_cache = None;
         bump_epoch(&mut self.chat_render_epoch);
         self.sidebar_stream_cache = None;
         self.sidebar_detail_cache = None;
@@ -801,6 +828,11 @@ impl App {
             let status_info = self.build_status_info();
             let git_label = self.cached_git_label();
             let active_context_window = self.active_context_window();
+            let estimated_context_tokens = self.estimated_active_context_tokens();
+            let queued_preview = self.queued_message_preview(area.width);
+            let workflow_scope_label = self.active_workflow_scope_label();
+            let workflow_run_label = self.active_workflow_run_label();
+            let loop_label = self.loop_label();
             let editor = EditorView::new(&self.editor, &self.theme, self.thinking_level)
                 .summarize_paste(true)
                 .model(&self.model_name)
@@ -808,9 +840,9 @@ impl App {
                 .turn_elapsed(status_info.turn_elapsed)
                 .extension_items(&status_info.extension_items, status_info.peek)
                 .streaming(self.is_streaming)
-                .queued(self.queued_message_preview(area.width))
+                .queued(queued_preview)
                 .context_usage(
-                    self.estimated_active_context_tokens(),
+                    estimated_context_tokens,
                     active_context_window,
                     self.config.ui.show_context_usage,
                 )
@@ -818,9 +850,9 @@ impl App {
                 .animation_level(self.config.ui.animations)
                 .activity_state(activity_state)
                 .workflow_mode(self.workflow_mode)
-                .workflow_scope_label(self.active_workflow_scope_label())
-                .workflow_run_label(self.active_workflow_run_label())
-                .loop_label(self.loop_label())
+                .workflow_scope_label(workflow_scope_label)
+                .workflow_run_label(workflow_run_label)
+                .loop_label(loop_label)
                 .git_label(git_label);
             frame.render_widget(editor, editor_area);
         }
@@ -924,6 +956,14 @@ impl App {
                 .flatten();
         }
 
+        if !self.editor.content().is_empty() {
+            return self
+                .git_label_cache
+                .as_ref()
+                .and_then(|cache| (cache.cwd == self.cwd).then(|| cache.label.clone()))
+                .flatten();
+        }
+
         let label = compact_git_label(&self.cwd);
         self.git_label_cache = Some(GitLabelCache {
             cwd: self.cwd.clone(),
@@ -972,7 +1012,7 @@ impl App {
         auth_store.oauth_display_info(&provider_name)
     }
 
-    pub(super) fn build_status_info(&self) -> StatusInfo {
+    pub(super) fn build_status_info(&mut self) -> StatusInfo {
         let cwd = self.cwd.to_string_lossy().to_string();
         let session_name = self
             .session
