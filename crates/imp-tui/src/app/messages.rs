@@ -168,6 +168,15 @@ impl App {
         None
     }
 
+    pub(super) fn add_tool_notice(&mut self, tool_call_id: &str, notice: &str) -> bool {
+        let Some(tool_call) = self.find_tool_call_mut(tool_call_id) else {
+            return false;
+        };
+        tool_call.add_notice(notice);
+        self.invalidate_chat_render_cache();
+        true
+    }
+
     pub(super) fn queued_message_preview(&self, terminal_width: u16) -> Option<String> {
         let text = self.message_queue.first()?.text();
         let max_chars = (terminal_width as usize / 2).max(8);

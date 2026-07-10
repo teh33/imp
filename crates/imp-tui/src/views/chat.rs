@@ -108,6 +108,7 @@ impl DisplayMessage {
                                 details: arguments.clone(),
                                 is_error: false,
                                 expanded: false,
+                                notices: Vec::new(),
                                 streaming_lines: Vec::new(),
                                 streaming_output: String::new(),
                             });
@@ -325,6 +326,8 @@ pub struct ChatView<'a> {
     word_wrap: bool,
     /// How tool calls should appear in the chat transcript.
     chat_tool_display: ChatToolDisplay,
+    /// Maximum rendered rows for expanded inline shell output.
+    tool_output_lines: usize,
     /// Number of thinking lines to show.
     thinking_lines: usize,
     /// Whether to show timestamps above messages.
@@ -349,6 +352,7 @@ impl<'a> ChatView<'a> {
             tool_focus: None,
             word_wrap: true,
             chat_tool_display: ChatToolDisplay::Interleaved,
+            tool_output_lines: 10,
             thinking_lines: 5,
             show_timestamps: false,
             animation_level: AnimationLevel::Minimal,
@@ -383,6 +387,11 @@ impl<'a> ChatView<'a> {
 
     pub fn chat_tool_display(mut self, display: ChatToolDisplay) -> Self {
         self.chat_tool_display = display;
+        self
+    }
+
+    pub fn tool_output_lines(mut self, lines: usize) -> Self {
+        self.tool_output_lines = lines;
         self
     }
 
@@ -456,6 +465,7 @@ impl Widget for ChatView<'_> {
             self.tool_focus,
             self.word_wrap,
             self.chat_tool_display,
+            self.tool_output_lines,
             self.thinking_lines,
             self.show_timestamps,
             self.animation_level,
@@ -530,6 +540,7 @@ pub fn scroll_offset_for_message_at_top(
     tool_focus: Option<usize>,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
     animation_level: AnimationLevel,
@@ -548,6 +559,7 @@ pub fn scroll_offset_for_message_at_top(
         tool_focus,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         animation_level,
@@ -564,6 +576,7 @@ pub fn scroll_offset_for_message_at_top(
         tool_focus,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         animation_level,
@@ -589,6 +602,7 @@ pub fn clamped_scroll_offset(
     tool_focus: Option<usize>,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
     animation_level: AnimationLevel,
@@ -603,6 +617,7 @@ pub fn clamped_scroll_offset(
         tool_focus,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         animation_level,
@@ -622,6 +637,7 @@ pub fn build_chat_render_data(
     tool_focus: Option<usize>,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
     animation_level: AnimationLevel,
@@ -636,6 +652,7 @@ pub fn build_chat_render_data(
         tool_focus,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         animation_level,
@@ -658,6 +675,7 @@ fn build_chat_lines(
     tool_focus: Option<usize>,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
     animation_level: AnimationLevel,
@@ -667,7 +685,7 @@ fn build_chat_lines(
     let mut tool_line_indices: Vec<(usize, String)> = Vec::new();
     let mut tool_call_counter: usize = 0;
 
-    for msg in messages {
+    for (message_index, msg) in messages.iter().enumerate() {
         if show_timestamps {
             all_lines.push(Line::from(Span::styled(
                 format!("  [{}]", format_timestamp(msg.timestamp)),
@@ -776,6 +794,7 @@ fn build_chat_lines(
                                         word_wrap,
                                         focused,
                                         chat_tool_display,
+                                        tool_output_lines,
                                         animation_level,
                                     );
                                 }
@@ -811,6 +830,7 @@ fn build_chat_lines(
                             word_wrap,
                             focused,
                             chat_tool_display,
+                            tool_output_lines,
                             animation_level,
                         );
                     }
@@ -848,16 +868,15 @@ fn build_chat_lines(
                 }
             }
             MessageRole::Warning => {
-                for line in msg.content.lines() {
-                    all_lines.extend(wrap_text_with_prefix(
-                        &format!("Warning: {line}"),
-                        &[],
-                        &[],
-                        theme.warning_style(),
-                        width,
-                        word_wrap,
-                    ));
-                }
+                push_notice_lines(
+                    &mut all_lines,
+                    "Warning: ",
+                    &msg.content,
+                    theme.warning_style().add_modifier(Modifier::BOLD),
+                    theme.style(),
+                    width,
+                    word_wrap,
+                );
             }
             MessageRole::Compaction => {
                 all_lines.extend(wrap_text_with_prefix(
@@ -870,21 +889,66 @@ fn build_chat_lines(
                 ));
             }
             MessageRole::Error => {
-                all_lines.extend(wrap_text_with_prefix(
-                    &format!("Error: {}", msg.content),
-                    &[],
-                    &[],
-                    theme.error_style(),
+                push_notice_lines(
+                    &mut all_lines,
+                    "Error: ",
+                    &msg.content,
+                    theme.error_style().add_modifier(Modifier::BOLD),
+                    theme.style(),
                     width,
                     word_wrap,
-                ));
+                );
             }
         }
 
-        all_lines.push(Line::raw(""));
+        let next_is_notice = messages
+            .get(message_index + 1)
+            .is_some_and(|next| is_notice_role(&next.role));
+        if !is_notice_role(&msg.role) || !next_is_notice {
+            all_lines.push(Line::raw(""));
+        }
     }
 
     (all_lines, tool_line_indices)
+}
+
+fn is_notice_role(role: &MessageRole) -> bool {
+    matches!(role, MessageRole::Warning | MessageRole::Error)
+}
+
+fn push_notice_lines(
+    all_lines: &mut Vec<Line<'static>>,
+    label: &str,
+    content: &str,
+    label_style: Style,
+    body_style: Style,
+    width: usize,
+    word_wrap: bool,
+) {
+    let logical_lines = content.lines().collect::<Vec<_>>();
+    let logical_lines = if logical_lines.is_empty() {
+        vec![""]
+    } else {
+        logical_lines
+    };
+    let continuation = vec![Span::raw("  ".to_string())];
+    for (index, text) in logical_lines.into_iter().enumerate() {
+        let mut spans = Vec::new();
+        if index == 0 {
+            spans.push(Span::styled(label.to_string(), label_style));
+        } else {
+            spans.push(Span::raw("  ".to_string()));
+        }
+        spans.push(Span::styled(text.to_string(), body_style));
+        let line = Line::from(spans);
+        all_lines.extend(wrap_line_with_prefix(
+            &line,
+            &[],
+            &continuation,
+            width,
+            word_wrap,
+        ));
+    }
 }
 
 fn format_duration_seconds(seconds: u64) -> String {
@@ -915,6 +979,7 @@ fn push_tool_call_chat_lines(
     word_wrap: bool,
     focused: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     animation_level: AnimationLevel,
 ) {
     if chat_tool_display == ChatToolDisplay::Hidden {
@@ -947,28 +1012,78 @@ fn push_tool_call_chat_lines(
     }
 
     if is_running && !tc.streaming_lines.is_empty() {
+        let mut rendered = Vec::new();
         for line in &tc.streaming_lines {
             let content = Line::from(Span::styled(format!("    {line}"), theme.muted_style()));
-            let line_start = all_lines.len();
-            let wrapped = wrap_line_with_prefix(&content, &rail, &rail, width, word_wrap);
-            for offset in 0..wrapped.len() {
-                tool_line_indices.push((line_start + offset, tc.id.clone()));
-            }
-            all_lines.extend(wrapped);
+            rendered.extend(wrap_line_with_prefix(
+                &content, &rail, &rail, width, word_wrap,
+            ));
         }
+        let rendered = if matches!(tc.name.as_str(), "bash" | "shell") {
+            let budget = tool_output_lines.clamp(1, 5);
+            let start = rendered.len().saturating_sub(budget);
+            rendered.into_iter().skip(start).collect()
+        } else {
+            rendered
+        };
+        append_tool_rows(all_lines, tool_line_indices, &tc.id, rendered.into_iter());
     }
 
     if tc.expanded {
         let output_lines = styled_tool_output_lines(tc, highlighter, theme, tc.name == "read");
-        for line in output_lines.into_iter().take(50) {
-            let line_start = all_lines.len();
-            let wrapped = wrap_line_with_prefix(&line, &rail, &rail, width, word_wrap);
-            for offset in 0..wrapped.len() {
-                tool_line_indices.push((line_start + offset, tc.id.clone()));
-            }
-            all_lines.extend(wrapped);
+        let mut rendered = Vec::new();
+        for line in output_lines {
+            rendered.extend(wrap_line_with_prefix(&line, &rail, &rail, width, word_wrap));
         }
+        let limited = if matches!(tc.name.as_str(), "bash" | "shell") {
+            limit_shell_rows(rendered, tool_output_lines, tc.is_error, theme)
+        } else {
+            rendered.into_iter().take(50).collect()
+        };
+        append_tool_rows(all_lines, tool_line_indices, &tc.id, limited.into_iter());
     }
+}
+
+fn append_tool_rows(
+    all_lines: &mut Vec<Line<'static>>,
+    tool_line_indices: &mut Vec<(usize, String)>,
+    tool_call_id: &str,
+    rows: impl Iterator<Item = Line<'static>>,
+) {
+    for line in rows {
+        tool_line_indices.push((all_lines.len(), tool_call_id.to_string()));
+        all_lines.push(line);
+    }
+}
+
+fn limit_shell_rows(
+    rows: Vec<Line<'static>>,
+    budget: usize,
+    is_error: bool,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let budget = budget.max(1);
+    if rows.len() <= budget {
+        return rows;
+    }
+
+    let marker_rows = 1;
+    let content_budget = budget.saturating_sub(marker_rows);
+    let head_rows = if is_error {
+        0
+    } else {
+        content_budget.saturating_sub(1).min(4)
+    };
+    let tail_rows = content_budget.saturating_sub(head_rows);
+    let omitted = rows.len().saturating_sub(head_rows + tail_rows);
+    let mut limited = Vec::with_capacity(budget);
+    limited.extend(rows.iter().take(head_rows).cloned());
+    limited.push(Line::from(Span::styled(
+        format!("    … {omitted} rows omitted · open inspector for full output"),
+        theme.muted_style(),
+    )));
+    limited.extend(rows.into_iter().skip(head_rows + omitted));
+    limited
 }
 
 fn wrap_text_with_prefix(
@@ -1168,6 +1283,7 @@ pub fn build_text_surface(
     tool_focus: Option<usize>,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
     animation_level: AnimationLevel,
@@ -1182,6 +1298,7 @@ pub fn build_text_surface(
         tool_focus,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         animation_level,
@@ -1234,6 +1351,7 @@ pub fn build_click_map(
     scroll_offset: usize,
     word_wrap: bool,
     chat_tool_display: ChatToolDisplay,
+    tool_output_lines: usize,
     thinking_lines: usize,
     show_timestamps: bool,
 ) -> Vec<(u16, String)> {
@@ -1246,6 +1364,7 @@ pub fn build_click_map(
         None,
         word_wrap,
         chat_tool_display,
+        tool_output_lines,
         thinking_lines,
         show_timestamps,
         AnimationLevel::Minimal,

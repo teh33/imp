@@ -182,6 +182,7 @@ fn format_workflow_output_renders_summary_and_units() {
         }),
         is_error: false,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     };
@@ -229,6 +230,7 @@ fn format_workflow_output_renders_scope_target_and_runtime() {
         }),
         is_error: false,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     };
@@ -259,6 +261,7 @@ fn format_workflow_output_renders_delta_actions() {
         }),
         is_error: false,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     };
@@ -326,9 +329,29 @@ fn make_tc(name: &str, args: &str, output: Option<&str>, is_error: bool) -> Disp
         details: serde_json::Value::Null,
         is_error,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     }
+}
+
+#[test]
+fn inspector_detail_includes_tool_notices() {
+    let mut tc = make_tc("bash", "cargo test", Some("ok"), false);
+    tc.add_notice("Low-trust content cannot authorize escalation");
+
+    let render = build_detail_render_data(
+        Some(&tc),
+        &UiConfig::default(),
+        &crate::highlight::Highlighter::new(),
+        &Theme::default(),
+        80,
+    );
+
+    assert!(render
+        .plain_lines
+        .iter()
+        .any(|line| line.contains("Low-trust content cannot authorize escalation")));
 }
 
 #[test]

@@ -180,6 +180,7 @@ impl App {
                                 details: arguments,
                                 is_error: false,
                                 expanded: tools_expanded,
+                                notices: Vec::new(),
                                 streaming_lines: Vec::new(),
                                 streaming_output: String::new(),
                             });
@@ -258,8 +259,8 @@ impl App {
                 result,
                 provenance,
             } => {
-                if let Some(provenance) = provenance.as_ref() {
-                    if let Some(message) = provenance_warning(provenance) {
+                if let Some(message) = provenance.as_ref().and_then(provenance_warning) {
+                    if !self.add_tool_notice(&tool_call_id, &message) {
                         self.push_warning_msg(&message);
                     }
                 }
@@ -386,11 +387,20 @@ impl App {
                 }
             }
             AgentEvent::PolicyChecked { record } => {
-                if let Some(message) = trust_policy_warning(&record) {
-                    self.push_warning_msg(&message);
-                }
-                if let Some(message) = extension_policy_warning(&record) {
-                    self.push_warning_msg(&message);
+                let tool_call_id = record.tool_call_id.clone();
+                for message in [
+                    trust_policy_warning(&record),
+                    extension_policy_warning(&record),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let attached = tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| self.add_tool_notice(id, &message));
+                    if !attached {
+                        self.push_warning_msg(&message);
+                    }
                 }
             }
             AgentEvent::Timing { timing } => {

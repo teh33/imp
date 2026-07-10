@@ -10,6 +10,7 @@ fn make_tc(name: &str, output: Option<&str>) -> DisplayToolCall {
         details: serde_json::Value::Null,
         is_error: false,
         expanded: true,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     }

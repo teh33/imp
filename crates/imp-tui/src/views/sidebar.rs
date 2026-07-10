@@ -695,6 +695,7 @@ fn styled_detail_lines(
         let input_lines = tool_input_detail_lines(tc, theme, content_w.saturating_sub(2));
         lines.extend(input_lines);
     }
+    lines.extend(tc.notice_lines(theme));
     lines.extend(styled_output_lines(
         tc,
         &full_config,

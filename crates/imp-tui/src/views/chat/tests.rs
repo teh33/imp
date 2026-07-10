@@ -9,6 +9,7 @@ fn make_tool(id: &str) -> DisplayToolCall {
         details: serde_json::json!({"path": "src/main.rs"}),
         is_error: false,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     }
@@ -84,6 +85,7 @@ fn wraps_long_user_message() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -116,6 +118,7 @@ fn hide_tools_in_chat_removes_tool_lines() {
         None,
         true,
         ChatToolDisplay::Hidden,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -176,6 +179,7 @@ fn assistant_blocks_preserve_thought_duration_tool_thought_order() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -264,6 +268,7 @@ fn interleaved_mode_renders_tool_between_text_blocks() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -312,6 +317,7 @@ fn summary_mode_hides_tool_output_but_keeps_header() {
         None,
         true,
         ChatToolDisplay::Summary,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -349,6 +355,7 @@ fn focused_tool_call_shows_arrow_in_summary_mode() {
         Some(0),
         true,
         ChatToolDisplay::Summary,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -385,6 +392,7 @@ fn streaming_placeholder_renders_waiting_in_chat() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -418,6 +426,7 @@ fn streaming_placeholder_renders_responding_in_chat() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -426,6 +435,110 @@ fn streaming_placeholder_renders_responding_in_chat() {
 
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
     assert!(rendered.iter().any(|line| line.contains("responding")));
+}
+
+#[test]
+fn shell_output_limit_uses_wrapped_rows_and_head_tail_marker() {
+    let theme = Theme::default();
+    let highlighter = Highlighter::new();
+    let mut tool = make_tool("tc-shell");
+    tool.name = "bash".into();
+    tool.args_summary = "printf output".into();
+    tool.output = Some("alpha alpha alpha alpha\nbeta beta beta beta\ngamma\ndelta".into());
+    tool.expanded = true;
+    let messages = vec![DisplayMessage {
+        role: MessageRole::Assistant,
+        content: String::new(),
+        thinking: None,
+        tool_calls: vec![tool],
+        assistant_blocks: vec![DisplayAssistantBlock::ToolCall {
+            id: "tc-shell".into(),
+        }],
+        is_streaming: false,
+        timestamp: 0,
+    }];
+
+    let (lines, _) = build_chat_lines(
+        &messages,
+        &theme,
+        &highlighter,
+        18,
+        0,
+        None,
+        true,
+        ChatToolDisplay::Interleaved,
+        4,
+        5,
+        false,
+        AnimationLevel::Minimal,
+        AnimationState::Idle,
+    );
+    let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+    let marker = rendered
+        .iter()
+        .position(|line| line.contains("rows omitted"))
+        .expect("omission marker");
+
+    assert!(rendered[..marker].iter().any(|line| line.contains("alpha")));
+    assert!(rendered[marker + 1..]
+        .iter()
+        .any(|line| line.contains("delta")));
+    assert!(!rendered.iter().any(|line| line.contains("gamma")));
+}
+
+#[test]
+fn failed_shell_output_limit_keeps_tail_rows() {
+    let theme = Theme::default();
+    let rows = (1..=8)
+        .map(|row| Line::from(format!("row {row}")))
+        .collect::<Vec<_>>();
+
+    let limited = limit_shell_rows(rows, 4, true, &theme);
+    let rendered = limited.iter().map(line_text).collect::<Vec<_>>();
+
+    assert_eq!(rendered.len(), 4);
+    assert!(rendered[0].contains("rows omitted"));
+    assert_eq!(rendered[3], "row 8");
+}
+
+#[test]
+fn adjacent_notices_do_not_add_blank_rows_between_them() {
+    let theme = Theme::default();
+    let highlighter = Highlighter::new();
+    let notices = [MessageRole::Warning, MessageRole::Error]
+        .into_iter()
+        .map(|role| DisplayMessage {
+            role,
+            content: "notice body".into(),
+            thinking: None,
+            tool_calls: Vec::new(),
+            assistant_blocks: Vec::new(),
+            is_streaming: false,
+            timestamp: 0,
+        })
+        .collect::<Vec<_>>();
+
+    let (lines, _) = build_chat_lines(
+        &notices,
+        &theme,
+        &highlighter,
+        80,
+        0,
+        None,
+        true,
+        ChatToolDisplay::Interleaved,
+        10,
+        5,
+        false,
+        AnimationLevel::Minimal,
+        AnimationState::Idle,
+    );
+
+    assert!(!line_text(&lines[0]).is_empty());
+    assert!(!line_text(&lines[1]).is_empty());
+    assert!(line_text(&lines[2]).is_empty());
+    assert_eq!(lines[0].spans[0].style.fg, Some(theme.warning));
+    assert_eq!(lines[0].spans[1].style.fg, Some(theme.fg));
 }
 
 #[test]
@@ -451,6 +564,7 @@ fn warning_messages_render_with_prefix() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,
@@ -459,7 +573,7 @@ fn warning_messages_render_with_prefix() {
 
     let rendered: Vec<String> = lines.iter().map(line_text).collect();
     assert!(rendered.iter().any(|line| line.contains("Warning: line 1")));
-    assert!(rendered.iter().any(|line| line.contains("Warning: line 2")));
+    assert!(rendered.iter().any(|line| line.trim() == "line 2"));
 }
 
 #[test]
@@ -485,6 +599,7 @@ fn system_messages_render_all_lines() {
         None,
         true,
         ChatToolDisplay::Interleaved,
+        10,
         5,
         false,
         AnimationLevel::Minimal,

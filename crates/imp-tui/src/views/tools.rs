@@ -63,6 +63,8 @@ pub struct DisplayToolCall {
     pub details: serde_json::Value,
     pub is_error: bool,
     pub expanded: bool,
+    /// Deduplicated policy, trust, and provenance notices scoped to this tool.
+    pub notices: Vec<String>,
     /// Rolling buffer of recent streaming output lines for inline chat display.
     pub streaming_lines: Vec<String>,
     /// Full streaming output collected while the tool is still running.
@@ -159,6 +161,16 @@ impl DisplayToolCall {
             }
         }
 
+        if !self.notices.is_empty() {
+            let count = self.notices.len();
+            let label = if count == 1 {
+                "  ⚠".to_string()
+            } else {
+                format!("  ⚠ {count}")
+            };
+            spans.push(Span::styled(label, theme.warning_style()));
+        }
+
         // Result summary when collapsed — keep it compact but more useful than a raw line count.
         if !self.expanded {
             if let Some(ref output) = self.output {
@@ -188,6 +200,24 @@ impl DisplayToolCall {
         ])]
     }
 
+    pub fn add_notice(&mut self, notice: &str) {
+        if !self.notices.iter().any(|existing| existing == notice) {
+            self.notices.push(notice.to_string());
+        }
+    }
+
+    pub fn notice_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        self.notices
+            .iter()
+            .map(|notice| {
+                Line::from(vec![
+                    Span::styled("⚠ ", theme.warning_style()),
+                    Span::styled(notice.clone(), theme.muted_style()),
+                ])
+            })
+            .collect()
+    }
+
     /// Build compact inline spans for multi-tool-per-line rendering: "✓ name args"
     pub fn compact_spans(&self, theme: &Theme) -> Vec<Span<'static>> {
         let icon_style = theme.success_style();
@@ -208,6 +238,14 @@ impl DisplayToolCall {
         ];
         if !args_short.is_empty() {
             spans.push(Span::styled(format!(" {args_short}"), theme.muted_style()));
+        }
+        if !self.notices.is_empty() {
+            let label = if self.notices.len() == 1 {
+                "  ⚠".to_string()
+            } else {
+                format!("  ⚠ {}", self.notices.len())
+            };
+            spans.push(Span::styled(label, theme.warning_style()));
         }
         spans
     }

@@ -9,9 +9,34 @@ fn make_tc(name: &str, args: &str, output: Option<&str>, is_error: bool) -> Disp
         details: serde_json::Value::Null,
         is_error,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     }
+}
+
+#[test]
+fn tool_header_counts_deduplicated_notices() {
+    let mut tc = make_tc("bash", "cargo test", Some("ok"), false);
+    tc.add_notice("Trust warning");
+    tc.add_notice("Trust warning");
+    tc.add_notice("Policy warning");
+
+    let text = tc
+        .header_line(&Theme::default())
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+
+    assert_eq!(tc.notices.len(), 2);
+    assert!(text.contains("⚠ 2"));
+    let compact = tc
+        .compact_spans(&Theme::default())
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(compact.contains("⚠ 2"));
 }
 
 #[test]
@@ -268,6 +293,7 @@ fn multiline_tool_summary_exposes_detail_line() {
         details: serde_json::Value::Null,
         is_error: false,
         expanded: false,
+        notices: Vec::new(),
         streaming_lines: Vec::new(),
         streaming_output: String::new(),
     };
