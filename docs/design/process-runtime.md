@@ -153,12 +153,15 @@ TOML-defined shell tools also use a shared `ProcessManager`. They preserve param
 interpolation, install hints, stdout-before-stderr composition, truncation, timeouts,
 and result details while adding in-flight cancellation and explicit stdin EOF.
 
+Workflow verification command gates use their runner's shared manager. Gate state
+transitions, private artifacts, separate stream summaries, byte accounting, truncation,
+and timeout blocking remain owned by the verification layer.
+
 ## Remaining subprocess inventory
 
 The following production paths still launch processes directly and are not migrated in
 this phase:
 
-- `crates/imp-core/src/workflow/verification_runner.rs` — verification shell commands;
 - `crates/imp-core/src/guardrails.rs` — guardrail shell commands;
 - `crates/imp-lua/src/bridge.rs` — Lua tool subprocess execution;
 - `crates/imp-core/src/typescript_extensions/bun_runner.rs` — TypeScript/Bun hosts;

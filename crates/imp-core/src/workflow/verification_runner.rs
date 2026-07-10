@@ -1,27 +1,38 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{Duration, Instant};
-
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
-
-use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
 
 use super::{
     VerificationArtifactRef, VerificationCommand, VerificationGate, VerificationGateKind,
     VerificationGateResult,
 };
 use crate::error::{Error, Result};
+use crate::process::{ProcessError, ProcessManager};
+
+use super::verification_runner_execution::{execute, VerificationExecution};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CAPTURE_BYTES: usize = 64 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VerificationGateRunner {
     cwd: PathBuf,
     artifact_root: PathBuf,
     default_timeout: Duration,
     max_capture_bytes: usize,
+    manager: ProcessManager,
+}
+
+impl fmt::Debug for VerificationGateRunner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerificationGateRunner")
+            .field("cwd", &self.cwd)
+            .field("artifact_root", &self.artifact_root)
+            .field("default_timeout", &self.default_timeout)
+            .field("max_capture_bytes", &self.max_capture_bytes)
+            .finish()
+    }
 }
 
 impl VerificationGateRunner {
@@ -31,6 +42,7 @@ impl VerificationGateRunner {
             artifact_root: artifact_root.into(),
             default_timeout: DEFAULT_TIMEOUT,
             max_capture_bytes: MAX_CAPTURE_BYTES,
+            manager: ProcessManager::new(),
         }
     }
 
@@ -69,69 +81,23 @@ impl VerificationGateRunner {
             .await
             .map_err(Error::Io)?;
 
-        let mut child_command = Command::new("/bin/sh");
-        child_command
-            .arg("-lc")
-            .arg(&command.command)
-            .current_dir(&cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        // Put verification commands in their own process group so timeout
-        // cleanup can terminate grandchildren spawned by the shell too.
-        isolate_tokio_command(&mut child_command);
-
-        let mut child = child_command.spawn().map_err(Error::Io)?;
-
-        let mut stdout = child.stdout.take().expect("stdout piped");
-        let mut stderr = child.stderr.take().expect("stderr piped");
-        let stdout_task = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).await.map(|_| bytes)
+        let execution = execute(
+            &self.manager,
+            &command.command,
+            &cwd,
+            timeout,
+            self.max_capture_bytes,
+        )
+        .await
+        .map_err(process_error)?;
+        let timed_out = execution.exit.timed_out;
+        let exit_code = (!timed_out).then_some(execution.exit.code).flatten();
+        let blocked_summary = timed_out.then(|| {
+            format!(
+                "verification command timed out after {}ms",
+                timeout.as_millis()
+            )
         });
-        let stderr_task = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-        });
-
-        let status = match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(wait) => wait.map_err(Error::Io)?,
-            Err(_) => {
-                kill_tokio_process_group(&child).await;
-                let _ = child.kill().await;
-                let stdout_bytes = join_output(stdout_task).await;
-                let stderr_bytes = join_output(stderr_task).await;
-                let result = self
-                    .write_artifacts(
-                        gate,
-                        &command,
-                        &cwd,
-                        started.elapsed(),
-                        None,
-                        stdout_bytes,
-                        stderr_bytes,
-                        &gate_dir,
-                        Some(format!(
-                            "verification command timed out after {}ms",
-                            timeout.as_millis()
-                        )),
-                    )
-                    .await?;
-                gate.mark_blocked(
-                    result
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| "verification command timed out".into()),
-                );
-                return Ok(result);
-            }
-        };
-
-        let stdout_bytes = join_output(stdout_task).await;
-        let stderr_bytes = join_output(stderr_task).await;
-        let exit_code = status.code();
         let result = self
             .write_artifacts(
                 gate,
@@ -139,16 +105,24 @@ impl VerificationGateRunner {
                 &cwd,
                 started.elapsed(),
                 exit_code,
-                stdout_bytes,
-                stderr_bytes,
+                execution,
                 &gate_dir,
-                None,
+                blocked_summary,
             )
             .await?;
 
-        match exit_code {
-            Some(0) => gate.mark_passed(result.clone()),
-            _ => gate.mark_failed(result.clone()),
+        if timed_out {
+            gate.mark_blocked(
+                result
+                    .summary
+                    .clone()
+                    .unwrap_or_else(|| "verification command timed out".into()),
+            );
+        } else {
+            match exit_code {
+                Some(0) => gate.mark_passed(result.clone()),
+                _ => gate.mark_failed(result.clone()),
+            }
         }
         Ok(result)
     }
@@ -161,13 +135,20 @@ impl VerificationGateRunner {
         cwd: &Path,
         elapsed: Duration,
         exit_code: Option<i32>,
-        stdout_bytes: Vec<u8>,
-        stderr_bytes: Vec<u8>,
+        execution: VerificationExecution,
         gate_dir: &Path,
         blocked_summary: Option<String>,
     ) -> Result<VerificationGateResult> {
-        let stdout_capture = CapturedOutput::new(stdout_bytes, self.max_capture_bytes);
-        let stderr_capture = CapturedOutput::new(stderr_bytes, self.max_capture_bytes);
+        let stdout_capture = CapturedOutput::new(
+            execution.stdout,
+            execution.stdout_bytes,
+            self.max_capture_bytes,
+        );
+        let stderr_capture = CapturedOutput::new(
+            execution.stderr,
+            execution.stderr_bytes,
+            self.max_capture_bytes,
+        );
         let stdout_path = gate_dir.join("stdout.log");
         let stderr_path = gate_dir.join("stderr.log");
         let status_path = gate_dir.join("status.json");
@@ -251,10 +232,10 @@ fn artifact_ref(
     artifact
 }
 
-async fn join_output(task: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>) -> Vec<u8> {
-    match task.await {
-        Ok(Ok(bytes)) => bytes,
-        _ => Vec::new(),
+fn process_error(error: ProcessError) -> Error {
+    match error {
+        ProcessError::Spawn(error) | ProcessError::Io(error) => Error::Io(error),
+        error => Error::Tool(error.to_string()),
     }
 }
 
@@ -283,14 +264,10 @@ struct CapturedOutput {
 }
 
 impl CapturedOutput {
-    fn new(bytes: Vec<u8>, max_bytes: usize) -> Self {
-        let original_len = bytes.len();
+    fn new(bytes: Vec<u8>, original_len: usize, max_bytes: usize) -> Self {
         let truncated = original_len > max_bytes;
-        let slice = if truncated {
-            &bytes[..max_bytes]
-        } else {
-            &bytes[..]
-        };
+        let retained_len = bytes.len().min(max_bytes);
+        let slice = &bytes[..retained_len];
         let mut content = String::from_utf8_lossy(slice).to_string();
         if truncated {
             content.push_str("\n[verification output truncated]\n");
@@ -316,107 +293,5 @@ impl CapturedOutput {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::workflow::VerificationGateStatus;
-
-    #[tokio::test]
-    async fn command_gate_runner_passes_and_writes_artifacts() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let runner = VerificationGateRunner::new(temp.path(), temp.path().join("artifacts"));
-        let mut gate = VerificationGate::command("pass", "printf 'hello' && printf 'warn' >&2");
-
-        let result = runner.run(&mut gate).await.unwrap();
-
-        assert_eq!(gate.status, VerificationGateStatus::Passed);
-        assert_eq!(result.exit_code, Some(0));
-        assert_eq!(result.stdout_summary.as_deref(), Some("hello"));
-        assert_eq!(result.stderr_summary.as_deref(), Some("warn"));
-        assert!(gate
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == "stdout"));
-        assert_eq!(
-            std::fs::read_to_string(temp.path().join("artifacts/pass/stdout.log")).unwrap(),
-            "hello"
-        );
-        assert!(temp.path().join("artifacts/pass/status.json").exists());
-    }
-
-    #[tokio::test]
-    async fn command_gate_runner_marks_failed_command() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let runner = VerificationGateRunner::new(temp.path(), temp.path().join("artifacts"));
-        let mut gate = VerificationGate::command("fail", "printf 'bad' >&2; exit 7");
-
-        let result = runner.run(&mut gate).await.unwrap();
-
-        assert_eq!(gate.status, VerificationGateStatus::Failed);
-        assert_eq!(result.exit_code, Some(7));
-        assert!(result.summary.unwrap().contains("exit code 7"));
-        assert_eq!(
-            std::fs::read_to_string(temp.path().join("artifacts/fail/stderr.log")).unwrap(),
-            "bad"
-        );
-    }
-
-    #[tokio::test]
-    async fn command_gate_runner_marks_timeout_blocked() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let runner = VerificationGateRunner::new(temp.path(), temp.path().join("artifacts"))
-            .with_default_timeout(Duration::from_millis(50));
-        let mut gate = VerificationGate::command("timeout", "sleep 2");
-
-        let result = runner.run(&mut gate).await.unwrap();
-
-        assert_eq!(gate.status, VerificationGateStatus::Blocked);
-        assert_eq!(result.exit_code, None);
-        assert!(result.summary.unwrap().contains("timed out"));
-        assert!(temp.path().join("artifacts/timeout/status.json").exists());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn command_gate_runner_writes_private_artifacts() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::TempDir::new().unwrap();
-        let artifact_dir = temp.path().join("artifacts");
-        let runner = VerificationGateRunner::new(temp.path(), &artifact_dir);
-        let mut gate = VerificationGate::command("private-artifacts", "echo secret-ish");
-
-        let result = runner.run(&mut gate).await.unwrap();
-        assert_eq!(result.exit_code, Some(0));
-
-        for artifact in &gate.artifacts {
-            let mode = std::fs::metadata(&artifact.path)
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(mode, 0o600, "{}", artifact.path.display());
-        }
-    }
-
-    #[tokio::test]
-    async fn command_gate_runner_truncates_large_output() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let runner = VerificationGateRunner::new(temp.path(), temp.path().join("artifacts"))
-            .with_max_capture_bytes(5);
-        let mut gate = VerificationGate::command("truncate", "printf 'abcdefghijklmnopqrstuvwxyz'");
-
-        let result = runner.run(&mut gate).await.unwrap();
-
-        assert_eq!(gate.status, VerificationGateStatus::Passed);
-        assert!(result.stdout_summary.unwrap().contains("truncated"));
-        let stdout =
-            std::fs::read_to_string(temp.path().join("artifacts/truncate/stdout.log")).unwrap();
-        assert!(stdout.starts_with("abcde"));
-        assert!(stdout.contains("truncated"));
-        assert!(gate
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == "stdout"
-                && artifact.redaction.as_deref() == Some("output truncated")));
-    }
-}
+#[path = "verification_runner_tests.rs"]
+mod tests;
