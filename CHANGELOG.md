@@ -6,6 +6,25 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-07-10
+
+### Added
+
+- Added Kimi K2.7 model metadata, aliases, and provider-specific thinking behavior.
+- Added runtime-owned task state with task lifecycle tools and durable evidence projection.
+- Added typed audit configuration, requirement discovery, doctor reporting, and finding summaries.
+
+### Changed
+
+- Reduced TUI clutter by attaching policy, trust, and provenance notices to tool calls, compacting warning and error presentation, and bounding shell output by rendered rows.
+- Reduced idle TUI rendering overhead and excluded nested Git repositories and worktrees from repository statistics.
+- Split the edit tool into focused matching, exact-edit, anchored-edit, and output modules.
+
+### Fixed
+
+- Listed resumable sessions consistently across configured storage roots.
+- Exposed current OAuth-backed models in the TUI model selector.
+
 ## [0.3.4] - 2026-07-09
 
 ### Added
