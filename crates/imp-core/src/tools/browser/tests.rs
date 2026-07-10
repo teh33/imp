@@ -158,6 +158,24 @@ async fn fake_lightpanda_session_navigates_and_observes() {
     assert!(!stopped.is_error, "{}", output_text(&stopped));
 }
 
+#[test]
+fn navigation_rejects_unsafe_url_forms() {
+    for url in [
+        "file:///tmp/secret",
+        "javascript:alert(1)",
+        "https://user:password@example.com/",
+        "not a url",
+    ] {
+        let error = BrowserAction::Navigate
+            .validate(&json!({"url": url}))
+            .unwrap_err();
+        assert!(!error.is_empty(), "{url}");
+    }
+    assert!(BrowserAction::Navigate
+        .validate(&json!({"url": "https://example.com/path"}))
+        .is_ok());
+}
+
 #[tokio::test]
 async fn invalid_action_parameters_fail_before_starting_lightpanda() {
     let dir = TempDir::new().unwrap();

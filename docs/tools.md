@@ -45,6 +45,19 @@ Before starting a session, install Lightpanda and ensure `lightpanda version` su
 
 Browser sessions are isolated Lightpanda subprocesses. Use `start`, retain the returned `session_id`, then call semantic actions such as `navigate`, `observe`, `markdown`, `extract`, `click`, and `fill`. Call `stop` when finished. Lightpanda does not render screenshots. Browser input defaults to `policy.browser_input = "ask"`. Interactive runs offer once, domain, and session approval scopes; headless runs fail closed unless policy explicitly allows input. Filled values are redacted from approval prompts and records. imp disables Lightpanda telemetry and core dumps, bounds response sizes and operation timeouts, and can block private-network targets.
 
+### Reliability harness
+
+The normal `imp-core` suite runs an offline Lightpanda MCP fault harness covering startup timeout, malformed or mismatched protocol responses, missing tools, bounded and partial responses, process exit, cancellation without retry, tool-level errors, session limits, idle cleanup, sequence isolation, and private-network launch policy.
+
+A deterministic loopback fixture covers redirects, JavaScript forms, semantic observations, markdown extraction, and session sequencing against a real Lightpanda binary:
+
+```bash
+LIGHTPANDA_BIN=/path/to/lightpanda \
+  cargo test -p imp-core real_lightpanda_deterministic_fixture -- --ignored
+```
+
+The fixture explicitly disables private-network blocking only for its isolated loopback server. Production defaults remain unchanged. CI should provide a pinned, checksum-controlled Lightpanda artifact; tests never download a browser binary.
+
 ## Policy interaction
 
 Tool execution is affected by:

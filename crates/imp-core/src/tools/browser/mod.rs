@@ -361,4 +361,6 @@ fn browser_schema() -> Value {
 }
 
 #[cfg(test)]
+mod reliability_tests;
+#[cfg(test)]
 mod tests;

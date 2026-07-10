@@ -96,6 +96,11 @@ impl BrowserSessionManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn session_count_for_test(&self) -> usize {
+        self.sessions.len()
+    }
+
     pub(crate) async fn stop(&mut self, id: &BrowserSessionId) -> Result<(), String> {
         let session = self
             .sessions

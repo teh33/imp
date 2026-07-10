@@ -105,7 +105,7 @@ impl BrowserAction {
 
     pub(crate) fn validate(self, params: &Value) -> Result<(), String> {
         match self {
-            Self::Navigate => require_string(params, "url"),
+            Self::Navigate => validate_navigation_url(params),
             Self::Click => require_target(params),
             Self::Fill | Self::Select => {
                 require_target(params)?;
@@ -221,6 +221,24 @@ impl McpCall {
             arguments: Value::Object(arguments),
         }
     }
+}
+
+fn validate_navigation_url(params: &Value) -> Result<(), String> {
+    require_string(params, "url")?;
+    let raw = params["url"]
+        .as_str()
+        .ok_or_else(|| "browser action requires url".to_string())?;
+    let url = url::Url::parse(raw).map_err(|error| format!("invalid browser URL: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("browser navigation only supports http and https URLs".into());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("browser navigation URL must not contain credentials".into());
+    }
+    if url.host_str().is_none() {
+        return Err("browser navigation URL requires a host".into());
+    }
+    Ok(())
 }
 
 fn target_contains(params: &Value, terms: &[&str]) -> bool {
