@@ -1267,10 +1267,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Native subagent launch now invokes loopr and persists parent, child, loopr run/thread/session identity, scope, artifacts, and current state under the parent run; deterministic fake-loopr and real process-boundary smoke tests verify reload.
+    basis_revision: a929b2f12b87619dfe476e897f8b85251bf14bd8
+    basis_dirty: true
+    basis_fingerprint: 04982eca66a8cb9fe65b3794e0e2a77686d88483d149b145c10619efa3b7ac07
+  gaps:
+  - Streaming child events and richer evidence ingestion remain a later checkpoint.
   imported:
     source: docs/feature-checklist.md
     line: 175
@@ -1286,10 +1289,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Each launch creates an independently addressable loopr thread and persisted mapping; deterministic tests launch two children and preserve separate identities.
+    basis_revision: a929b2f12b87619dfe476e897f8b85251bf14bd8
+    basis_dirty: true
+    basis_fingerprint: 04982eca66a8cb9fe65b3794e0e2a77686d88483d149b145c10619efa3b7ac07
+  gaps:
+  - Runtime/TUI streaming and dynamic concurrency supervision remain later work.
   imported:
     source: docs/feature-checklist.md
     line: 176
@@ -1448,10 +1454,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Structured launch/status/wait/send/cancel details expose running, success, blocked, incomplete, failed, and cancelled states to the model caller and durable mapping.
+    basis_revision: a929b2f12b87619dfe476e897f8b85251bf14bd8
+    basis_dirty: true
+    basis_fingerprint: 04982eca66a8cb9fe65b3794e0e2a77686d88483d149b145c10619efa3b7ac07
+  gaps:
+  - TUI-specific worker status rendering remains a separate slice.
   imported:
     source: docs/feature-checklist.md
     line: 187
@@ -4588,10 +4597,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in recovery checkpoints, session recovery tests, retry logic, and process handling; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Cancel invokes loopr thread stop and returns cancelled only after polling the observed stopped state; fake-loopr and opt-in process-boundary tests cover it.
+    basis_revision: a929b2f12b87619dfe476e897f8b85251bf14bd8
+    basis_dirty: true
+    basis_fingerprint: 04982eca66a8cb9fe65b3794e0e2a77686d88483d149b145c10619efa3b7ac07
+  gaps:
+  - Parent-wide cancellation fan-out is outside this native tool checkpoint.
   imported:
     source: docs/feature-checklist.md
     line: 447

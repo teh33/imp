@@ -15,7 +15,7 @@ The canonical default registration point is `register_native_tools_with_task_sta
 | `read` | Ranged file reads and supported image reads. |
 | `scan` | Tree-sitter code structure search, extraction, related symbols, and likely tests. |
 | `web` | Web/page and read-only GitHub search. |
-| `subagent` | Validate and launch bounded workflow-generated subagent contracts. |
+| `subagent` | Launch and manage bounded workflow-generated loopr subagent contracts. |
 | `task` | Maintain the current session's plan, constraints, step status, and blockers. |
 | `workflow` | List, show, validate, run, complete, and update durable workflows. |
 | `write` | Explicit file creation or overwrite. |
@@ -72,7 +72,9 @@ The fixture explicitly disables private-network blocking only for its isolated l
 
 ### `subagent`
 
-`subagent` currently exposes `launch`. It accepts a workflow-generated `SubagentInput`, validates the objective and child id, checks every writable path against run policy, and returns a started event. It is not a general arbitrary child-process API.
+`subagent` exposes `launch`, `status`, `wait`, `send`, and `cancel`. `launch` accepts only a workflow-generated `SubagentInput`; it validates IDs, objective, allowed context paths, and writable paths against the parent run policy before invoking the separately installed `loopr` executable. It is not a general arbitrary child-process API.
+
+Imp invokes loopr with argument-separated process calls and bounded output/time. It persists the opaque loopr run/thread/session mapping under `.imp/runs/<parent-run-id>/subagents/`, so a later imp process can poll, wait, send, or cancel the same child. Missing loopr, malformed JSON, nonzero exits, stale mappings, and timeout are explicit tool errors. Resource limits are included in the bounded child contract; limits not supported by the loopr CLI are surfaced in structured launch details rather than silently enforced locally.
 
 ### `workflow`
 
