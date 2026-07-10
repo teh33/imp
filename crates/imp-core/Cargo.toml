@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 imp-llm.workspace = true
+imp-subagent.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -166,6 +166,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Internal durable bounded-subagent worker.
+    #[command(name = "__imp-subagent-worker", hide = true)]
+    ImpSubagentWorker { state: PathBuf },
     /// Open the terminal chat interface (legacy alias for `tui`)
     Chat,
     /// Run as an Agent Client Protocol stdio server
@@ -882,6 +885,13 @@ pub async fn run_headless(cli: Cli) {
     // Dispatch subcommands first
     if let Some(command) = &cli.command {
         match command {
+            Commands::ImpSubagentWorker { state } => {
+                if let Err(error) = imp_subagent::run_worker(state) {
+                    eprintln!("imp-subagent worker failed: {error}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             Commands::Chat => {
                 eprintln!("Error: TUI mode is provided by the imp binary composition crate.");
                 std::process::exit(1);
@@ -2391,6 +2401,15 @@ async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     emit_startup_timing(&mut startup_timer, StartupStage::ModelRegistryReady);
 
     let stdout_tx = spawn_json_lines_stdout_writer();
+    stdout_tx
+        .send(json!({
+            "type": "rpc_ready",
+            "protocol": "imp-rpc",
+            "version": 1,
+            "capabilities": ["durable_sessions", "prompt", "followup", "steer", "cancel"],
+        }))
+        .await
+        .map_err(|error| io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))?;
     let rpc_ui = Arc::new(RpcUi::new(stdout_tx.clone()));
 
     let (command_tx, mut command_rx) = mpsc::channel(64);

@@ -69,7 +69,7 @@ Workflow artifacts live under `.imp/workflows/<id>/` and are parsed by `crates/i
 
 The workflow tool can inspect and validate artifacts, run pending command checks, return a main-agent action contract, or return bounded subagent contracts. Agent-completed work uses `complete_step`; explicit status repair and blockers use `update`.
 
-The `subagent` tool currently validates and records launch contracts. It is bounded by workflow-generated input and write policy. Durable workflow state remains file-backed and separate from transient child-run state.
+The `subagent` tool calls the in-workspace `imp-subagent` crate through typed Rust APIs. Imp-core owns the model-facing contract and parent policy; imp-subagent owns durable child RPC-process and session lifecycle. Each child has state, transcript, stderr, and session artifacts under `.imp/runs/<parent-run-id>/subagents/<child-run-id>/`, so later imp processes can status, wait, send, and cancel it. Durable workflow state remains file-backed and separate from child-run state.
 
 ## User-facing surfaces
 

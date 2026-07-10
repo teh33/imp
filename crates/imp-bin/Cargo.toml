@@ -18,6 +18,11 @@ path = "src/main.rs"
 [dependencies]
 imp-cli.workspace = true
 imp-core.workspace = true
+imp-subagent.workspace = true
 imp-llm.workspace = true
 imp-tui.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true

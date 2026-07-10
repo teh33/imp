@@ -1,0 +1,16 @@
+[package]
+name = "imp-subagent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Durable bounded-subagent executor for imp"
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+fs2 = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

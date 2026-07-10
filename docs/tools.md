@@ -15,7 +15,7 @@ The canonical default registration point is `register_native_tools_with_task_sta
 | `read` | Ranged file reads and supported image reads. |
 | `scan` | Tree-sitter code structure search, extraction, related symbols, and likely tests. |
 | `web` | Web/page and read-only GitHub search. |
-| `subagent` | Validate and launch bounded workflow-generated subagent contracts. |
+| `subagent` | Launch and manage bounded workflow-generated imp subagent contracts. |
 | `task` | Maintain the current session's plan, constraints, step status, and blockers. |
 | `workflow` | List, show, validate, run, complete, and update durable workflows. |
 | `write` | Explicit file creation or overwrite. |
@@ -72,7 +72,9 @@ The fixture explicitly disables private-network blocking only for its isolated l
 
 ### `subagent`
 
-`subagent` currently exposes `launch`. It accepts a workflow-generated `SubagentInput`, validates the objective and child id, checks every writable path against run policy, and returns a started event. It is not a general arbitrary child-process API.
+`subagent` exposes `launch`, `status`, `wait`, `send`, and `cancel`. It accepts only workflow-generated `SubagentInput`, validates identifiers, objective, context paths, and writable paths against parent run policy, then calls the in-process `imp-subagent` Rust crate. It is not a general arbitrary child-process API.
+
+`imp-subagent` owns the durable supervisor/session lifecycle and starts a child `imp --mode rpc` process only after the parent contract is validated. Its state remains under `.imp/runs/<parent-run-id>/subagents/<child-run-id>/`; a short Unix socket in the system temporary directory is only a local supervisor transport. There is no `loopr` binary, environment variable, config directory, JSON CLI boundary, or loopr runtime dependency.
 
 ### `workflow`
 

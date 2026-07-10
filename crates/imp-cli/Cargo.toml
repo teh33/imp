@@ -18,6 +18,7 @@ default = []
 [dependencies]
 imp-llm.workspace = true
 imp-core.workspace = true
+imp-subagent.workspace = true
 imp-lua.workspace = true
 serde.workspace = true
 serde_json.workspace = true

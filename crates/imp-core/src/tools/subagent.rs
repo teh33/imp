@@ -1,17 +1,42 @@
+mod contract;
+mod executor;
+
+use std::path::PathBuf;
+
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 
+use self::executor::ImpSubagentExecutor;
 use super::{Tool, ToolContext, ToolOutput};
-use crate::agent::{SubagentEvent, SubagentInput, SubagentSpawnResult, SubagentStatus};
-use crate::error::Result;
+use crate::agent::{SubagentInput, SubagentRunId};
+use crate::error::{Error, Result};
 
-pub struct SubagentTool;
+pub struct SubagentTool {
+    executor: ImpSubagentExecutor,
+}
+
+impl Default for SubagentTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SubagentTool {
+    pub fn new() -> Self {
+        Self {
+            executor: ImpSubagentExecutor::from_current_executable(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct SubagentParams {
     action: String,
     input: Option<SubagentInput>,
+    child_run_id: Option<SubagentRunId>,
+    message: Option<String>,
+    timeout_seconds: Option<u64>,
 }
 
 #[async_trait]
@@ -19,213 +44,213 @@ impl Tool for SubagentTool {
     fn name(&self) -> &str {
         "subagent"
     }
-
     fn label(&self) -> &str {
         "Subagent"
     }
-
     fn description(&self) -> &str {
-        "Launch and manage bounded subagents from workflow-generated contracts. Use this when workflow.run returns a subagent_action contract."
+        "Launch and manage policy-bounded imp subagents from workflow-generated contracts."
     }
-
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "required": ["action"],
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["launch"],
-                    "description": "Subagent action to perform."
-                },
-                "input": {
-                    "type": "object",
-                    "description": "Workflow-generated SubagentInput launch contract."
-                }
-            }
-        })
+        json!({"type":"object","required":["action"],"properties":{
+            "action":{"type":"string","enum":["launch","status","wait","send","cancel"]},
+            "input":{"type":"object","description":"Workflow-generated SubagentInput required for launch."},
+            "child_run_id":{"type":"string","description":"Previously launched imp child id."},
+            "message":{"type":"string","description":"Follow-up required for send."},
+            "timeout_seconds":{"type":"integer","minimum":0}
+        }})
     }
-
     fn is_readonly(&self) -> bool {
         false
     }
-
     async fn execute(
         &self,
         _call_id: &str,
         params: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput> {
-        let params: SubagentParams = serde_json::from_value(params).map_err(|error| {
-            crate::error::Error::Tool(format!("invalid subagent params: {error}"))
-        })?;
+        let params: SubagentParams = serde_json::from_value(params)
+            .map_err(|error| Error::Tool(format!("invalid subagent params: {error}")))?;
         match params.action.as_str() {
-            "launch" => launch_subagent(
+            "launch" => self.launch(
                 params
                     .input
-                    .ok_or_else(|| crate::error::Error::Tool("missing `input` parameter".into()))?,
+                    .ok_or_else(|| Error::Tool("missing `input` parameter".into()))?,
                 &ctx,
             ),
-            other => Ok(ToolOutput::error(format!(
-                "unsupported subagent action `{other}`; expected launch"
+            "status" => self.status(child_id(params.child_run_id)?, &ctx),
+            "wait" => self.wait(
+                child_id(params.child_run_id)?,
+                params.timeout_seconds.unwrap_or(0),
+                &ctx,
+            ),
+            "send" => self.send(
+                child_id(params.child_run_id)?,
+                params
+                    .message
+                    .ok_or_else(|| Error::Tool("missing `message` parameter".into()))?,
+                &ctx,
+            ),
+            "cancel" => self.cancel(child_id(params.child_run_id)?, &ctx),
+            action => Ok(ToolOutput::error(format!(
+                "unsupported subagent action `{action}`"
             ))),
         }
     }
 }
 
-fn launch_subagent(input: SubagentInput, ctx: &ToolContext) -> Result<ToolOutput> {
-    validate_launch_input(&input, ctx)?;
-    let event = SubagentEvent::Started {
-        child_run_id: input.child_run_id.clone(),
-        role: input.role.clone(),
-        objective: input.objective.clone(),
-    };
-    let result = SubagentSpawnResult {
-        child_run_id: input.child_run_id.clone(),
-        events: vec![event.clone()],
-    };
-    let text = format!(
-        "Subagent launched: {} [{:?}]\nObjective: {}\nStatus: {:?}",
-        input.child_run_id.as_str(),
-        input.role,
-        input.objective,
-        SubagentStatus::Running
-    );
-    Ok(ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text { text }],
-        details: json!({
-            "action": "launch",
-            "status": "running",
-            "result": result,
-            "input": input,
-        }),
-        is_error: false,
-    })
+impl SubagentTool {
+    fn launch(&self, input: SubagentInput, ctx: &ToolContext) -> Result<ToolOutput> {
+        validate_launch_input(&input, ctx)?;
+        let record = self.executor.launch(&input, ctx)?;
+        Ok(output(
+            "launch",
+            &record,
+            json!({"input": input, "record": record}),
+            false,
+        ))
+    }
+    fn status(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+        let record = self.executor.status(&ctx.cwd, &child)?;
+        Ok(output(
+            "status",
+            &record,
+            json!({"child_run_id": child, "record": record}),
+            false,
+        ))
+    }
+    fn wait(
+        &self,
+        child: SubagentRunId,
+        timeout_seconds: u64,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput> {
+        let record = self.executor.wait(&ctx.cwd, &child, timeout_seconds)?;
+        let outcome = self.executor.outcome(&record);
+        Ok(output(
+            "wait",
+            &record,
+            json!({"child_run_id": child, "record": record, "outcome": outcome}),
+            false,
+        ))
+    }
+    fn send(&self, child: SubagentRunId, message: String, ctx: &ToolContext) -> Result<ToolOutput> {
+        if message.trim().is_empty() {
+            return Err(Error::Tool(
+                "subagent send requires a non-empty message".into(),
+            ));
+        }
+        let record = self.executor.send(&ctx.cwd, &child, message)?;
+        Ok(output(
+            "send",
+            &record,
+            json!({"child_run_id": child, "record": record}),
+            false,
+        ))
+    }
+    fn cancel(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+        let record = self.executor.cancel(&ctx.cwd, &child)?;
+        Ok(output(
+            "cancel",
+            &record,
+            json!({"child_run_id": child, "record": record}),
+            false,
+        ))
+    }
 }
 
 fn validate_launch_input(input: &SubagentInput, ctx: &ToolContext) -> Result<()> {
-    if input.child_run_id.as_str().trim().is_empty() {
-        return Err(crate::error::Error::Tool(
-            "subagent launch requires a non-empty child_run_id".into(),
-        ));
-    }
+    valid_id(input.parent_run_id.as_str())?;
+    valid_id(input.child_run_id.as_str())?;
     if input.objective.trim().is_empty() {
-        return Err(crate::error::Error::Tool(
+        return Err(Error::Tool(
             "subagent launch requires a non-empty objective".into(),
         ));
     }
+    for path in input
+        .resource_limits
+        .allowed_paths
+        .iter()
+        .chain(&input.resource_limits.writable_paths)
+    {
+        ensure_contract_path(path, ctx)?;
+    }
     for path in &input.resource_limits.writable_paths {
-        ctx.check_write_path(path).map_err(|reason| {
-            crate::error::Error::Tool(format!("subagent launch denied: {reason}"))
-        })?;
+        ctx.check_write_path(path)
+            .map_err(|reason| Error::Tool(format!("subagent launch denied: {reason}")))?;
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-
-    use crate::agent::{
-        ParentRunId, SubagentContext, SubagentMergePolicy, SubagentResourceLimits, SubagentRole,
-        SubagentRunId,
-    };
-    use crate::config::{AgentMode, Config};
-    use crate::policy::RunPolicy;
-    use crate::tools::{AnchorStore, CheckpointState, FileCache, FileTracker, ToolUpdate};
-    use crate::trust::Provenance;
-    use crate::ui::NullInterface;
-    use crate::workflow_review::TurnWorkflowReviewAccumulator;
-
-    fn test_ctx(dir: &Path, run_policy: RunPolicy) -> ToolContext {
-        let (update_tx, _) = tokio::sync::mpsc::channel::<ToolUpdate>(8);
-        let (command_tx, _) = tokio::sync::mpsc::channel(8);
-        ToolContext {
-            cwd: dir.to_path_buf(),
-            cancelled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            update_tx,
-            command_tx,
-            ui: Arc::new(NullInterface),
-            file_cache: Arc::new(FileCache::new()),
-            checkpoint_state: Arc::new(CheckpointState::new()),
-            file_tracker: Arc::new(std::sync::Mutex::new(FileTracker::new())),
-            anchor_store: Arc::new(AnchorStore::new()),
-            lua_tool_loader: None,
-            mode: AgentMode::Full,
-            read_max_lines: 500,
-            turn_workflow_review: Arc::new(std::sync::Mutex::new(
-                TurnWorkflowReviewAccumulator::default(),
-            )),
-            config: Arc::new(Config::default()),
-            run_policy,
-            supporting_provenance: Vec::<Provenance>::new(),
-        }
-    }
-
-    fn sample_input() -> SubagentInput {
-        SubagentInput {
-            parent_run_id: ParentRunId::new("parent-1"),
-            child_run_id: SubagentRunId::new("child-1"),
-            role: SubagentRole::Verifier,
-            objective: "Verify workflow handoff".to_string(),
-            context: SubagentContext::default(),
-            resource_limits: SubagentResourceLimits {
-                writable_paths: vec![PathBuf::from("artifacts/out.md")],
-                ..SubagentResourceLimits::default()
-            },
-            merge_policy: SubagentMergePolicy::Verify,
-            output_contract: Some("Report verification evidence".into()),
-        }
-    }
-
-    #[tokio::test]
-    async fn subagent_tool_schema_supports_launch() {
-        let schema = SubagentTool.parameters();
-        assert_eq!(schema["properties"]["action"]["enum"][0], "launch");
-        assert!(schema["properties"].get("input").is_some());
-    }
-
-    #[tokio::test]
-    async fn subagent_tool_events_returns_started_event() {
-        let temp = tempfile::TempDir::new().expect("tempdir");
-        let ctx = test_ctx(temp.path(), RunPolicy::default());
-        let output = SubagentTool
-            .execute(
-                "call-1",
-                json!({ "action": "launch", "input": sample_input() }),
-                ctx,
-            )
-            .await
-            .expect("launch succeeds");
-
-        let text = output.text_content().expect("text output");
-        assert!(text.contains("Subagent launched: child-1"), "{text}");
-        assert_eq!(output.details["status"], "running");
-        assert_eq!(output.details["result"]["child_run_id"], "child-1");
-        assert_eq!(
-            output.details["result"]["events"][0]["started"]["child_run_id"],
-            "child-1"
-        );
-    }
-
-    #[tokio::test]
-    async fn subagent_tool_policy_rejects_disallowed_write_scope() {
-        let temp = tempfile::TempDir::new().expect("tempdir");
-        let ctx = test_ctx(temp.path(), RunPolicy::new().allow_write("allowed/**"));
-        let error = match SubagentTool
-            .execute(
-                "call-1",
-                json!({ "action": "launch", "input": sample_input() }),
-                ctx,
-            )
-            .await
-        {
-            Ok(_) => panic!("policy denial should fail the tool call"),
-            Err(error) => error,
-        };
-
-        assert!(error.to_string().contains("subagent launch denied"));
+fn child_id(value: Option<SubagentRunId>) -> Result<SubagentRunId> {
+    let value = value.ok_or_else(|| Error::Tool("missing `child_run_id` parameter".into()))?;
+    valid_id(value.as_str())?;
+    Ok(value)
+}
+fn valid_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Err(Error::Tool(
+            "subagent ids must contain only ASCII letters, numbers, '-' or '_'".into(),
+        ))
+    } else {
+        Ok(())
     }
 }
+fn ensure_contract_path(path: &std::path::Path, ctx: &ToolContext) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.cwd.join(path)
+    };
+    let candidate = canonicalize_missing(&absolute);
+    if !candidate.starts_with(canonicalize_missing(&ctx.cwd)) {
+        return Err(Error::Tool(format!(
+            "subagent launch denied: context path {} is outside parent cwd",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+fn canonicalize_missing(path: &std::path::Path) -> PathBuf {
+    if let Ok(path) = path.canonicalize() {
+        return path;
+    }
+    let mut suffix = Vec::new();
+    let mut current = path;
+    while let Some(parent) = current.parent() {
+        if let Some(name) = current.file_name() {
+            suffix.push(name);
+        }
+        if let Ok(mut resolved) = parent.canonicalize() {
+            for name in suffix.iter().rev() {
+                resolved.push(name);
+            }
+            return resolved;
+        }
+        current = parent;
+    }
+    path.to_path_buf()
+}
+fn output(
+    action: &str,
+    record: &imp_subagent::Record,
+    details: serde_json::Value,
+    is_error: bool,
+) -> ToolOutput {
+    ToolOutput {
+        content: vec![imp_llm::ContentBlock::Text {
+            text: format!(
+                "Subagent {action}: {} [{}]",
+                record.child_id,
+                executor::status_name(&record.status)
+            ),
+        }],
+        details: json!({"action":action,"status":executor::status_name(&record.status),"result":details}),
+        is_error,
+    }
+}
+
+#[cfg(test)]
+mod tests;

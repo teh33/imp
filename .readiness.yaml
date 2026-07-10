@@ -1267,10 +1267,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Native subagent launch calls the in-workspace imp-subagent Rust API. It persists parent/child identity, child RPC session, artifacts, state, limits, and policy-derived child arguments under the parent run. Deterministic process-boundary tests exercise durable lifecycle without loopr.
+    basis_revision: 1e843fd4c770ce2d7275f26fcab29ff423d8207a
+    basis_dirty: true
+    basis_fingerprint: c732e033012b89622143df6043589650ec0cd70c39bf3b604a7f4c6111ce1bcb
+  gaps:
+  - Streaming child events and richer evidence ingestion remain a later checkpoint.
   imported:
     source: docs/feature-checklist.md
     line: 175
@@ -1286,10 +1289,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Each launch creates an independently addressable imp-subagent worker and child RPC session with durable state. The process-boundary test launches multiple independent children under one parent run.
+    basis_revision: 1e843fd4c770ce2d7275f26fcab29ff423d8207a
+    basis_dirty: true
+    basis_fingerprint: c732e033012b89622143df6043589650ec0cd70c39bf3b604a7f4c6111ce1bcb
+  gaps:
+  - Runtime/TUI streaming and dynamic concurrency supervision remain later work.
   imported:
     source: docs/feature-checklist.md
     line: 176
@@ -1448,10 +1454,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in `workflow/schema`, service/tool actions, child contracts, and workflow tests; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Native subagent launch/status/wait/send/cancel provide structured running, success, blocked, incomplete, failed, and cancelled state through durable records and model-visible details.
+    basis_revision: 1e843fd4c770ce2d7275f26fcab29ff423d8207a
+    basis_dirty: true
+    basis_fingerprint: c732e033012b89622143df6043589650ec0cd70c39bf3b604a7f4c6111ce1bcb
+  gaps:
+  - TUI-specific worker status rendering remains a separate slice.
   imported:
     source: docs/feature-checklist.md
     line: 187
@@ -4588,10 +4597,13 @@ nodes:
   weight: 1
   lifecycle: active
   assessment:
-    level: partial
-    rationale: Only foundations/scaffolding are present in recovery checkpoints, session recovery tests, retry logic, and process handling; this is not an integrated product behavior.
-    actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    level: integrated
+    rationale: Cancel routes through the typed imp-subagent API, terminates the child process group, persists cancelled state, and is exercised by the real imp worker process-boundary test.
+    basis_revision: 1e843fd4c770ce2d7275f26fcab29ff423d8207a
+    basis_dirty: true
+    basis_fingerprint: c732e033012b89622143df6043589650ec0cd70c39bf3b604a7f4c6111ce1bcb
+  gaps:
+  - Parent-wide cancellation fan-out is outside this native tool checkpoint.
   imported:
     source: docs/feature-checklist.md
     line: 447
