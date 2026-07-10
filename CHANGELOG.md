@@ -6,6 +6,17 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-07-09
+
+### Added
+
+- Added GPT-5.6 model metadata and aliases, including Sol, Terra, and Luna variants.
+
+### Changed
+
+- Reduced default prompt/request size by removing the dynamic Current Task State system-prompt block.
+- Shortened the model-facing `read` tool schema while preserving existing runtime compatibility for advanced read options.
+
 ## [0.3.3] - 2026-06-03
 
 ### Added
