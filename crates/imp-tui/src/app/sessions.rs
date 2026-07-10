@@ -1,74 +1,56 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent};
-use imp_core::compaction::COMPACTION_SUMMARY_PREFIX;
+use imp_core::runtime::{RuntimeEvent, RuntimeEventKind, RuntimeSessionProjection};
 use imp_core::session::SessionManager;
 use imp_llm::Message;
 
-use crate::views::chat::{DisplayMessage, MessageRole};
 use crate::views::session_picker::SessionPickerState;
 
 use super::{
-    App, RuntimeSignal, SessionListResult, SessionOpenResult, UiMode, SESSION_LIST_PAGE_SIZE,
-    SESSION_LIST_PREFETCH_REMAINING,
+    agent_events::project_runtime_history, App, RuntimeSignal, SessionListResult,
+    SessionOpenResult, UiMode, SESSION_LIST_PAGE_SIZE, SESSION_LIST_PREFETCH_REMAINING,
 };
 
 impl App {
-    /// Load messages from the current session branch into display messages.
+    /// Load the current durable session branch into authoritative runtime state,
+    /// then project that state into display messages.
     pub fn load_session_messages(&mut self) {
-        self.messages.clear();
-        self.invalidate_chat_render_cache();
-
         let mut branch_messages: Vec<Message> = self.session.get_active_messages();
         imp_core::session::sanitize_messages(&mut branch_messages);
-
-        for msg in &branch_messages {
-            match msg {
-                // Attach tool results to their parent tool call display entry
-                imp_llm::Message::ToolResult(tr) => {
-                    let output_text = tr
-                        .content
-                        .iter()
-                        .filter_map(|b| match b {
-                            imp_llm::ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
-                    let mut attached = false;
-                    for display_msg in self.messages.iter_mut().rev() {
-                        for tc in &mut display_msg.tool_calls {
-                            if tc.id == tr.tool_call_id {
-                                tc.output = Some(output_text.clone());
-                                if tc.streaming_output.is_empty() {
-                                    tc.streaming_output = output_text.clone();
-                                }
-                                tc.details = tr.details.clone();
-                                tc.is_error = tr.is_error;
-                                attached = true;
-                                break;
-                            }
-                        }
-                        if attached {
-                            break;
-                        }
-                    }
-                    // Only show as standalone if no matching tool call found
-                    if !attached {
-                        self.messages.push(DisplayMessage::from_message(msg));
-                    }
-                }
-                _ => {
-                    let mut display = DisplayMessage::from_message(msg);
-                    if matches!(msg, imp_llm::Message::User(_))
-                        && display.content.starts_with(COMPACTION_SUMMARY_PREFIX)
-                    {
-                        display.role = MessageRole::Compaction;
-                    }
-                    self.messages.push(display);
-                }
-            }
-        }
+        let projection = RuntimeSessionProjection::from_messages(&branch_messages);
+        let run_id = self
+            .runtime_state
+            .snapshot_ref()
+            .workflow
+            .run_id
+            .clone()
+            .unwrap_or_else(|| "tui-pending".to_string());
+        self.runtime_state.reset(run_id.clone());
+        self.runtime_event_sequence = 1;
+        let hydration = RuntimeEvent {
+            run_id,
+            sequence: self.runtime_event_sequence,
+            kind: RuntimeEventKind::SessionHydrated {
+                transcript: projection.transcript,
+                completed_tools: projection.completed_tools,
+            },
+            ..RuntimeEvent::default()
+        };
+        let _ = self.runtime_state.apply(&hydration);
+        let expanded = self.tools_expanded
+            && self.config.ui.effective_chat_tool_display()
+                == imp_core::config::ChatToolDisplay::Interleaved;
+        self.messages = project_runtime_history(self.runtime_state.snapshot_ref(), expanded);
+        self.runtime_message_projection_index = self
+            .runtime_state
+            .snapshot_ref()
+            .transcript
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (message.id.clone(), index))
+            .collect();
+        self.invalidate_chat_render_cache();
     }
 
     pub(super) fn start_session_list_load(&mut self) {

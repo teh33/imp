@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
+use imp_core::runtime::{
+    RuntimeApplyOutcome, RuntimeAssistantBlock, RuntimeEvent, RuntimeEventKind, RuntimeMessageRole,
+    RuntimeTranscriptMessage,
+};
 use imp_core::session::{SessionEntry, SessionManager};
 use imp_llm::{truncate_chars_with_suffix, ContentBlock, Message, UserMessage};
 
 use crate::views::chat::{DisplayMessage, MessageRole};
-use crate::views::tools::DisplayToolCall;
 
 use super::{single_line_preview, App, RuntimeSignal};
 
@@ -43,6 +46,7 @@ impl App {
             is_streaming: false,
             timestamp,
         });
+        self.record_runtime_user_message(&visible_text, timestamp);
         self.messages.push(DisplayMessage {
             role: MessageRole::Assistant,
             content: String::new(),
@@ -52,6 +56,7 @@ impl App {
             is_streaming: true,
             timestamp: imp_llm::now(),
         });
+        self.record_runtime_pending_assistant();
         self.invalidate_chat_render_cache();
         let entry_id = uuid::Uuid::new_v4().to_string();
         let persist_session = self.session.clone();
@@ -74,6 +79,60 @@ impl App {
         self.tool_focus_pinned = false;
         self.sidebar_auto_follow = true;
         self.set_pending_agent_turn(agent_prompt, Some(visible_text), None);
+    }
+
+    fn record_runtime_pending_assistant(&mut self) {
+        let timestamp = imp_llm::now();
+        let message = RuntimeTranscriptMessage {
+            id: format!("assistant-pending-{timestamp}"),
+            role: RuntimeMessageRole::Assistant,
+            is_streaming: true,
+            timestamp_ms: Some(timestamp.saturating_mul(1000)),
+            ..RuntimeTranscriptMessage::default()
+        };
+        let id = message.id.clone();
+        if self.apply_runtime_message(message) {
+            self.runtime_message_projection_index
+                .insert(id, self.messages.len().saturating_sub(1));
+        }
+    }
+
+    fn record_runtime_user_message(&mut self, text: &str, timestamp: u64) {
+        let message = RuntimeTranscriptMessage {
+            id: format!("user-{timestamp}"),
+            role: RuntimeMessageRole::User,
+            blocks: vec![RuntimeAssistantBlock::VisibleText {
+                text: text.to_string(),
+            }],
+            timestamp_ms: Some(timestamp.saturating_mul(1000)),
+            ..RuntimeTranscriptMessage::default()
+        };
+        let _ = self.apply_runtime_message(message);
+    }
+
+    fn apply_runtime_message(&mut self, message: RuntimeTranscriptMessage) -> bool {
+        self.runtime_event_sequence = self.runtime_event_sequence.saturating_add(1);
+        let run_id = self
+            .runtime_state
+            .snapshot_ref()
+            .workflow
+            .run_id
+            .clone()
+            .unwrap_or_else(|| "tui-pending".to_string());
+        let event = RuntimeEvent {
+            run_id,
+            sequence: self.runtime_event_sequence,
+            kind: RuntimeEventKind::MessageObserved { message },
+            ..RuntimeEvent::default()
+        };
+        let applied = matches!(
+            self.runtime_state.apply(&event),
+            RuntimeApplyOutcome::Applied(_) | RuntimeApplyOutcome::Gap { .. }
+        );
+        if !applied {
+            self.trace_tui("runtime_message_rejected");
+        }
+        applied
     }
 
     pub(super) fn set_pending_agent_turn(
@@ -141,18 +200,6 @@ impl App {
 
     pub(super) fn latest_streaming_message_mut(&mut self) -> Option<&mut DisplayMessage> {
         self.messages.iter_mut().rev().find(|msg| msg.is_streaming)
-    }
-
-    pub(super) fn find_tool_call_mut(
-        &mut self,
-        tool_call_id: &str,
-    ) -> Option<&mut DisplayToolCall> {
-        for msg in self.messages.iter_mut().rev() {
-            if let Some(tc) = msg.tool_calls.iter_mut().find(|tc| tc.id == tool_call_id) {
-                return Some(tc);
-            }
-        }
-        None
     }
 
     pub(super) fn queued_message_preview(&self, terminal_width: u16) -> Option<String> {

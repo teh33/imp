@@ -34,6 +34,7 @@ mod recovery;
 mod run_loop;
 mod tool_execution;
 
+pub(crate) use events::redact_runtime_value;
 pub use events::{
     AgentEvent, BrowserEvent, BrowserEventKind, RecoveryCheckpoint, RecoveryCheckpointKind,
     TimingEvent, TimingStage,

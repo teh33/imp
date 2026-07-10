@@ -369,12 +369,29 @@ impl App {
                 // Resolve prefix: exact match first, then unique prefix match.
                 // Keep the original text for /skill:<name> so arguments survive.
                 let commands = self.slash_commands();
+                let mut typed_parts = canonical_typed.splitn(2, char::is_whitespace);
+                let typed_command = typed_parts.next().unwrap_or_default();
+                if typed_command == "plan" {
+                    self.push_error_msg(&format!("Unknown command: /{canonical_typed}"));
+                    self.editor.push_history();
+                    self.editor.clear();
+                    return;
+                }
+                if !canonical_typed.starts_with("skill:")
+                    && typed_command != "improve"
+                    && !commands.iter().any(|command| {
+                        command.name == typed_command || command.name.starts_with(typed_command)
+                    })
+                {
+                    self.execute_command(canonical_typed);
+                    self.editor.push_history();
+                    self.editor.clear();
+                    return;
+                }
                 let cmd =
                     if canonical_typed == "improve safe" || canonical_typed.starts_with("skill:") {
                         canonical_typed.to_string()
                     } else {
-                        let mut typed_parts = canonical_typed.splitn(2, char::is_whitespace);
-                        let typed_command = typed_parts.next().unwrap_or_default();
                         let typed_args = typed_parts.next().unwrap_or_default().trim();
                         let resolved_command = commands
                             .iter()
