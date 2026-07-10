@@ -24,40 +24,17 @@ impl Tool for ReadTool {
         "Read File"
     }
     fn description(&self) -> &str {
-        "Read a file with stable line-oriented output. Supports start_line/end_line ranges, anchors, and images."
+        "Read a file by path, line range, or semantic target."
     }
     fn parameters(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string" },
-                "start_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "1-indexed first line to read."
-                },
-                "end_line": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "1-indexed inclusive last line to read."
-                },
-                "anchors": {
-                    "type": "boolean",
-                    "description": "When true, include opaque per-line anchors for stale-safe anchored edits. Anchors are session-local integrity markers, not security tokens."
-                },
-                "target": {
-                    "type": "string",
-                    "description": "Optional semantic read target. Supports file#symbol or file:line syntax. When set, read expands to the target symbol or enclosing syntax block for parseable source files."
-                },
-                "symbol": {
-                    "type": "string",
-                    "description": "Optional symbol name to read from a parseable source file. Equivalent to path#symbol."
-                },
-                "expand": {
-                    "type": "string",
-                    "enum": ["enclosing_symbol"],
-                    "description": "When set with target file:line or start_line, expand the read to the enclosing syntax block."
-                }
+                "start_line": { "type": "integer", "minimum": 1 },
+                "end_line": { "type": "integer", "minimum": 1 },
+                "anchors": { "type": "boolean" },
+                "target": { "type": "string" }
             },
             "required": ["path"]
         })

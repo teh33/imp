@@ -397,6 +397,75 @@ async fn edit_replaces_first_occurrence_only() {
 }
 
 #[tokio::test]
+async fn edit_ignores_empty_transaction_array_with_single_edit_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("single.txt");
+    std::fs::write(&file, "old value\n").unwrap();
+
+    let result = EditTool
+        .execute(
+            "empty-edits",
+            json!({
+                "path": "single.txt",
+                "old_text": "old value",
+                "new_text": "new value",
+                "edits": []
+            }),
+            test_ctx(dir.path()),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "new value\n");
+}
+
+#[tokio::test]
+async fn edit_empty_transaction_without_single_fields_keeps_transaction_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = EditTool
+        .execute("empty-edits", json!({"edits": []}), test_ctx(dir.path()))
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    let text = result
+        .content
+        .iter()
+        .find_map(|block| match block {
+            imp_llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(text.contains("Missing or empty edits array"));
+}
+
+#[tokio::test]
+async fn edit_ignores_empty_anchor_with_exact_edit_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("single.txt");
+    std::fs::write(&file, "old value\n").unwrap();
+
+    let result = EditTool
+        .execute(
+            "empty-anchor",
+            json!({
+                "path": "single.txt",
+                "old_text": "old value",
+                "new_text": "new value",
+                "anchor_start": "",
+                "anchor_end": ""
+            }),
+            test_ctx(dir.path()),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "new value\n");
+}
+
+#[tokio::test]
 async fn edit_empty_old_text_error() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("empty.txt");
