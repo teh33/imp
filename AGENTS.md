@@ -61,6 +61,11 @@ Agents working in this repo should build the correct version of a change, not th
 - Preserve durable session/workflow formats unless the change explicitly includes migration or compatibility handling.
 - Do not describe future TypeScript extension support as shipped. Current shipped extension support is Lua.
 
+## Readiness inventory
+
+- `.readiness.yaml` is imp's exploratory product-readiness ledger. When work affects an inventoried capability, discover relevant criteria with `ready find "<task terms>" --limit 10 --json`, then inspect selected criteria with `ready show <selector> --json`. Treat `any-term-fallback` results as candidates, not exact matches. Use `ready next` only when the user asks for readiness/backlog work.
+- After evidence-backed changes, update related assessments, gaps, and discoveries through atomic `ready add --stdin` or `ready apply --stdin` batches. Do not raise levels from code presence alone, mark criteria complete with unresolved gaps, or treat the current inventory as exhaustive.
+
 ## Verification
 
 Use the narrowest meaningful check for the files touched.
