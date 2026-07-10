@@ -31,3 +31,6 @@ art_test.txt
 art.html
 art.html.bak
 draft.html
+
+# Generated evaluator worktrees.
+evals/worktrees/

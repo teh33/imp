@@ -1,52 +1,113 @@
 # AGENTS.md — imp
 
-This file adds only imp-specific guidance. Keep general behavior in `~/.imp/agents.md` and machine-local Git rules in home-directory agent instructions.
+This file is imp's product and engineering compass. It should remain useful as the implementation changes. Keep transient status, crate inventories, and decomposition backlogs in maintained architecture, readiness, or planning artifacts instead.
 
-- Product: `imp` is an agent engine and native worker/runtime for TUI, one-shot CLI, and JSONL RPC use.
-- Scope: structured tools, durable sessions, workflows, provider integrations, policy checks, and Lua extensions.
-- Priorities: agent/runtime quality, policy boundaries, context/evidence handling, native tool UX, provider integration, session durability, workflow verification, hostability, and safe extensibility.
+General behavior comes from `~/.imp/agents.md`; machine-local Git policy comes from the home-directory instructions. This file adds only imp-specific direction.
 
-## Workspace
+## Product direction
 
-- `crates/imp-core`: agent runtime, tools, sessions, policies, workflows, context.
-- `crates/imp-llm`: provider/model abstractions and LLM APIs.
-- `crates/imp-cli`: CLI, auth/setup, headless/RPC, chat shell, import/install helpers.
-- `crates/imp-tui`: terminal UI, app state, rendering, input/event loop, runtime signals.
-- `crates/imp-lua`: Lua tools, slash commands, and hooks.
-- `crates/imp-gui`: postponed experimental GUI.
-- root package: `cargo install --path .` shim.
+imp is a local-first agent engine and native runtime for serious software work. Its core promise is:
 
-## Standards
+> Given a difficult repository task with real constraints, imp can understand the codebase, plan and execute the work with minimal waste, survive interruption, verify the result, and show why the work is complete.
 
-- Build durable behavior, not demo shims; follow real control flow, persistence, policy, errors, and UX.
-- Prefer typed domain models, explicit state, and narrow APIs over stringly or speculative abstractions.
-- Treat policy, tool execution, secrets, provider traffic, and file mutation as security-sensitive.
-- Preserve public behavior and durable session/workflow formats unless compatibility is handled.
-- Shipped extension support is Lua; do not present TypeScript support as shipped.
+Optimize decisions in this order:
+
+1. correct completion of substantial repository work;
+2. user control, safety, and clear runtime behavior;
+3. speed, context efficiency, and low operational waste;
+4. extensibility that preserves the first three properties.
+
+Prefer depth on the core path over feature count or ecosystem parity. A feature belongs in core when it materially improves the promise above. Otherwise prefer an extension, a separate tool, or an explicit exclusion.
+
+## Enduring boundaries
+
+- Keep policy, tool effects, persistence, recovery, and completion decisions in the local runtime. Providers may propose actions; they do not own those boundaries.
+- Keep user-facing and host-facing adapters consistent through shared runtime semantics rather than surface-specific behavior forks.
+- Make durable state typed, inspectable, versionable, and recoverable. This includes sessions, workflows, traces, evidence, policy decisions, and worker state.
+- Make powerful behavior controllable before making it automatic. Approval, cancellation, steering, scope, and recovery must have explicit semantics.
+- Treat tools, hooks, extensions, workers, and external content as constrained inputs. They cannot self-authorize, bypass provenance, or weaken host policy.
+- Label experimental and partial surfaces honestly. Code presence is not proof that a capability is shipped, supported, or production-ready.
+- Do not expand imp into a broad deployment, team, or enterprise control plane without evidence that doing so strengthens its core product promise.
+
+## Establish current reality
+
+Do not rely on this file for a snapshot of the repository. Before changing behavior:
+
+1. read the applicable instructions and user objective;
+2. inspect `Cargo.toml` for current workspace membership and dependency boundaries;
+3. inspect `docs/architecture.md` for intended ownership and runtime flow;
+4. follow the actual call path, persistence path, policy path, tests, and user-facing adapter involved;
+5. check Git state and preserve unrelated work.
+
+Treat implementation and exercised tests as evidence of current behavior, not of product readiness. If code, tests, and documentation disagree, determine the real behavior and fix in-scope drift rather than choosing the most convenient source.
+
+## Choosing direction at any maturity
+
+The user objective defines the required outcome. Use this product compass to resolve ambiguity, choose implementation depth, and evaluate tradeoffs without replacing explicit user intent.
+
+When selecting work or choosing among viable approaches:
+
+1. establish the affected capability's maturity from production wiring, tests, evidence, and known gaps;
+2. identify the weakest link in the end-to-end user outcome, not merely the easiest local change;
+3. choose the smallest coherent change that removes that bottleneck without creating a parallel architecture;
+4. match proof to maturity and risk;
+5. leave the capability easier to understand, operate, and verify than before.
+
+For a scaffold, prove one narrow production-quality vertical path before adding breadth. For a partial capability, close normal-path, failure-path, and integration gaps before adding adjacent features. For a mature capability, preserve contracts, prevent regressions, measure important claims, and simplify where possible. At every stage, prefer an evidenced improvement to the core promise over visible but disconnected surface area.
+
+## Engineering standard
+
+- Build the complete durable behavior, not a demo shim or happy-path patch.
+- Fix behavior in its owning layer. Avoid adapter-only patches that leave runtime semantics inconsistent.
+- Prefer typed domain models, explicit state transitions, narrow APIs, and isolated side effects.
+- Reject silent fallbacks, placeholder success, stringly internal protocols, and speculative abstractions.
+- Preserve public contracts and durable formats unless the change includes deliberate compatibility or migration handling.
+- Treat provider traffic, secrets, policy, tool execution, file mutation, hooks, and extension capabilities as security-sensitive.
+- Design cancellation, retries, and recovery around whether side effects may already have occurred. Never assume replay is safe.
+- Keep modules cohesive and split them by responsibility when they become difficult to reason about. Do not maintain static decomposition target lists here.
+- Prefer removing accidental complexity over adding another layer. Keep non-core or experimental behavior isolated from default paths.
+- Account for latency, token use, startup cost, memory, and repeated work on hot paths. Measure material performance claims.
+
+## Agent-quality standard
+
+Changes to the agent or runtime should preserve these properties:
+
+- the objective, constraints, acceptance criteria, and steering survive long runs and compaction;
+- each turn advances the task, resolves material uncertainty, performs necessary work, or verifies an outcome;
+- context is selected for relevance and provenance instead of accumulated without discipline;
+- tool plans and effects remain policy-checked, observable, and attributable;
+- interruption and cancellation produce deterministic, reviewable recovery behavior;
+- completion follows acceptance criteria and verification, not the last successful tool call;
+- final outcomes distinguish success, concerns, blockers, and missing context without hiding failed checks;
+- users can understand what happened without reading internal implementation files.
+
+## Shipped and supported claims
+
+Discover current support from production wiring, default registration paths, tests, release configuration, and maintained user documentation. Do not infer it from dormant modules, compatibility code, examples, or plans.
+
+A surface may be described as shipped or supported only when its normal path is wired end to end, its important failure modes are tested, and its user contract is documented. Otherwise label its actual maturity and preserve isolation from stable paths.
 
 ## Readiness inventory
 
-- `.readiness.yaml` is imp's exploratory product-readiness ledger. When work affects an inventoried capability, discover relevant criteria with `ready find "<task terms>" --limit 10 --json`, then inspect selected criteria with `ready show <selector> --json`. Treat `any-term-fallback` results as candidates, not exact matches. Use `ready next` only when the user asks for readiness/backlog work.
-- After evidence-backed changes, update related assessments, gaps, and discoveries through atomic `ready add --stdin` or `ready apply --stdin` batches. Do not raise levels from code presence alone, mark criteria complete with unresolved gaps, or treat the current inventory as exhaustive.
+When `.readiness.yaml` is present and work affects an inventoried capability:
 
-## Verification
+1. run `ready find "<task terms>" --limit 10 --json`;
+2. inspect relevant candidates with `ready show <selector> --json`;
+3. treat `any-term-fallback` matches as candidates, not exact results;
+4. after evidence-backed changes, update related assessments, gaps, and discoveries atomically with `ready add --stdin` or `ready apply --stdin`.
 
-Use the narrowest meaningful check:
+Use `ready next` only for explicit readiness or backlog work. Never raise readiness from code presence alone or mark a criterion complete while material gaps remain.
+
+## Verification and closeout
+
+Use the narrowest check that proves the changed behavior, then expand when shared contracts or risk require it:
 
 - `cargo fmt --check`
-- `cargo check -p <crate>`
 - `cargo test -p <crate> <test_name>`
 - `cargo test -p <crate>`
+- `cargo check -p <crate>`
 - `cargo check --workspace` for shared or cross-crate changes
 
-For docs-only changes, inspect Markdown and run `git diff --check` when tracked.
+Test important failure, policy, cancellation, persistence, and recovery paths when affected. For documentation-only changes, inspect the rendered structure and run `git diff --check` when tracked.
 
-## Module organization
-
-Prefer local `AGENTS.md` files over crate READMEs. Split large files by responsibility; preserve behavior; minimize public API churn; move relevant tests; avoid mixing mechanical moves with semantic changes.
-
-High-priority decomposition targets: `crates/imp-tui/src/app.rs`, `crates/imp-core/src/agent.rs`, `crates/imp-cli/src/lib.rs`, `crates/imp-core/src/tools/workflow.rs`.
-
-## Git hygiene
-
-Unrelated dirty files may exist. Inspect status, avoid unrelated work, stage only intentional paths, and ask before commits or destructive history operations.
+Before declaring completion, reconcile the user objective, changed files, tests, durable artifacts, compatibility, and unresolved concerns. Report the result, verification evidence, and material limitations concisely. Never claim unverified success.

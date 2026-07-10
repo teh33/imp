@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>imp · Feature Readiness Tree</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --bg2: #12161c;
+    --panel: #161b22;
+    --border: #2a3340;
+    --text: #e6edf3;
+    --muted: #8b9bb0;
+    --dim: #5c6b7f;
+    --accent: #7dd3fc;
+
+    /* readiness spectrum */
+    --ready: #22c55e;
+    --strong: #84cc16;
+    --mid: #eab308;
+    --weak: #f97316;
+    --low: #ef4444;
+
+    /* classification */
+    --cls-prod: #22c55e;
+    --cls-solid: #34d399;
+    --cls-partial: #f59e0b;
+    --cls-incomplete: #fb923c;
+    --cls-scaffold: #a78bfa;
+    --cls-deadweight: #f43f5e;
+    --cls-legacy: #94a3b8;
+    --cls-debt: #e879f9;
+    --cls-defer: #64748b;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: radial-gradient(1200px 600px at 10% -10%, #132033 0%, transparent 55%),
+                radial-gradient(900px 500px at 90% 0%, #1a1428 0%, transparent 50%),
+                var(--bg);
+    color: var(--text);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: blur(12px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px 14px;
+  }
+
+  header .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    align-items: flex-end;
+    justify-content: space-between;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  h1 span { color: var(--accent); font-weight: 500; }
+  .sub {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+    max-width: 720px;
+  }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .controls input[type="search"] {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px 12px;
+    min-width: 200px;
+    outline: none;
+  }
+  .controls input[type="search"]:focus {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+  button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 11px;
+    cursor: pointer;
+    font: inherit;
+  }
+  button:hover { border-color: var(--muted); }
+  button.active {
+    background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    padding: 3px 8px 3px 4px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .chip:hover { color: var(--text); }
+  .chip.on {
+    color: var(--text);
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--panel) 80%, transparent);
+  }
+  .chip.off { opacity: 0.35; }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent);
+  }
+
+  main {
+    display: grid;
+    grid-template-columns: 1fr minmax(280px, 360px);
+    gap: 0;
+    min-height: calc(100vh - 120px);
+  }
+  @media (max-width: 980px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-left: none !important; border-top: 1px solid var(--border); max-height: 45vh; }
+  }
+
+  .tree-wrap {
+    padding: 20px 24px 48px;
+    overflow: auto;
+  }
+
+  /* Tree */
+  .tree, .tree ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .tree ul {
+    margin-left: 18px;
+    padding-left: 14px;
+    border-left: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  }
+  .tree li {
+    margin: 4px 0;
+    position: relative;
+  }
+
+  .node {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 7px 10px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: color-mix(in srgb, var(--panel) 55%, transparent);
+    cursor: pointer;
+    transition: border-color .12s, background .12s, transform .12s;
+  }
+  .node:hover {
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--panel) 90%, transparent);
+  }
+  .node.selected {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .node.dimmed { opacity: 0.22; pointer-events: none; }
+  .node.hidden-by-filter { display: none; }
+  .node:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+    outline-offset: 2px;
+  }
+
+  .tooltip {
+    position: fixed;
+    z-index: 100;
+    width: min(360px, calc(100vw - 24px));
+    padding: 12px 13px;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    border-radius: 12px;
+    background: color-mix(in srgb, #0f141b 96%, transparent);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
+    color: var(--text);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity .08s, transform .08s;
+  }
+  .tooltip.visible { opacity: 1; transform: translateY(0); }
+  .tooltip h3 {
+    margin: 0 0 6px;
+    font-size: 0.94rem;
+    letter-spacing: -0.01em;
+  }
+  .tooltip .tip-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .tooltip .tip-pill {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 7px;
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+  .tooltip p { margin: 6px 0 0; color: var(--muted); }
+  .tooltip strong { color: var(--text); }
+  .tooltip .tip-path {
+    margin-top: 8px;
+    color: var(--dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    word-break: break-all;
+  }
+
+  .twisty {
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    color: var(--dim);
+    font-size: 11px;
+    border-radius: 4px;
+  }
+  .twisty.empty { visibility: hidden; }
+  .twisty:not(.empty):hover { color: var(--text); background: var(--bg2); }
+
+  .label {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    align-items: baseline;
+    min-width: 0;
+  }
+  .name {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .blurb {
+    color: var(--muted);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .pct {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+    font-size: 0.82rem;
+    min-width: 2.6rem;
+    text-align: right;
+  }
+  .bar {
+    width: 56px;
+    height: 6px;
+    border-radius: 99px;
+    background: #1f2937;
+    overflow: hidden;
+  }
+  .bar > i {
+    display: block;
+    height: 100%;
+    border-radius: 99px;
+  }
+  .badge {
+    font-size: 0.68rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+
+  /* Detail panel */
+  aside {
+    border-left: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg2) 70%, var(--bg));
+    padding: 20px;
+    overflow: auto;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+  }
+  aside h2 {
+    margin: 0 0 6px;
+    font-size: 1.1rem;
+  }
+  aside .empty {
+    color: var(--muted);
+    margin-top: 40px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .detail-pct {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 0 16px;
+  }
+  .detail-pct .big {
+    font-size: 2rem;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+  }
+  .detail-bar {
+    flex: 1;
+    height: 10px;
+    border-radius: 99px;
+    background: #1f2937;
+    overflow: hidden;
+  }
+  .detail-bar > i { display: block; height: 100%; }
+  .kv {
+    display: grid;
+    gap: 10px;
+    margin: 0 0 18px;
+  }
+  .kv div {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: var(--panel);
+  }
+  .kv dt {
+    color: var(--dim);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 3px;
+  }
+  .kv dd { margin: 0; }
+  .notes {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.55;
+  }
+  .notes ul { margin: 8px 0 0; padding-left: 1.1rem; }
+  .notes li { margin: 4px 0; }
+  .path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    color: var(--dim);
+    word-break: break-all;
+  }
+
+  footer {
+    padding: 12px 24px 28px;
+    color: var(--dim);
+    font-size: 0.75rem;
+    border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  }
+
+  /* Summary strip */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .stat b {
+    display: block;
+    font-size: 1.25rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat span {
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <div>
+      <h1>imp <span>feature readiness tree</span></h1>
+      <p class="sub">
+        Hierarchical map of product surfaces. Each node has an estimated production-readiness
+        percentage and a classification. Hover a node for the recommended production-readiness action;
+        click a node for full rationale. Estimates are engineering judgment from the current codebase
+        and docs (not automated metrics).
+      </p>
+    </div>
+    <div class="controls">
+      <input type="search" id="search" placeholder="Filter features…" autocomplete="off" />
+      <button type="button" id="expand-all">Expand all</button>
+      <button type="button" id="collapse-all">Collapse</button>
+    </div>
+  </div>
+  <div class="legend" id="legend"></div>
+</header>
+
+<main>
+  <div class="tree-wrap">
+    <div class="summary" id="summary"></div>
+    <ul class="tree" id="tree"></ul>
+  </div>
+  <aside id="detail">
+    <div class="empty">Select a feature node to see readiness notes,<br/>classification, and code pointers.</div>
+  </aside>
+</main>
+
+<div class="tooltip" id="tooltip" role="tooltip" aria-hidden="true"></div>
+
+<footer>
+  Generated as a local planning artifact · classes: production / solid / partial / incomplete / scaffold /
+  dead-weight / legacy / debt / deferred · readiness % is independent of class (a solid core can still have debt).
+</footer>
+
+<script>
+/**
+ * Classification key:
+ *   production  — ships and is relied on daily
+ *   solid       — good quality, minor gaps
+ *   partial     — works for main path, incomplete edges
+ *   incomplete  — substantial missing implementation
+ *   scaffold    — early / protocol smoke only
+ *   deadweight  — not holding its weight (cost > value, or diluted focus)
+ *   legacy      — compatibility / superseded direction
+ *   debt        — structural drag (god-modules, wrong crate boundary, CI gaps)
+ *   deferred    — intentionally not building yet
+ */
+const CLASSES = {
+  production: { label: "Production", color: "var(--cls-prod)", desc: "Ships and is relied on for real work" },
+  solid:      { label: "Solid", color: "var(--cls-solid)", desc: "Strong quality; small polish gaps" },
+  partial:    { label: "Partial", color: "var(--cls-partial)", desc: "Main path works; incomplete edges" },
+  incomplete: { label: "Incomplete", color: "var(--cls-incomplete)", desc: "Material behavior still missing" },
+  scaffold:   { label: "Scaffold", color: "var(--cls-scaffold)", desc: "Early surface / smoke-level only" },
+  deadweight: { label: "Dead weight", color: "var(--cls-deadweight)", desc: "Cost outweighs value or dilutes product" },
+  legacy:     { label: "Legacy", color: "var(--cls-legacy)", desc: "Compatibility or superseded path" },
+  debt:       { label: "Tech debt", color: "var(--cls-debt)", desc: "Structural drag (size, boundaries, CI)" },
+  deferred:   { label: "Deferred", color: "var(--cls-defer)", desc: "Intentionally not shipping yet" },
+};
+
+function readinessColor(pct) {
+  if (pct >= 90) return "var(--ready)";
+  if (pct >= 75) return "var(--strong)";
+  if (pct >= 55) return "var(--mid)";
+  if (pct >= 35) return "var(--weak)";
+  return "var(--low)";
+}
+
+/**
+ * Tree of features. pct = rough production readiness 0–100.
+ * class_ = product classification.
+ */
+const TREE = {
+  id: "imp",
+  name: "imp",
+  blurb: "Local-first coding agent runtime",
+  pct: 70,
+  class: "solid",
+  notes: "Strong execution substrate: runtime, tools, providers, sessions, workflows. Main coding-agent gaps are verifier-backed evaluation, typed task state, and task-aware initial context; architecture concentration remains material.",
+  path: "crates/* · README.md · docs/architecture.md",
+  children: [
+    {
+      id: "surfaces",
+      name: "User surfaces",
+      blurb: "How humans and hosts talk to imp",
+      pct: 78,
+      class: "solid",
+      notes: "TUI + one-shot + RPC are the production trio. ACP/GUI are not.",
+      children: [
+        {
+          id: "tui",
+          name: "TUI",
+          blurb: "Interactive terminal UI",
+          pct: 82,
+          class: "solid",
+          path: "crates/imp-tui",
+          notes: "Primary product surface. Rendering, command palette, sessions, model picker, settings are real. File size debt in app modules.",
+          children: [
+            { id: "tui-chat", name: "Chat / streaming", pct: 88, class: "production", path: "views/chat.rs", notes: "Core chat UX with stream deltas and tool display." },
+            { id: "tui-palette", name: "Command palette & slash cmds", pct: 85, class: "production", path: "app/commands.rs", notes: "Solid; skill namespaces recently improved." },
+            { id: "tui-sessions", name: "Session new/resume", pct: 80, class: "solid", path: "app/sessions.rs", notes: "Works; resume loading had recent fixes." },
+            { id: "tui-settings", name: "Settings / secrets UI", pct: 78, class: "solid", path: "views/settings.rs", notes: "Large settings view; functional." },
+            { id: "tui-workflow-ui", name: "Workflow-native TUI read model", pct: 35, class: "incomplete", notes: "Inventory: show active workflow, steps, blockers, checks, closeout. Not first-class yet." },
+            { id: "tui-debt", name: "App module size / test dump", pct: 40, class: "debt", path: "app/session_lifecycle.rs (~3.2k test LOC)", notes: "session_lifecycle is almost entirely tests misnamed as lifecycle; commands/rendering still huge." },
+          ],
+        },
+        {
+          id: "cli",
+          name: "CLI / one-shot",
+          blurb: "imp -p, flags, subcommands",
+          pct: 80,
+          class: "solid",
+          path: "crates/imp-cli",
+          notes: "Auth, print modes, loop, workflow cmds, evidence all present. lib.rs is a god-file.",
+          children: [
+            { id: "cli-print", name: "One-shot --print modes", pct: 88, class: "production", notes: "text/clean/json/jsonl; clean mode recently added." },
+            { id: "cli-auth", name: "login / secrets", pct: 85, class: "production", path: "imp-llm auth + CLI", notes: "OAuth for Anthropic/ChatGPT/Kimi + keyring." },
+            { id: "cli-workflow", name: "Workflow CLI surface", pct: 55, class: "legacy", notes: "Current compatibility surface. Do not expand while external loopr replacement and workflow removal are evaluated." },
+            { id: "cli-loop", name: "loop command", pct: 75, class: "solid", notes: "Recently added continue/stop style control." },
+            { id: "cli-eval", name: "Eval runner CLI", pct: 72, class: "solid", path: "crates/imp-cli/src/eval_runner.rs · evals/", notes: "Pinned task specs, verifier-backed artifacts, validation, prepare-only, repeated comparison matrices, and normalized imp/Pi/Codex/OpenCode adapters. Needs a broader maintained corpus, variance reporting, and CI smoke coverage." },
+            { id: "cli-debt", name: "imp-cli lib.rs monolith", pct: 25, class: "debt", path: "crates/imp-cli/src/lib.rs (~4.1k)", notes: "Args, secrets, headless, RPC, workflow all in one file — high priority split." },
+          ],
+        },
+        {
+          id: "rpc",
+          name: "JSONL RPC",
+          blurb: "--mode rpc host protocol",
+          pct: 78,
+          class: "solid",
+          path: "docs/rpc.md · imp-cli",
+          notes: "prompt/steer/followup/cancel + runtime_event/state. Local-process oriented and usable for hosts.",
+          children: [
+            { id: "rpc-core", name: "Core commands & events", pct: 85, class: "production" },
+            { id: "rpc-runtime-json", name: "Shared runtime_json shape", pct: 80, class: "solid" },
+            { id: "rpc-workflow", name: "Workflow via RPC", pct: 25, class: "incomplete", notes: "Planned to call shared workflow service; not a full API yet." },
+          ],
+        },
+        {
+          id: "acp",
+          name: "ACP editor adapter",
+          blurb: "imp acp stdio JSON-RPC",
+          pct: 28,
+          class: "scaffold",
+          path: "crates/imp-cli/src/acp · docs/acp.md",
+          notes: "Handshake, session/new, prompt shape, cancel scaffold. No live Agent::run turn execution or real streaming yet. Not daily editor use.",
+        },
+        {
+          id: "gui",
+          name: "Experimental GUI",
+          blurb: "eframe/egui surface",
+          pct: 12,
+          class: "deferred",
+          path: "crates/imp-gui",
+          notes: "Postponed; keep out of product claims.",
+        },
+        {
+          id: "sdk",
+          name: "Rust embed SDK",
+          blurb: "imp_core::sdk preview",
+          pct: 55,
+          class: "partial",
+          path: "crates/imp-core/src/sdk.rs",
+          notes: "Curated ImpSession surface with events. Explicitly out of scope: extensions, full host lifecycle. Preview quality.",
+        },
+      ],
+    },
+
+    {
+      id: "runtime",
+      name: "Agent runtime",
+      blurb: "ReAct loop, context, recovery",
+      pct: 80,
+      class: "solid",
+      path: "crates/imp-core/src/agent",
+      notes: "The real product. Turn assessment, compaction, recovery, obligations are advanced vs typical agents. Agent struct is a god-object.",
+      children: [
+        {
+          id: "loop",
+          name: "Turn loop / streaming",
+          pct: 86,
+          class: "production",
+          path: "agent/run_loop.rs",
+          notes: "Stream recovery, context overflow recovery, timing events. Production quality.",
+        },
+        {
+          id: "turn-assess",
+          name: "Turn assessment / continue policy",
+          pct: 78,
+          class: "solid",
+          path: "agent/turn_assessment.rs · loop_policy.rs",
+          notes: "Recent unification of loop policy with assessment. Confidence continue + execution debt follow-ups.",
+        },
+        {
+          id: "context",
+          name: "Context assembly & accounting",
+          pct: 80,
+          class: "solid",
+          path: "context/ · compaction.rs",
+          notes: "Recent fixes for projection, evidence preservation, observed provider ceilings. Complex but intentional.",
+        },
+        {
+          id: "compaction",
+          name: "Auto-compaction",
+          pct: 75,
+          class: "solid",
+          notes: "Modes + preflight; still a delicate area for multi-provider limits.",
+        },
+        {
+          id: "recovery",
+          name: "Recovery checkpoints",
+          pct: 72,
+          class: "solid",
+          path: "agent/recovery.rs · session",
+          notes: "In-memory ledger + session seeding. Distinguishes safe retry from side-effectful paths — strong idea, still evolving.",
+        },
+        {
+          id: "subagents",
+          name: "Bounded subagents",
+          pct: 40,
+          class: "incomplete",
+          path: "agent/subagent.rs · tools/subagent.rs",
+          notes: "Types and coordinator surface exist; real worker-session orchestration for workflows is still incomplete per inventory.",
+        },
+        {
+          id: "system-prompt",
+          name: "System prompt / AGENTS layering",
+          pct: 82,
+          class: "solid",
+          path: "system_prompt.rs · roles.rs",
+          notes: "Instruction source labeling, AGENTS order, roles. Solid.",
+        },
+        {
+          id: "task-state",
+          name: "Typed coding task state",
+          pct: 45,
+          class: "partial",
+          path: "agent/task_state.rs · tools/task.rs",
+          notes: "The workflow-independent ledger now separates always-on runtime evidence from model-managed planning. `task` stays dormant for ordinary one-shot work and activates for explicit planning requests, unfinished work across prompts, three changed files, or two unresolved command failures. A 3× paired no-op regression passed for both agents: imp median 17.7s versus Pi 13.9s, down from imp's prior 25.9s. Correctly normalized usage was imp 76.8k raw / 23.6k effective versus Pi 56.9k raw / 21.0k effective tokens. Persistence and typed verifier identity remain.",
+        },
+        {
+          id: "context-plan",
+          name: "Task-aware initial context plan",
+          pct: 32,
+          class: "incomplete",
+          path: "repo_intelligence.rs · context_prefill.rs · tools/scan",
+          notes: "Repo counts and scan are strong foundations, but ordinary runs do not deterministically prefetch prompt-relevant symbols, callers, tests, and dirty-state evidence before the first model request.",
+        },
+        {
+          id: "agent-god",
+          name: "Agent field bag / encapsulation",
+          pct: 30,
+          class: "debt",
+          path: "agent/mod.rs",
+          notes: "~40 public fields: tools, caches, policy, workflow, obligations… grouping needed without behavior change.",
+        },
+      ],
+    },
+
+    {
+      id: "tools",
+      name: "Native tools",
+      blurb: "Model-facing tool registry",
+      pct: 84,
+      class: "production",
+      path: "crates/imp-core/src/tools",
+      notes: "Core coding tools are the weight-bearing surface. Prototype/memory/subagent are uneven.",
+      children: [
+        { id: "tool-read", name: "read", pct: 92, class: "production", notes: "Ranged reads, anchors, images." },
+        { id: "tool-write", name: "write", pct: 90, class: "production" },
+        { id: "tool-edit", name: "edit / multi_edit", pct: 90, class: "production", notes: "Anchored edits, transactional multi_edit." },
+        { id: "tool-bash", name: "bash", pct: 90, class: "production", notes: "Timeout, cancel, policy. Backbone tool." },
+        { id: "tool-git", name: "git", pct: 85, class: "production", notes: "status/diff/log/stage/commit/worktrees." },
+        {
+          id: "tool-scan",
+          name: "scan (code intelligence)",
+          pct: 78,
+          class: "solid",
+          path: "tools/scan · many tree-sitter grammars",
+          notes: "Strong capability; pulls ~20 grammars into imp-core — boundary debt.",
+          children: [
+            { id: "scan-engine", name: "Tree-sitter engines in core", pct: 35, class: "debt", notes: "Should move to imp-codeintel per crate boundary plan." },
+          ],
+        },
+        {
+          id: "tool-web",
+          name: "web",
+          pct: 72,
+          class: "solid",
+          path: "tools/web",
+          notes: "Search/read/GitHub/YouTube. Network + readability deps in core.",
+        },
+        { id: "tool-ask", name: "ask_user", pct: 80, class: "solid" },
+        {
+          id: "tool-workflow",
+          name: "workflow tool",
+          pct: 65,
+          class: "legacy",
+          path: "tools/workflow",
+          notes: "Current compatibility surface. Avoid new orchestration investment while loopr is evaluated as the replacement.",
+        },
+        {
+          id: "tool-subagent",
+          name: "subagent tool",
+          pct: 38,
+          class: "incomplete",
+          notes: "Surface exists; deep orchestration not production-ready.",
+        },
+        {
+          id: "tool-prototype",
+          name: "prototype tool",
+          pct: 45,
+          class: "legacy",
+          path: "tools/prototype.rs",
+          notes: "Inventory: fold into workflows then compatibility-only. Standalone long-term is dead weight.",
+        },
+        {
+          id: "tool-memory",
+          name: "memory tool",
+          pct: 50,
+          class: "partial",
+          path: "tools/memory.rs · memory.rs",
+          notes: "Exists; product story vs sessions/workflows is less sharp than core tools.",
+        },
+        {
+          id: "tool-shell-alias",
+          name: "shell tool / aliases",
+          pct: 70,
+          class: "solid",
+          notes: "Alongside bash; ensure no confusing dual surface for models.",
+        },
+      ],
+    },
+
+    {
+      id: "policy",
+      name: "Policy & safety",
+      blurb: "Modes, RM, autonomy, hooks",
+      pct: 70,
+      class: "partial",
+      notes: "Pieces are strong but multi-path (AgentMode + RunPolicy + ReferenceMonitor + guardrails + tool-local). Needs single choke point.",
+      children: [
+        { id: "agent-mode", name: "AgentMode tool baselines", pct: 85, class: "production" },
+        { id: "run-policy", name: "RunPolicy allow/deny", pct: 85, class: "production", path: "policy.rs" },
+        {
+          id: "refmon",
+          name: "ReferenceMonitor",
+          pct: 60,
+          class: "partial",
+          path: "reference_monitor.rs",
+          notes: "Intended central boundary; comments still describe façade-era behavior. Not yet sole pre-effect gate.",
+        },
+        { id: "autonomy", name: "Autonomy modes", pct: 75, class: "solid", notes: "suggest → allow-all (+ worktree-auto, ci)." },
+        { id: "guardrails", name: "Guardrail profiles", pct: 70, class: "solid" },
+        { id: "verify-gates", name: "Verification gates / --verify", pct: 72, class: "solid" },
+        { id: "hooks", name: "Hooks", pct: 68, class: "solid", path: "hooks.rs" },
+        { id: "trust", name: "Trust / provenance labels", pct: 55, class: "partial", path: "trust.rs · docs" },
+        {
+          id: "policy-unify",
+          name: "Single-path policy enforcement",
+          pct: 30,
+          class: "debt",
+          notes: "Highest-value safety engineering: every write/shell/ext path through one monitor with bypass tests.",
+        },
+      ],
+    },
+
+    {
+      id: "sessions",
+      name: "Sessions, evidence, storage",
+      blurb: "Durable local records",
+      pct: 78,
+      class: "solid",
+      path: "session/ · storage.rs · run_evidence.rs",
+      notes: "JSONL sessions, evidence CLI, traces. Storage engines should eventually leave core.",
+      children: [
+        { id: "session-jsonl", name: "JSONL session persistence", pct: 88, class: "production" },
+        { id: "session-branch", name: "Branches / resume", pct: 78, class: "solid" },
+        { id: "evidence", name: "Evidence packets / CLI", pct: 80, class: "solid" },
+        { id: "traces", name: "Run traces", pct: 72, class: "solid" },
+        {
+          id: "sqlite-state",
+          name: "SQLite / indexes in core",
+          pct: 40,
+          class: "debt",
+          notes: "rusqlite bundled in imp-core — candidate for imp-state.",
+        },
+      ],
+    },
+
+    {
+      id: "workflows",
+      name: "Workflows",
+      blurb: "Current durable orchestration surface",
+      pct: 58,
+      class: "legacy",
+      path: "workflow/ · tools/workflow · docs/workflows.md",
+      notes: "Substantial current implementation, but no longer the preferred direction. Freeze feature expansion and plan removal from default imp after loopr has a proven replacement contract and migration path. Current eval evidence also shows workflow run artifacts leaking into ordinary coding checkouts unless explicitly excluded.",
+      children: [
+        { id: "wf-schema", name: "YAML schema + validation", pct: 75, class: "solid", path: "workflow/schema" },
+        { id: "wf-artifacts", name: "File-backed artifacts/events", pct: 80, class: "solid", notes: "workflow.yaml, events.jsonl, results.md" },
+        { id: "wf-checks", name: "Checks / verification runner", pct: 55, class: "partial" },
+        { id: "wf-closeout", name: "Closeout enforcement", pct: 50, class: "partial" },
+        { id: "wf-workers", name: "Worker / subagent steps", pct: 35, class: "incomplete" },
+        { id: "wf-prototype-steps", name: "Prototype steps in workflow", pct: 30, class: "incomplete", notes: "Blocks retiring standalone prototype tool." },
+        { id: "wf-service", name: "Shared workflow service API", pct: 45, class: "incomplete", notes: "Needed so CLI/RPC/ACP/TUI don't reimplement." },
+        { id: "wf-size", name: "Workflow LOC concentration", pct: 35, class: "debt", notes: "~12k LOC including tests; needs domain vs tool split." },
+      ],
+    },
+
+    {
+      id: "llm",
+      name: "Providers / imp-llm",
+      blurb: "Models, stream, auth, OAuth",
+      pct: 86,
+      class: "production",
+      path: "crates/imp-llm",
+      notes: "One of the cleanest crate boundaries. Broad provider matrix.",
+      children: [
+        { id: "prov-anthropic", name: "Anthropic", pct: 92, class: "production" },
+        { id: "prov-openai", name: "OpenAI / Codex / compat", pct: 88, class: "production" },
+        { id: "prov-google", name: "Google", pct: 82, class: "solid" },
+        { id: "prov-oauth", name: "OAuth (Anthropic/ChatGPT/Kimi)", pct: 85, class: "production" },
+        { id: "prov-meta", name: "Model registry / pricing", pct: 80, class: "solid" },
+        { id: "prov-stream", name: "Streaming abstraction", pct: 90, class: "production" },
+      ],
+    },
+
+    {
+      id: "ext",
+      name: "Extensibility",
+      blurb: "Lua shipped; others experimental",
+      pct: 62,
+      class: "partial",
+      children: [
+        {
+          id: "lua",
+          name: "Lua extensions",
+          pct: 78,
+          class: "solid",
+          path: "crates/imp-lua",
+          notes: "Tools, slash commands, hooks, capability policy, manifests/namespaces. Shipped story.",
+        },
+        {
+          id: "ts-ext",
+          name: "TypeScript extensions",
+          pct: 25,
+          class: "deadweight",
+          path: "imp-core/typescript_extensions · extensions/example",
+          notes: "AGENTS.md: not shipped. Still lives in core with loaders/tests and RM special-cases. Half-present = review cost without product claim.",
+        },
+        {
+          id: "mcp-shim",
+          name: "MCP shim",
+          pct: 40,
+          class: "scaffold",
+          path: "crates/mcp-shim",
+          notes: "Thin package; not a full MCP host story.",
+        },
+      ],
+    },
+
+    {
+      id: "arch",
+      name: "Architecture & delivery",
+      blurb: "Crates, CI, docs, hygiene",
+      pct: 48,
+      class: "debt",
+      notes: "Product features outrun packaging and process. This is what makes OSS/contribution hard.",
+      children: [
+        {
+          id: "crate-split",
+          name: "imp-core crate split",
+          pct: 25,
+          class: "debt",
+          path: "docs/design/imp-core-crate-boundary-plan.md",
+          notes: "Plan is excellent; code still monolith (~82k LOC + tree-sitter + sqlite + web).",
+        },
+        {
+          id: "imp-bin",
+          name: "imp-bin composition",
+          pct: 70,
+          class: "solid",
+          notes: "Composition crate exists; good direction vs accidental TUI deps on headless.",
+        },
+        {
+          id: "ci",
+          name: "PR CI (fmt/check/test)",
+          pct: 20,
+          class: "debt",
+          path: ".github/workflows",
+          notes: "edge + release only. No fmt/clippy/test gate. Edge still references stale Cargo.workspace.toml + mana sibling.",
+        },
+        {
+          id: "docs-truth",
+          name: "Docs: current vs design pile",
+          pct: 55,
+          class: "partial",
+          notes: "Core refs good; design/rebuild/proposals large. Risk of stale claims (mana, imp-work, TS, ACP).",
+        },
+        {
+          id: "workspace-toml",
+          name: "Stale Cargo.workspace.toml",
+          pct: 15,
+          class: "deadweight",
+          notes: "Duplicate/outdated vs live Cargo.toml; confuses CI and humans.",
+        },
+        {
+          id: "root-clutter",
+          name: "Root scratch / art files",
+          pct: 20,
+          class: "deadweight",
+          notes: "art.*, goose gaps, empty '=', wireframes — local noise if tracked.",
+        },
+        {
+          id: "evals",
+          name: "Verifier-backed coding evals",
+          pct: 52,
+          class: "partial",
+          path: "crates/imp-cli/src/eval_runner.rs · evals/",
+          notes: "The native CLI validates task specs, prepares temp-isolated checkouts, and compares imp against vanilla Pi, Codex CLI, and vanilla OpenCode under shared task/model/thinking/verifier constraints. Comparison reports rotate order, normalize cache-aware usage, and preserve every pass-rate leader. Timing evidence still points to extra provider rounds, not local Rust overhead, as imp's main latency cost.",
+          children: [
+            { id: "eval-runner", name: "Native eval run artifacts", pct: 86, class: "solid", notes: "`--compare-against pi,codex,opencode` runs one candidate and all selected baselines per repetition. Schema v2 records rotated execution order, cache-aware raw/effective/input/output usage, aggregate pass rates, timing, tools, and durable artifacts. External config and fixture sources are isolated." },
+            { id: "eval-corpus", name: "Maintained verifier corpus", pct: 58, class: "partial", notes: "Three fast committed fixtures have repeated imp/Pi history and a corrected one-pass four-agent GPT-5.6 Sol smoke matrix with all agents 3/3. In that diagnostic sample Pi was fastest; imp used more rounds and effective tokens than Pi and Codex. The sample is not a stable ranking. Eight larger Dirac-derived tasks remain, five with TBD verifiers." },
+            { id: "eval-regression", name: "Repeated-run regression gate", pct: 42, class: "partial", notes: "Repeated aggregation and deterministic order rotation are implemented. Needs variance/confidence reporting, promoted eval-candidate ingestion, a small offline/CI smoke suite, and repeated four-agent runs before ranking claims." },
+          ],
+        },
+        {
+          id: "imp-work",
+          name: "imp-work / mana (removed)",
+          pct: 10,
+          class: "legacy",
+          notes: "Correctly stripped from default tree. Ensure docs/CI don't resurrect.",
+        },
+      ],
+    },
+  ],
+};
+
+let filterClass = new Set(Object.keys(CLASSES));
+let selectedId = null;
+let expanded = new Set(["imp", "surfaces", "runtime", "tools", "policy", "sessions", "workflows", "llm", "ext", "arch"]);
+
+function walk(node, fn, parent = null) {
+  fn(node, parent);
+  (node.children || []).forEach((c) => walk(c, fn, node));
+}
+
+function allNodes() {
+  const out = [];
+  walk(TREE, (n) => out.push(n));
+  return out;
+}
+
+function computeRollup(node) {
+  if (!node.children || !node.children.length) return node.pct;
+  // Prefer explicit pct; still display children independently.
+  return node.pct;
+}
+
+function matchesSearch(node, q) {
+  if (!q) return true;
+  const hay = `${node.name} ${node.blurb || ""} ${node.notes || ""} ${node.path || ""} ${node.class}`.toLowerCase();
+  return hay.includes(q);
+}
+
+function nodeVisible(node, q) {
+  if (!filterClass.has(node.class)) return false;
+  if (matchesSearch(node, q)) return true;
+  return (node.children || []).some((c) => nodeVisible(c, q));
+}
+
+function renderLegend() {
+  const el = document.getElementById("legend");
+  el.innerHTML = Object.entries(CLASSES).map(([k, v]) => `
+    <label class="chip on" data-class="${k}" title="${v.desc}">
+      <span class="dot" style="background:${v.color};color:${v.color}"></span>
+      ${v.label}
+    </label>
+  `).join("") + `
+    <span style="color:var(--dim);font-size:0.78rem;margin-left:4px">
+      · bar color = readiness % · badge = classification
+    </span>`;
+
+  el.querySelectorAll(".chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const k = chip.dataset.class;
+      if (filterClass.has(k)) filterClass.delete(k);
+      else filterClass.add(k);
+      chip.classList.toggle("on", filterClass.has(k));
+      chip.classList.toggle("off", !filterClass.has(k));
+      renderTree();
+    });
+  });
+}
+
+function renderSummary() {
+  const nodes = allNodes().filter((n) => n.id !== "imp");
+  const avg = Math.round(nodes.reduce((s, n) => s + n.pct, 0) / nodes.length);
+  const by = {};
+  for (const n of nodes) by[n.class] = (by[n.class] || 0) + 1;
+  const low = nodes.filter((n) => n.pct < 50).length;
+  const dead = nodes.filter((n) => n.class === "deadweight").length;
+  const debt = nodes.filter((n) => n.class === "debt").length;
+  const prod = nodes.filter((n) => n.class === "production").length;
+
+  document.getElementById("summary").innerHTML = `
+    <div class="stat"><b>${nodes.length}</b><span>feature nodes</span></div>
+    <div class="stat"><b style="color:${readinessColor(avg)}">${avg}%</b><span>avg readiness</span></div>
+    <div class="stat"><b style="color:var(--cls-prod)">${prod}</b><span>production</span></div>
+    <div class="stat"><b style="color:var(--cls-debt)">${debt}</b><span>tech debt</span></div>
+    <div class="stat"><b style="color:var(--cls-deadweight)">${dead}</b><span>dead weight</span></div>
+    <div class="stat"><b style="color:var(--weak)">${low}</b><span>under 50%</span></div>
+  `;
+}
+
+function renderNode(node, q) {
+  if (!nodeVisible(node, q)) return "";
+
+  const hasKids = node.children && node.children.length;
+  const isOpen = expanded.has(node.id);
+  const cls = CLASSES[node.class];
+  const color = readinessColor(node.pct);
+  const selected = node.id === selectedId ? "selected" : "";
+  const dimSearch = q && !matchesSearch(node, q) ? "dimmed" : "";
+
+  let kidsHtml = "";
+  if (hasKids && isOpen) {
+    kidsHtml = `<ul>${node.children.map((c) => renderNode(c, q)).join("")}</ul>`;
+  }
+
+  return `
+    <li data-id="${node.id}">
+      <div class="node ${selected} ${dimSearch}" data-id="${node.id}" tabindex="0" aria-describedby="tooltip" style="border-left:3px solid ${cls.color}">
+        <div class="twisty ${hasKids ? "" : "empty"}" data-toggle="${node.id}">${hasKids ? (isOpen ? "▼" : "▶") : "·"}</div>
+        <div class="label">
+          <span class="name">${escapeHtml(node.name)}</span>
+          ${node.blurb ? `<span class="blurb">${escapeHtml(node.blurb)}</span>` : ""}
+        </div>
+        <div class="meta">
+          <span class="badge" style="color:${cls.color};border-color:color-mix(in srgb, ${cls.color} 45%, transparent);background:color-mix(in srgb, ${cls.color} 12%, transparent)">${cls.label}</span>
+          <div class="bar" title="${node.pct}% ready"><i style="width:${node.pct}%;background:${color}"></i></div>
+          <span class="pct" style="color:${color}">${node.pct}%</span>
+        </div>
+      </div>
+      ${kidsHtml}
+    </li>
+  `;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function productionAction(node) {
+  if (node.class === "deadweight") {
+    return "Remove or retire unless a current product owner can name a concrete production use. Delete stale docs and tests with it.";
+  }
+  if (node.class === "legacy") {
+    return "Refactor toward the replacement path, then keep only a small compatibility shim or remove after migration.";
+  }
+  if (node.class === "debt") {
+    return "Refactor before expanding scope. Split responsibilities, add regression coverage, and remove stale or confusing paths.";
+  }
+  if (node.class === "deferred") {
+    return "Keep out of product claims. Either write a real ship plan or remove it from the active tree.";
+  }
+  if (node.class === "scaffold") {
+    return "Choose: make it real with end-to-end execution, tests, docs, and owner, or remove the scaffold to reduce review cost.";
+  }
+  if (node.class === "incomplete") {
+    return "Finish the missing end-to-end behavior, error paths, persistence, and tests before calling it production-ready.";
+  }
+  if (node.class === "partial") {
+    return "Close edge cases, unify duplicated paths, document supported behavior, and add focused regression tests.";
+  }
+  if (node.class === "solid") {
+    return "Harden with polish, boundary cleanup, and targeted tests. Preserve behavior while paying down local debt.";
+  }
+  return "Keep stable. Maintain compatibility, observability, and regression coverage while avoiding speculative expansion.";
+}
+
+function readinessNeed(node) {
+  if (node.pct >= 90) return "Maintain: protect the contract and keep tests green.";
+  if (node.pct >= 75) return "Production push: close known gaps and harden failure modes.";
+  if (node.pct >= 55) return "Focused build-out: complete missing edges and make ownership explicit.";
+  if (node.pct >= 35) return "Decision point: refactor and finish, or narrow/remove if it is not strategic.";
+  return "Cull or rebuild: current shape is not production-ready.";
+}
+
+function tooltipHtml(node) {
+  const cls = CLASSES[node.class];
+  const color = readinessColor(node.pct);
+  return `
+    <h3>${escapeHtml(node.name)}</h3>
+    <div class="tip-meta">
+      <span class="tip-pill" style="border-color:color-mix(in srgb, ${cls.color} 45%, transparent);color:${cls.color}">${escapeHtml(cls.label)}</span>
+      <span class="tip-pill" style="border-color:color-mix(in srgb, ${color} 45%, transparent);color:${color}">${node.pct}% ready</span>
+    </div>
+    ${node.blurb ? `<p>${escapeHtml(node.blurb)}</p>` : ""}
+    <p><strong>Action:</strong> ${escapeHtml(productionAction(node))}</p>
+    <p><strong>Need:</strong> ${escapeHtml(readinessNeed(node))}</p>
+    ${node.notes ? `<p><strong>Why:</strong> ${escapeHtml(node.notes)}</p>` : ""}
+    ${node.path ? `<div class="tip-path">${escapeHtml(node.path)}</div>` : ""}
+  `;
+}
+
+function placeTooltip(e) {
+  const tip = document.getElementById("tooltip");
+  const margin = 12;
+  const rect = tip.getBoundingClientRect();
+  let left = e.clientX + 14;
+  let top = e.clientY + 14;
+  if (left + rect.width + margin > window.innerWidth) left = e.clientX - rect.width - 14;
+  if (top + rect.height + margin > window.innerHeight) top = e.clientY - rect.height - 14;
+  tip.style.left = `${Math.max(margin, left)}px`;
+  tip.style.top = `${Math.max(margin, top)}px`;
+}
+
+function showTooltip(node, e) {
+  const tip = document.getElementById("tooltip");
+  tip.innerHTML = tooltipHtml(node);
+  tip.setAttribute("aria-hidden", "false");
+  tip.classList.add("visible");
+  placeTooltip(e);
+}
+
+function hideTooltip() {
+  const tip = document.getElementById("tooltip");
+  tip.classList.remove("visible");
+  tip.setAttribute("aria-hidden", "true");
+}
+
+function renderTree() {
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  document.getElementById("tree").innerHTML = renderNode(TREE, q);
+  bindTreeEvents();
+}
+
+function bindTreeEvents() {
+  document.querySelectorAll(".node").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-toggle]")) return;
+      selectedId = el.dataset.id;
+      renderTree();
+      showDetail(selectedId);
+    });
+    el.addEventListener("mouseenter", (e) => {
+      const node = findNode(el.dataset.id);
+      if (!node) return;
+      showTooltip(node, e);
+    });
+    el.addEventListener("mousemove", placeTooltip);
+    el.addEventListener("mouseleave", hideTooltip);
+    el.addEventListener("focus", () => {
+      const node = findNode(el.dataset.id);
+      if (!node) return;
+      const rect = el.getBoundingClientRect();
+      showTooltip(node, { clientX: rect.left + 12, clientY: rect.bottom });
+    });
+    el.addEventListener("blur", hideTooltip);
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      if (e.target.closest("[data-toggle]")) return;
+      e.preventDefault();
+      selectedId = el.dataset.id;
+      renderTree();
+      showDetail(selectedId);
+    });
+  });
+  document.querySelectorAll("[data-toggle]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = el.dataset.toggle;
+      if (expanded.has(id)) expanded.delete(id);
+      else expanded.add(id);
+      renderTree();
+    });
+  });
+}
+
+function findNode(id) {
+  let found = null;
+  walk(TREE, (n) => { if (n.id === id) found = n; });
+  return found;
+}
+
+function showDetail(id) {
+  const node = findNode(id);
+  const panel = document.getElementById("detail");
+  if (!node) {
+    panel.innerHTML = `<div class="empty">Select a feature node.</div>`;
+    return;
+  }
+  const cls = CLASSES[node.class];
+  const color = readinessColor(node.pct);
+  panel.innerHTML = `
+    <h2>${escapeHtml(node.name)}</h2>
+    <div class="badge" style="color:${cls.color};border-color:color-mix(in srgb, ${cls.color} 45%, transparent);background:color-mix(in srgb, ${cls.color} 12%, transparent)">${cls.label}</div>
+    <p style="color:var(--muted);margin:8px 0 0;font-size:0.9rem">${escapeHtml(cls.desc)}</p>
+    <div class="detail-pct">
+      <div class="big" style="color:${color}">${node.pct}%</div>
+      <div class="detail-bar"><i style="width:${node.pct}%;background:${color}"></i></div>
+    </div>
+    <dl class="kv">
+      ${node.blurb ? `<div><dt>Role</dt><dd>${escapeHtml(node.blurb)}</dd></div>` : ""}
+      <div><dt>Classification</dt><dd>${escapeHtml(cls.label)}</dd></div>
+      <div><dt>Readiness</dt><dd>${node.pct}% toward production-ready</dd></div>
+      ${node.path ? `<div><dt>Code / docs</dt><dd class="path">${escapeHtml(node.path)}</dd></div>` : ""}
+    </dl>
+    <div class="notes">
+      <strong style="color:var(--text)">Notes</strong>
+      <p>${escapeHtml(node.notes || "No extra notes.")}</p>
+      ${node.children && node.children.length ? `
+        <strong style="color:var(--text)">Children (avg ${Math.round(node.children.reduce((s,c)=>s+c.pct,0)/node.children.length)}%)</strong>
+        <ul>${node.children.map((c) => `<li><b>${escapeHtml(c.name)}</b> — ${c.pct}% · ${CLASSES[c.class].label}</li>`).join("")}</ul>
+      ` : ""}
+    </div>
+  `;
+}
+
+function expandAll() {
+  walk(TREE, (n) => { if (n.children && n.children.length) expanded.add(n.id); });
+  renderTree();
+}
+function collapseAll() {
+  expanded = new Set(["imp"]);
+  renderTree();
+}
+
+document.getElementById("search").addEventListener("input", renderTree);
+document.getElementById("expand-all").addEventListener("click", expandAll);
+document.getElementById("collapse-all").addEventListener("click", collapseAll);
+
+renderLegend();
+renderSummary();
+renderTree();
+showDetail("imp");
+</script>
+</body>
+</html>
