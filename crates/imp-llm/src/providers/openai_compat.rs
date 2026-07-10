@@ -203,6 +203,7 @@ impl OpenAiCompatProvider {
 fn api_model_id(model: &Model) -> &str {
     match (model.meta.provider.as_str(), model.meta.id.as_str()) {
         ("kimi-code", "kimi2.6") => "kimi-k2.6",
+        ("kimi-code", "kimi2.7") => "kimi-k2.7-code",
         _ => &model.meta.id,
     }
 }
@@ -245,6 +246,7 @@ fn build_request(model: &Model, context: Context, options: RequestOptions) -> Ap
 fn kimi_behavior_model_id(meta: &ModelMeta) -> &str {
     match (meta.provider.as_str(), meta.id.as_str()) {
         ("kimi-code", "kimi2.6") => "kimi-k2.6",
+        ("kimi-code", "kimi2.7") => "kimi-k2.7-code",
         _ => &meta.id,
     }
 }
@@ -254,7 +256,13 @@ fn is_kimi_configurable_thinking_model(model_id: &str) -> bool {
 }
 
 fn is_kimi_forced_thinking_model(model_id: &str) -> bool {
-    matches!(model_id, "kimi-k2-thinking" | "kimi-k2-thinking-turbo")
+    matches!(
+        model_id,
+        "kimi-k2-thinking"
+            | "kimi-k2-thinking-turbo"
+            | "kimi-k2.7-code"
+            | "kimi-k2.7-code-highspeed"
+    )
 }
 
 fn is_kimi_fixed_temperature_model(model_id: &str) -> bool {

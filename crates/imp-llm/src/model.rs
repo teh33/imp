@@ -478,6 +478,32 @@ fn builtin_models() -> Vec<ModelMeta> {
             },
         },
         ModelMeta {
+            id: "kimi-k2.7-code".into(),
+            provider: "moonshot".into(),
+            name: "Kimi K2.7 Code".into(),
+            context_window: 256_000,
+            max_output_tokens: 32_768,
+            pricing: ModelPricing::default(),
+            capabilities: Capabilities {
+                reasoning: true,
+                images: true,
+                tool_use: true,
+            },
+        },
+        ModelMeta {
+            id: "kimi-k2.7-code-highspeed".into(),
+            provider: "moonshot".into(),
+            name: "Kimi K2.7 Code Highspeed".into(),
+            context_window: 256_000,
+            max_output_tokens: 32_768,
+            pricing: ModelPricing::default(),
+            capabilities: Capabilities {
+                reasoning: true,
+                images: true,
+                tool_use: true,
+            },
+        },
+        ModelMeta {
             id: "kimi-k2.5".into(),
             provider: "moonshot".into(),
             name: "Kimi K2.5".into(),
@@ -547,6 +573,19 @@ fn builtin_models() -> Vec<ModelMeta> {
             id: "kimi2.6".into(),
             provider: "kimi-code".into(),
             name: "Kimi K2.6 Code".into(),
+            context_window: 262_144,
+            max_output_tokens: 16_384,
+            pricing: ModelPricing::default(),
+            capabilities: Capabilities {
+                reasoning: true,
+                images: true,
+                tool_use: true,
+            },
+        },
+        ModelMeta {
+            id: "kimi2.7".into(),
+            provider: "kimi-code".into(),
+            name: "Kimi K2.7 Code".into(),
             context_window: 262_144,
             max_output_tokens: 16_384,
             pricing: ModelPricing::default(),
@@ -942,6 +981,7 @@ fn synthesize_custom_model_meta(model_id: &str, provider: &str) -> ModelMeta {
             name: model_id.into(),
             context_window: 256_000,
             max_output_tokens: if model_id.contains("thinking")
+                || model_id.starts_with("kimi-k2.7-code")
                 || matches!(model_id, "kimi-k2.6" | "kimi-k2.5")
             {
                 32_768
@@ -1240,6 +1280,12 @@ fn builtin_aliases() -> Vec<(String, String)> {
         // Moonshot / Kimi
         ("kimi".into(), "kimi-k2.6".into()),
         ("kimi-k2.6".into(), "kimi-k2.6".into()),
+        ("kimi-k2.7".into(), "kimi-k2.7-code".into()),
+        ("kimi-k2.7-code".into(), "kimi-k2.7-code".into()),
+        (
+            "kimi-k2.7-code-highspeed".into(),
+            "kimi-k2.7-code-highspeed".into(),
+        ),
         ("kimi-k2.5".into(), "kimi-k2.5".into()),
         ("kimi-k2".into(), "kimi-k2-0905-preview".into()),
         ("kimi-k2-0905".into(), "kimi-k2-0905-preview".into()),
@@ -1255,8 +1301,9 @@ fn builtin_aliases() -> Vec<(String, String)> {
             "kimi-k2-thinking-turbo".into(),
         ),
         // Kimi Code
-        ("kimi-code".into(), "kimi2.6".into()),
+        ("kimi-code".into(), "kimi2.7".into()),
         ("kimi2.6".into(), "kimi2.6".into()),
+        ("kimi2.7".into(), "kimi2.7".into()),
         ("kimi-for-coding".into(), "kimi-for-coding".into()),
         // Groq
         ("zai".into(), "glm-4.7".into()),

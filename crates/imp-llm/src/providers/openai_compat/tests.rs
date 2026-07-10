@@ -287,6 +287,36 @@ fn kimi_forced_thinking_models_keep_thinking_enabled() {
 }
 
 #[test]
+fn kimi_k2_7_forced_thinking_always_enabled() {
+    for model_id in ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"] {
+        let model = test_model_for_provider(model_id, "moonshot");
+        let req = build_request(
+            &model,
+            Context::default(),
+            RequestOptions {
+                thinking_level: crate::provider::ThinkingLevel::Off,
+                temperature: Some(0.7),
+                ..Default::default()
+            },
+        );
+        let json = serde_json::to_value(&req).unwrap();
+
+        assert_eq!(json["thinking"]["type"], "enabled", "{model_id}");
+        assert_eq!(json["thinking"]["keep"], "all", "{model_id}");
+        assert!(json["temperature"].is_null(), "{model_id}");
+    }
+}
+
+#[test]
+fn kimi_code_k2_7_maps_to_api_model_id() {
+    let model = test_model_for_provider("kimi2.7", "kimi-code");
+    let req = build_request(&model, Context::default(), RequestOptions::default());
+    let json = serde_json::to_value(&req).unwrap();
+
+    assert_eq!(json["model"], "kimi-k2.7-code");
+}
+
+#[test]
 fn openai_compat_preserves_assistant_reasoning_content() {
     let msg = Message::Assistant(AssistantMessage {
         content: vec![

@@ -128,6 +128,22 @@ fn find_by_alias_resolves_kimi() {
 }
 
 #[test]
+fn find_by_alias_resolves_kimi2_7() {
+    let reg = ModelRegistry::with_builtins();
+    let model = reg
+        .find_by_alias("kimi-k2.7")
+        .expect("kimi-k2.7 alias should resolve");
+    assert_eq!(model.id, "kimi-k2.7-code");
+    assert_eq!(model.provider, "moonshot");
+
+    let code = reg
+        .find_by_alias("kimi-code")
+        .expect("kimi-code alias should resolve");
+    assert_eq!(code.id, "kimi2.7");
+    assert_eq!(code.provider, "kimi-code");
+}
+
+#[test]
 fn find_by_alias_resolves_kimi_turbo() {
     let reg = ModelRegistry::with_builtins();
     let model = reg
@@ -209,19 +225,23 @@ fn list_by_provider_filters_correctly() {
     assert!(anthropic.iter().all(|m| m.provider == "anthropic"));
 
     let openai = reg.list_by_provider("openai");
-    assert_eq!(openai.len(), 6);
+    assert_eq!(openai.len(), 10);
 
     let google = reg.list_by_provider("google");
     assert_eq!(google.len(), 2);
 
     let moonshot = reg.list_by_provider("moonshot");
-    assert_eq!(moonshot.len(), 6);
+    assert_eq!(moonshot.len(), 8);
+
+    let kimi_code = reg.list_by_provider("kimi-code");
+    assert_eq!(kimi_code.len(), 3);
+    assert!(kimi_code.iter().all(|m| m.provider == "kimi-code"));
 }
 
 #[test]
 fn builtin_openai_codex_models_retag_openai_models() {
     let models = builtin_openai_codex_models();
-    assert_eq!(models.len(), 7);
+    assert_eq!(models.len(), 11);
     assert!(models.iter().all(|model| model.provider == "openai-codex"));
     let gpt_5_5 = models
         .iter()
