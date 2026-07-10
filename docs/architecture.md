@@ -69,7 +69,7 @@ Workflow artifacts live under `.imp/workflows/<id>/` and are parsed by `crates/i
 
 The workflow tool can inspect and validate artifacts, run pending command checks, return a main-agent action contract, or return bounded subagent contracts. Agent-completed work uses `complete_step`; explicit status repair and blockers use `update`.
 
-The `subagent` tool is a policy-bounded adapter over the separate `loopr` executable. It accepts only workflow-generated launch contracts and exposes launch, status, wait, send, and cancel against persisted loopr child identities. Imp owns contract validation, parent policy, and an imp-owned mapping under `.imp/runs/<parent-run-id>/subagents/`; loopr owns the child process, persistent session, and thread lifecycle under `.loopr/`. Durable workflow state remains file-backed and separate from child-run state.
+The `subagent` tool currently validates and records launch contracts. It is bounded by workflow-generated input and write policy. Durable workflow state remains file-backed and separate from transient child-run state.
 
 ## User-facing surfaces
 
