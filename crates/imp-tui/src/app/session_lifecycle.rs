@@ -3116,7 +3116,8 @@ fn worktree_events_update_status_and_surface_closeout_choices() {
         Some("imp/run/worktree-auto @ /tmp/imp-worktree")
     );
     assert_eq!(
-        app.runtime_snapshot
+        app.runtime_state
+            .snapshot_ref()
             .workspace
             .worktree
             .as_ref()
@@ -3134,7 +3135,8 @@ fn worktree_events_update_status_and_surface_closeout_choices() {
         Some("/repo/.imp/runs/run-1/worktree/diff.patch")
     );
     assert_eq!(
-        app.runtime_snapshot
+        app.runtime_state
+            .snapshot_ref()
             .status_items
             .get("worktree-diff")
             .map(String::as_str),

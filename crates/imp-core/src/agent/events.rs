@@ -6,9 +6,11 @@ use serde_json::json;
 
 use crate::reference_monitor::{PolicyTraceRecord, ToolPolicyDecision};
 use crate::runtime::{
-    RuntimeArtifactRef, RuntimeEvent, RuntimeEventKind, RuntimePolicyDecision,
-    RuntimePolicyDecisionKind, RuntimeToolCall, RuntimeToolStatus, RuntimeUsageSummary,
-    RuntimeWorktreeState,
+    RuntimeArtifactRef, RuntimeAssistantBlock, RuntimeAssistantDelta, RuntimeContextUsage,
+    RuntimeEvent, RuntimeEventKind, RuntimeMessageRole, RuntimePolicyDecision,
+    RuntimePolicyDecisionKind, RuntimePolicyWarningKind, RuntimeRecoverySummary, RuntimeToolCall,
+    RuntimeToolStatus, RuntimeTranscriptMessage, RuntimeUsageSummary, RuntimeVerificationUpdate,
+    RuntimeWorktreeNotice, RuntimeWorktreeNoticeKind, RuntimeWorktreeState,
 };
 use crate::trace::TraceEvent;
 use crate::trust::Provenance;
@@ -310,11 +312,7 @@ impl AgentEvent {
             AgentEvent::AgentStart { model, .. } => RuntimeEventKind::AgentStarted {
                 model: model.clone(),
             },
-            AgentEvent::AgentEnd {
-                usage,
-                cost,
-                status,
-            } => RuntimeEventKind::AgentEnded {
+            AgentEvent::AgentEnd { usage, cost, status } => RuntimeEventKind::AgentEnded {
                 status: status.clone().into(),
                 usage: Some(runtime_usage_summary(usage, cost)),
             },
@@ -323,29 +321,23 @@ impl AgentEvent {
                 index: *index,
                 summary: Some(format!("{assessment:?}")),
             },
-            AgentEvent::TurnEnd { index, .. } => RuntimeEventKind::TurnEnded { index: *index },
-            AgentEvent::MessageStart { message } => RuntimeEventKind::MessageStarted {
-                role: message_role(message).into(),
-                summary: message_summary(message),
+            AgentEvent::TurnEnd { index, message, .. } => RuntimeEventKind::TurnCompleted {
+                index: *index,
+                message: runtime_assistant_message(message, false),
+                usage: message.usage.as_ref().map(runtime_usage_without_cost),
+            },
+            AgentEvent::MessageStart { message } => RuntimeEventKind::MessageObserved {
+                message: runtime_message(message, true),
             },
             AgentEvent::MessageDelta { delta } => match delta {
-                StreamEvent::TextDelta { text } | StreamEvent::ThinkingDelta { text } => {
-                    RuntimeEventKind::MessageDelta {
-                        delta: text.clone(),
-                    }
-                }
-                StreamEvent::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                } => RuntimeEventKind::ToolStarted {
-                    tool_call: RuntimeToolCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        status: RuntimeToolStatus::Running,
-                        args_preview: Some(arguments.to_string()),
-                        ..RuntimeToolCall::default()
-                    },
+                StreamEvent::TextDelta { text } => RuntimeEventKind::AssistantDelta {
+                    delta: RuntimeAssistantDelta::VisibleText { text: text.clone() },
+                },
+                StreamEvent::ThinkingDelta { text } => RuntimeEventKind::AssistantDelta {
+                    delta: RuntimeAssistantDelta::Thinking { text: text.clone() },
+                },
+                StreamEvent::ToolCall { id, name, arguments } => RuntimeEventKind::ToolDeclared {
+                    tool_call: runtime_tool_call(id, name, arguments, RuntimeToolStatus::Pending),
                 },
                 StreamEvent::Error { error } => RuntimeEventKind::Error {
                     message: error.clone(),
@@ -353,28 +345,23 @@ impl AgentEvent {
                 StreamEvent::MessageStart { model } => RuntimeEventKind::AgentStarted {
                     model: model.clone(),
                 },
-                StreamEvent::MessageEnd { message } => RuntimeEventKind::MessageEnded {
-                    role: "assistant".into(),
-                    summary: assistant_message_text(message),
+                StreamEvent::MessageEnd { message } => RuntimeEventKind::MessageFinalized {
+                    message: runtime_assistant_message(message, false),
                 },
             },
-            AgentEvent::MessageEnd { message } => RuntimeEventKind::MessageEnded {
-                role: message_role(message).into(),
-                summary: message_summary(message),
+            AgentEvent::MessageEnd { message } => RuntimeEventKind::MessageFinalized {
+                message: runtime_message(message, false),
             },
-            AgentEvent::ToolExecutionStart {
-                tool_call_id,
-                tool_name,
-                args,
-            } => RuntimeEventKind::ToolStarted {
-                tool_call: RuntimeToolCall {
-                    id: tool_call_id.clone(),
-                    name: tool_name.clone(),
-                    status: RuntimeToolStatus::Running,
-                    args_preview: Some(args.to_string()),
-                    ..RuntimeToolCall::default()
-                },
-            },
+            AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
+                RuntimeEventKind::ToolStarted {
+                    tool_call: runtime_tool_call(
+                        tool_call_id,
+                        tool_name,
+                        args,
+                        RuntimeToolStatus::Running,
+                    ),
+                }
+            }
             AgentEvent::ToolOutputDelta { tool_call_id, text } => RuntimeEventKind::ToolOutput {
                 tool_call_id: tool_call_id.clone(),
                 output_delta: text.clone(),
@@ -382,7 +369,7 @@ impl AgentEvent {
             AgentEvent::ToolExecutionEnd {
                 tool_call_id,
                 result,
-                ..
+                provenance,
             } => RuntimeEventKind::ToolCompleted {
                 tool_call: RuntimeToolCall {
                     id: tool_call_id.clone(),
@@ -393,6 +380,9 @@ impl AgentEvent {
                         RuntimeToolStatus::Succeeded
                     },
                     output_preview: tool_result_summary(result),
+                    details: Some(redact_runtime_value(&result.details)),
+                    warning: provenance.as_ref().and_then(runtime_provenance_warning),
+                    is_error: result.is_error,
                     ..RuntimeToolCall::default()
                 },
             },
@@ -408,13 +398,17 @@ impl AgentEvent {
                 message_tokens,
                 output_tokens,
                 observed_input_limit,
-            } => RuntimeEventKind::Warning {
-                message: format!(
-                    "context usage updated: {used}/{display_window} tokens (limit {input_limit}, system {system_tokens}, tools {tool_definition_tokens}, messages {message_tokens}, output {output_tokens}, observed ceiling {observed})",
-                    observed = observed_input_limit
-                        .map(|limit| limit.to_string())
-                        .unwrap_or_else(|| "none".to_string())
-                ),
+            } => RuntimeEventKind::ContextUsageUpdated {
+                usage: RuntimeContextUsage {
+                    used: *used,
+                    display_window: *display_window,
+                    input_limit: *input_limit,
+                    system_tokens: *system_tokens,
+                    tool_definition_tokens: *tool_definition_tokens,
+                    message_tokens: *message_tokens,
+                    output_tokens: *output_tokens,
+                    observed_input_limit: *observed_input_limit,
+                },
             },
             AgentEvent::Warning { message } => RuntimeEventKind::Warning {
                 message: message.clone(),
@@ -424,36 +418,64 @@ impl AgentEvent {
                 duration_ms: timing.duration_ms,
                 success: timing.success,
             },
-            AgentEvent::RecoveryCheckpoint { checkpoint } => RuntimeEventKind::RecoveryCheckpoint {
-                kind: checkpoint.kind.as_str().into(),
-                turn: checkpoint.turn,
-                tool_call_id: checkpoint.tool_call_id.clone(),
-            },
-            AgentEvent::WorkflowControllerSnapshot { snapshot } => {
-                RuntimeEventKind::WorkflowControllerUpdated {
-                    snapshot: snapshot.clone(),
-                }
-            }
-            AgentEvent::VerificationStarted { gate } => {
-                RuntimeEventKind::VerificationUpdated { gate: gate.clone() }
-            }
-            AgentEvent::VerificationCompleted { gate, .. } => {
-                RuntimeEventKind::VerificationUpdated { gate: gate.clone() }
-            }
-            AgentEvent::WorktreeCreated { metadata }
-            | AgentEvent::WorktreeDiffCaptured { metadata } => RuntimeEventKind::WorktreeUpdated {
-                worktree: RuntimeWorktreeState {
-                    metadata: metadata.clone(),
-                    metadata_path: None,
-                    closeout: None,
+            AgentEvent::RecoveryCheckpoint { checkpoint } => RuntimeEventKind::RecoveryUpdated {
+                recovery: RuntimeRecoverySummary {
+                    kind: checkpoint.kind.as_str().into(),
+                    turn: checkpoint.turn,
+                    tool_call_id: checkpoint.tool_call_id.clone(),
+                    tool_name: checkpoint.tool_name.clone(),
+                    success: checkpoint.success,
+                    error_class: checkpoint.error_class.clone(),
                 },
             },
-            AgentEvent::WorktreeCloseout { result } => RuntimeEventKind::WorktreeUpdated {
-                worktree: RuntimeWorktreeState {
+            AgentEvent::WorkflowControllerSnapshot { snapshot } => {
+                RuntimeEventKind::WorkflowControllerUpdated { snapshot: snapshot.clone() }
+            }
+            AgentEvent::VerificationStarted { gate } => {
+                let mut gate = gate.clone();
+                gate.mark_running();
+                RuntimeEventKind::VerificationUpdated { gate }
+            }
+            AgentEvent::VerificationCompleted { gate, closeout_effect } => {
+                RuntimeEventKind::VerificationCompleted {
+                    update: RuntimeVerificationUpdate {
+                        gate: gate.clone(),
+                        closeout_effect: Some(*closeout_effect),
+                    },
+                }
+            }
+            AgentEvent::WorktreeCreated { metadata } => runtime_worktree_notice(
+                RuntimeWorktreeNoticeKind::Created,
+                format!(
+                    "Worktree-auto active: editing {} on branch {} (original checkout: {}).",
+                    metadata.worktree_path.display(),
+                    metadata.branch,
+                    metadata.main_worktree.display()
+                ),
+                RuntimeWorktreeState {
+                    metadata: metadata.clone(),
+                    ..RuntimeWorktreeState::default()
+                },
+            ),
+            AgentEvent::WorktreeDiffCaptured { metadata } => runtime_worktree_notice(
+                RuntimeWorktreeNoticeKind::DiffCaptured,
+                format!(
+                    "Worktree diff captured: {}. Closeout choices: keep worktree, apply patch, or discard worktree.",
+                    metadata.patch_path.display()
+                ),
+                RuntimeWorktreeState {
+                    metadata: metadata.clone(),
+                    ..RuntimeWorktreeState::default()
+                },
+            ),
+            AgentEvent::WorktreeCloseout { result } => runtime_worktree_notice(
+                RuntimeWorktreeNoticeKind::Closeout,
+                format!("Worktree closeout: {}", result.message),
+                RuntimeWorktreeState {
                     closeout: Some(result.clone()),
                     ..RuntimeWorktreeState::default()
                 },
-            },
+            ),
             AgentEvent::EvidenceWritten { path } => RuntimeEventKind::EvidenceUpdated {
                 artifact: RuntimeArtifactRef {
                     kind: "evidence-packet".into(),
@@ -702,28 +724,21 @@ fn runtime_usage_summary(usage: &Usage, cost: &Cost) -> RuntimeUsageSummary {
         raw_total_tokens: usage.raw_total_tokens(),
         effective_total_tokens: usage.effective_total_tokens(),
         total_tokens: usage.total_tokens(),
+        input_cost_micros: cost_micros(cost.input),
+        output_cost_micros: cost_micros(cost.output),
+        cache_read_cost_micros: cost_micros(cost.cache_read),
+        cache_write_cost_micros: cost_micros(cost.cache_write),
+        total_cost_micros: cost_micros(cost.total),
         total_cost: Some(format!("{:.6}", cost.total)),
     }
 }
 
-fn message_role(message: &Message) -> &'static str {
-    match message {
-        Message::User(_) => "user",
-        Message::Assistant(_) => "assistant",
-        Message::ToolResult(_) => "tool_result",
+fn cost_micros(cost: f64) -> u64 {
+    if cost.is_finite() && cost > 0.0 {
+        (cost * 1_000_000.0).round() as u64
+    } else {
+        0
     }
-}
-
-fn message_summary(message: &Message) -> Option<String> {
-    match message {
-        Message::User(message) => content_text(&message.content),
-        Message::Assistant(message) => assistant_message_text(message),
-        Message::ToolResult(result) => tool_result_summary(result),
-    }
-}
-
-fn assistant_message_text(message: &AssistantMessage) -> Option<String> {
-    content_text(&message.content)
 }
 
 fn content_text(content: &[ContentBlock]) -> Option<String> {
@@ -747,6 +762,145 @@ fn tool_result_summary(result: &imp_llm::ToolResultMessage) -> Option<String> {
     content_text(&result.content)
 }
 
+fn runtime_usage_without_cost(usage: &Usage) -> RuntimeUsageSummary {
+    runtime_usage_summary(usage, &Cost::default())
+}
+
+fn runtime_message(message: &Message, streaming: bool) -> RuntimeTranscriptMessage {
+    match message {
+        Message::User(message) => RuntimeTranscriptMessage {
+            id: format!("user-{}", message.timestamp),
+            role: RuntimeMessageRole::User,
+            blocks: runtime_content_blocks(&message.content),
+            timestamp_ms: Some(message.timestamp.saturating_mul(1000)),
+            ..RuntimeTranscriptMessage::default()
+        },
+        Message::Assistant(message) => runtime_assistant_message(message, streaming),
+        Message::ToolResult(result) => RuntimeTranscriptMessage {
+            id: format!("tool-result-{}-{}", result.tool_call_id, result.timestamp),
+            role: RuntimeMessageRole::ToolResult,
+            blocks: runtime_content_blocks(&result.content),
+            timestamp_ms: Some(result.timestamp.saturating_mul(1000)),
+            ..RuntimeTranscriptMessage::default()
+        },
+    }
+}
+
+fn runtime_assistant_message(
+    message: &AssistantMessage,
+    streaming: bool,
+) -> RuntimeTranscriptMessage {
+    RuntimeTranscriptMessage {
+        id: format!("assistant-{}", message.timestamp),
+        role: RuntimeMessageRole::Assistant,
+        blocks: runtime_content_blocks(&message.content),
+        is_streaming: streaming,
+        timestamp_ms: Some(message.timestamp.saturating_mul(1000)),
+        ..RuntimeTranscriptMessage::default()
+    }
+}
+
+fn runtime_content_blocks(content: &[ContentBlock]) -> Vec<RuntimeAssistantBlock> {
+    content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => {
+                Some(RuntimeAssistantBlock::VisibleText { text: text.clone() })
+            }
+            ContentBlock::Thinking { text } => {
+                Some(RuntimeAssistantBlock::Thinking { text: text.clone() })
+            }
+            ContentBlock::ToolCall { id, .. } => Some(RuntimeAssistantBlock::ToolCall {
+                tool_call_id: id.clone(),
+            }),
+            ContentBlock::Image { .. } => None,
+        })
+        .collect()
+}
+
+fn runtime_tool_call(
+    id: &str,
+    name: &str,
+    arguments: &serde_json::Value,
+    status: RuntimeToolStatus,
+) -> RuntimeToolCall {
+    let arguments = redact_runtime_value(arguments);
+    RuntimeToolCall {
+        id: id.to_string(),
+        name: name.to_string(),
+        status,
+        args_preview: Some(arguments.to_string()),
+        arguments: Some(arguments),
+        ..RuntimeToolCall::default()
+    }
+}
+
+pub(crate) fn redact_runtime_value(value: &serde_json::Value) -> serde_json::Value {
+    const SENSITIVE: &[&str] = &[
+        "api_key",
+        "authorization",
+        "cookie",
+        "password",
+        "secret",
+        "token",
+        "value",
+    ];
+    match value {
+        serde_json::Value::Object(values) => serde_json::Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    let redacted = if SENSITIVE
+                        .iter()
+                        .any(|sensitive| key.to_ascii_lowercase().contains(sensitive))
+                    {
+                        serde_json::Value::String("[redacted]".into())
+                    } else {
+                        redact_runtime_value(value)
+                    };
+                    (key.clone(), redacted)
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(redact_runtime_value).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn runtime_provenance_warning(provenance: &Provenance) -> Option<String> {
+    use crate::trust::{RiskLabel, TrustLabel};
+
+    if provenance.trust == TrustLabel::ExternalUntrusted
+        || provenance
+            .risk
+            .contains(&RiskLabel::PossiblePromptInjection)
+        || provenance.risk.contains(&RiskLabel::ContainsInstructions)
+    {
+        Some(format!(
+            "Trust warning: low-trust content observed from {} cannot authorize policy/tool escalation.",
+            provenance.origin.as_deref().unwrap_or("unknown source")
+        ))
+    } else {
+        None
+    }
+}
+
+fn runtime_worktree_notice(
+    kind: RuntimeWorktreeNoticeKind,
+    message: String,
+    worktree: RuntimeWorktreeState,
+) -> RuntimeEventKind {
+    RuntimeEventKind::WorktreeNotice {
+        notice: RuntimeWorktreeNotice {
+            kind,
+            message,
+            worktree,
+        },
+    }
+}
+
 fn runtime_policy_decision(record: &PolicyTraceRecord) -> RuntimePolicyDecision {
     let (decision, reason) = match &record.decision {
         ToolPolicyDecision::Allow { reasons } => (
@@ -765,12 +919,49 @@ fn runtime_policy_decision(record: &PolicyTraceRecord) -> RuntimePolicyDecision 
             Some(reason.message.clone()),
         ),
     };
+    let warning = runtime_policy_warning(record);
     RuntimePolicyDecision {
         id: record.tool_call_id.clone(),
         subject: record.tool_name.clone(),
         decision,
         reason,
+        warning: warning.as_ref().map(|(_, message)| message.clone()),
+        warning_kind: warning.map(|(kind, _)| kind),
     }
+}
+
+fn runtime_policy_warning(
+    record: &PolicyTraceRecord,
+) -> Option<(RuntimePolicyWarningKind, String)> {
+    let reason = match &record.decision {
+        ToolPolicyDecision::Allow { reasons } => reasons.iter().find(|reason| {
+            matches!(
+                reason.source,
+                crate::reference_monitor::PolicySource::TrustLabel
+                    | crate::reference_monitor::PolicySource::ToolManifest
+                    | crate::reference_monitor::PolicySource::ConfigPolicy
+            )
+        })?,
+        ToolPolicyDecision::Deny { reason }
+        | ToolPolicyDecision::AskUser { reason }
+        | ToolPolicyDecision::DryRunOnly { reason }
+        | ToolPolicyDecision::SandboxOnly { reason }
+        | ToolPolicyDecision::RequireVerification { reason } => reason,
+    };
+    let (kind, prefix) = match reason.source {
+        crate::reference_monitor::PolicySource::TrustLabel => {
+            (RuntimePolicyWarningKind::Trust, "Trust warning")
+        }
+        crate::reference_monitor::PolicySource::ToolManifest
+        | crate::reference_monitor::PolicySource::ConfigPolicy => {
+            (RuntimePolicyWarningKind::Extension, "Extension policy")
+        }
+        _ => (RuntimePolicyWarningKind::Policy, "Policy warning"),
+    };
+    Some((
+        kind,
+        format!("{prefix}: {} ({})", reason.message, reason.code),
+    ))
 }
 
 fn worktree_metadata_payload(metadata: &crate::workflow::WorktreeRunMetadata) -> serde_json::Value {
@@ -971,5 +1162,65 @@ mod trace_tests {
         assert_eq!(event.correlation.tool_call_id.as_deref(), Some("call-2"));
         assert_eq!(event.payload["kind"], "tool_execution_end");
         assert_eq!(event.payload["error_class"], "timeout");
+    }
+}
+
+#[cfg(test)]
+mod runtime_conversion_tests {
+    use super::*;
+    use crate::runtime::{RuntimeAssistantDelta, RuntimeEventKind};
+
+    #[test]
+    fn runtime_conversion_distinguishes_visible_text_and_thinking() {
+        let visible = AgentEvent::MessageDelta {
+            delta: StreamEvent::TextDelta {
+                text: "hello".into(),
+            },
+        }
+        .to_runtime_event("run", 1);
+        let thinking = AgentEvent::MessageDelta {
+            delta: StreamEvent::ThinkingDelta { text: "hmm".into() },
+        }
+        .to_runtime_event("run", 2);
+
+        assert!(matches!(
+            visible.kind,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::VisibleText { ref text }
+            } if text == "hello"
+        ));
+        assert!(matches!(
+            thinking.kind,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::Thinking { ref text }
+            } if text == "hmm"
+        ));
+    }
+
+    #[test]
+    fn runtime_tool_arguments_are_recursively_redacted() {
+        let event = AgentEvent::ToolExecutionStart {
+            tool_call_id: "tool".into(),
+            tool_name: "web".into(),
+            args: serde_json::json!({
+                "query": "safe",
+                "headers": {
+                    "authorization": "Bearer secret",
+                    "nested_token": "secret"
+                }
+            }),
+        }
+        .to_runtime_event("run", 1);
+
+        let RuntimeEventKind::ToolStarted { tool_call } = event.kind else {
+            panic!("expected tool start");
+        };
+        let arguments = tool_call.arguments.expect("redacted arguments");
+        assert_eq!(arguments["query"], "safe");
+        assert_eq!(arguments["headers"]["authorization"], "[redacted]");
+        assert_eq!(arguments["headers"]["nested_token"], "[redacted]");
+        assert!(!serde_json::to_string(&arguments)
+            .unwrap()
+            .contains("Bearer secret"));
     }
 }

@@ -2,9 +2,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use imp_core::trust::{Provenance, RiskLabel};
-
-use super::{DisplayToolCall, TrustLabel};
+use super::DisplayToolCall;
 
 #[derive(Debug, Clone)]
 pub(super) struct TuiTrace {
@@ -31,75 +29,6 @@ impl TuiTrace {
         {
             let _ = writeln!(file, "{} {}", imp_llm::now(), message.as_ref());
         }
-    }
-}
-
-pub(super) fn trust_policy_warning(
-    record: &imp_core::reference_monitor::PolicyTraceRecord,
-) -> Option<String> {
-    let reason = match &record.decision {
-        imp_core::reference_monitor::ToolPolicyDecision::Allow { reasons } => reasons
-            .iter()
-            .find(|reason| reason.source == imp_core::reference_monitor::PolicySource::TrustLabel),
-        imp_core::reference_monitor::ToolPolicyDecision::Deny { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::AskUser { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::DryRunOnly { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::SandboxOnly { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::RequireVerification { reason } => {
-            (reason.source == imp_core::reference_monitor::PolicySource::TrustLabel)
-                .then_some(reason)
-        }
-    }?;
-
-    Some(format!(
-        "Trust warning: {} ({})",
-        reason.message, reason.code
-    ))
-}
-
-pub(super) fn extension_policy_warning(
-    record: &imp_core::reference_monitor::PolicyTraceRecord,
-) -> Option<String> {
-    fn is_extension_policy_source(source: imp_core::reference_monitor::PolicySource) -> bool {
-        matches!(
-            source,
-            imp_core::reference_monitor::PolicySource::ToolManifest
-                | imp_core::reference_monitor::PolicySource::ConfigPolicy
-        )
-    }
-
-    let reason = match &record.decision {
-        imp_core::reference_monitor::ToolPolicyDecision::Allow { reasons } => reasons
-            .iter()
-            .find(|reason| is_extension_policy_source(reason.source)),
-        imp_core::reference_monitor::ToolPolicyDecision::Deny { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::AskUser { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::DryRunOnly { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::SandboxOnly { reason }
-        | imp_core::reference_monitor::ToolPolicyDecision::RequireVerification { reason } => {
-            is_extension_policy_source(reason.source).then_some(reason)
-        }
-    }?;
-
-    Some(format!(
-        "Extension policy: {} ({})",
-        reason.message, reason.code
-    ))
-}
-
-pub(super) fn provenance_warning(provenance: &Provenance) -> Option<String> {
-    if provenance.trust == TrustLabel::ExternalUntrusted
-        || provenance
-            .risk
-            .contains(&RiskLabel::PossiblePromptInjection)
-        || provenance.risk.contains(&RiskLabel::ContainsInstructions)
-    {
-        Some(format!(
-            "Trust warning: low-trust content observed from {} cannot authorize policy/tool escalation.",
-            provenance.origin.as_deref().unwrap_or("unknown source")
-        ))
-    } else {
-        None
     }
 }
 

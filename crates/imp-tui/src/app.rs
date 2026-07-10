@@ -35,10 +35,7 @@ use agent_start::{
     agent_start_join_result_to_signal, start_agent_from_request, AgentStartRequest,
     AgentStartResult,
 };
-use diagnostics::{
-    extension_policy_warning, open_path_in_editor, provenance_warning,
-    selected_read_file_path_from_tool, trace_tui_to, trust_policy_warning, TuiTrace,
-};
+use diagnostics::{open_path_in_editor, selected_read_file_path_from_tool, trace_tui_to, TuiTrace};
 use event_kinds::{agent_event_kind, runtime_signal_kind};
 use git_status::compact_git_label;
 use helpers::{
@@ -68,7 +65,7 @@ use state_types::{
     StartupSkillHit, StartupSurfaceData, StartupSurfaceMetadata, StartupWorkflowHit,
     StartupWorkflowItem, ThemeKind,
 };
-use verification_status::{verification_gate_label, verification_status_text};
+use verification_status::verification_status_text;
 use workflow_run_summary::workflow_run_detail_render_data;
 #[cfg(feature = "mana-ui")]
 use workflow_run_summary::workflow_run_summary_cache_key;
@@ -108,10 +105,9 @@ use imp_lua::LuaRuntime;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use imp_core::agent::{AgentCommand, AgentEvent, AgentHandle};
 use imp_core::config::Config;
-use imp_core::runtime::{RuntimeStateAccumulator, RuntimeStateSnapshot};
+use imp_core::runtime::RuntimeStateAccumulator;
 use imp_core::session::{SessionEntry, SessionInfo, SessionManager};
 use imp_core::tools::ToolRegistry;
-use imp_core::trust::TrustLabel;
 use imp_core::Error as ImpCoreError;
 use imp_llm::auth::AuthStore;
 use imp_llm::model::{ModelMeta, ModelRegistry, ProviderRegistry};
@@ -484,7 +480,7 @@ pub struct App {
     verification_status_items: BTreeMap<String, String>,
     runtime_state: RuntimeStateAccumulator,
     runtime_event_sequence: u64,
-    pub runtime_snapshot: RuntimeStateSnapshot,
+    runtime_message_projection_index: HashMap<String, usize>,
     pub widgets: HashMap<String, WidgetContent>,
     browser_state: BrowserUiState,
 
@@ -643,9 +639,9 @@ impl App {
             startup_surface_metadata,
             status_items: HashMap::new(),
             verification_status_items: BTreeMap::new(),
-            runtime_state: RuntimeStateAccumulator::new("tui"),
+            runtime_state: RuntimeStateAccumulator::new("tui-pending"),
             runtime_event_sequence: 0,
-            runtime_snapshot: RuntimeStateSnapshot::default(),
+            runtime_message_projection_index: HashMap::new(),
             widgets: HashMap::new(),
             browser_state: BrowserUiState::default(),
             lua_runtime: None,

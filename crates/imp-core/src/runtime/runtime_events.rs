@@ -1,4 +1,9 @@
 use super::*;
+use crate::agent::{BrowserEvent, BrowserEventKind};
+use crate::workflow::{
+    AutonomyMode, ChildWorkflowRun, ChildWorkflowStatus, VerificationGate, WorkspaceScope,
+    WorktreeRunMetadata,
+};
 
 #[test]
 fn runtime_state_snapshot_default_is_empty_and_versioned() {
@@ -92,6 +97,8 @@ fn browser_approval_events_update_runtime_state() {
     browser.action = Some("click".into());
     browser.domain = Some("example.com".into());
     accumulator.apply(&RuntimeEvent {
+        run_id: "run-1".into(),
+        sequence: 1,
         kind: RuntimeEventKind::BrowserUpdated {
             event: browser.clone(),
         },
@@ -106,6 +113,8 @@ fn browser_approval_events_update_runtime_state() {
     browser.kind = BrowserEventKind::InputApproved;
     browser.approval_scope = Some("domain".into());
     accumulator.apply(&RuntimeEvent {
+        run_id: "run-1".into(),
+        sequence: 2,
         kind: RuntimeEventKind::BrowserUpdated { event: browser },
         ..RuntimeEvent::default()
     });
@@ -478,4 +487,232 @@ fn runtime_child_workflow_event_updates_snapshot_and_evidence() {
             .map(String::as_str),
         Some("child-verifier-1:DoneWithConcerns")
     );
+}
+
+fn runtime_event(sequence: u64, kind: RuntimeEventKind) -> RuntimeEvent {
+    RuntimeEvent {
+        run_id: "run-sequence".into(),
+        sequence,
+        kind,
+        ..RuntimeEvent::default()
+    }
+}
+
+#[test]
+fn sequence_and_run_validation_are_explicit() {
+    let cases = [
+        (
+            RuntimeEvent {
+                run_id: String::new(),
+                sequence: 1,
+                ..RuntimeEvent::default()
+            },
+            "empty",
+        ),
+        (
+            RuntimeEvent {
+                schema_version: RUNTIME_SCHEMA_VERSION + 1,
+                run_id: "run-sequence".into(),
+                sequence: 1,
+                ..RuntimeEvent::default()
+            },
+            "schema",
+        ),
+        (
+            RuntimeEvent {
+                run_id: "other-run".into(),
+                sequence: 1,
+                ..RuntimeEvent::default()
+            },
+            "run",
+        ),
+    ];
+
+    for (event, expected) in cases {
+        let mut accumulator = RuntimeStateAccumulator::new("run-sequence");
+        let outcome = accumulator.apply(&event);
+        assert!(match (expected, outcome) {
+            ("empty", RuntimeApplyOutcome::EmptyRunId)
+            | ("schema", RuntimeApplyOutcome::UnsupportedSchema { .. })
+            | ("run", RuntimeApplyOutcome::RunMismatch { .. }) => true,
+            _ => false,
+        });
+        assert_eq!(accumulator.snapshot().revision, 0);
+    }
+}
+
+#[test]
+fn duplicate_stale_and_gap_events_have_typed_outcomes() {
+    let mut accumulator = RuntimeStateAccumulator::new("run-sequence");
+    assert!(matches!(
+        accumulator.apply(&runtime_event(
+            1,
+            RuntimeEventKind::TurnStarted { index: 0 }
+        )),
+        RuntimeApplyOutcome::Applied(_)
+    ));
+    assert!(matches!(
+        accumulator.apply(&runtime_event(
+            1,
+            RuntimeEventKind::TurnStarted { index: 99 }
+        )),
+        RuntimeApplyOutcome::Duplicate { sequence: 1 }
+    ));
+    assert!(matches!(
+        accumulator.apply(&runtime_event(
+            0,
+            RuntimeEventKind::TurnStarted { index: 99 }
+        )),
+        RuntimeApplyOutcome::Stale {
+            last: 1,
+            received: 0
+        }
+    ));
+    assert!(matches!(
+        accumulator.apply(&runtime_event(3, RuntimeEventKind::TurnEnded { index: 0 })),
+        RuntimeApplyOutcome::Gap {
+            expected: 2,
+            received: 3,
+            ..
+        }
+    ));
+    let snapshot = accumulator.snapshot();
+    assert_eq!(snapshot.revision, 2);
+    assert_eq!(snapshot.turns.len(), 1);
+    assert!(snapshot.warnings[0].contains("sequence gap"));
+}
+
+#[test]
+fn replay_is_deterministic_and_preserves_interleaved_blocks() {
+    let events = vec![
+        runtime_event(1, RuntimeEventKind::AgentStarted { model: "m".into() }),
+        runtime_event(
+            2,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::VisibleText { text: "a".into() },
+            },
+        ),
+        runtime_event(
+            3,
+            RuntimeEventKind::ToolDeclared {
+                tool_call: RuntimeToolCall {
+                    id: "t1".into(),
+                    name: "read".into(),
+                    ..RuntimeToolCall::default()
+                },
+            },
+        ),
+        runtime_event(
+            4,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::VisibleText { text: "b".into() },
+            },
+        ),
+        runtime_event(
+            5,
+            RuntimeEventKind::ToolDeclared {
+                tool_call: RuntimeToolCall {
+                    id: "t2".into(),
+                    name: "bash".into(),
+                    ..RuntimeToolCall::default()
+                },
+            },
+        ),
+        runtime_event(
+            6,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::Thinking {
+                    text: "think".into(),
+                },
+            },
+        ),
+        runtime_event(
+            7,
+            RuntimeEventKind::AssistantDelta {
+                delta: RuntimeAssistantDelta::VisibleText { text: "c".into() },
+            },
+        ),
+    ];
+
+    let replay = || {
+        let mut accumulator = RuntimeStateAccumulator::new("run-sequence");
+        for event in &events {
+            assert!(matches!(
+                accumulator.apply(event),
+                RuntimeApplyOutcome::Applied(_)
+            ));
+        }
+        accumulator.snapshot()
+    };
+    let first = replay();
+    let second = replay();
+    assert_eq!(first, second);
+    assert_eq!(
+        first.transcript[0].blocks,
+        vec![
+            RuntimeAssistantBlock::VisibleText { text: "a".into() },
+            RuntimeAssistantBlock::ToolCall {
+                tool_call_id: "t1".into()
+            },
+            RuntimeAssistantBlock::VisibleText { text: "b".into() },
+            RuntimeAssistantBlock::ToolCall {
+                tool_call_id: "t2".into()
+            },
+            RuntimeAssistantBlock::Thinking {
+                text: "think".into()
+            },
+            RuntimeAssistantBlock::VisibleText { text: "c".into() },
+        ]
+    );
+}
+
+#[test]
+fn tool_output_is_bounded_to_a_tail() {
+    let mut accumulator = RuntimeStateAccumulator::new("run-sequence");
+    accumulator.apply(&runtime_event(
+        1,
+        RuntimeEventKind::ToolStarted {
+            tool_call: RuntimeToolCall {
+                id: "tool".into(),
+                name: "bash".into(),
+                ..RuntimeToolCall::default()
+            },
+        },
+    ));
+    accumulator.apply(&runtime_event(
+        2,
+        RuntimeEventKind::ToolOutput {
+            tool_call_id: "tool".into(),
+            output_delta: "x".repeat(MAX_RUNTIME_TOOL_OUTPUT_CHARS + 100),
+        },
+    ));
+    let output = accumulator.snapshot().active_tools[0]
+        .output_preview
+        .clone()
+        .unwrap();
+    assert!(output.starts_with('…'));
+    assert!(output.chars().count() <= MAX_RUNTIME_TOOL_OUTPUT_CHARS + 1);
+}
+
+#[test]
+fn unknown_serialized_event_kind_is_compatible_and_safe() {
+    let json = r#"{
+        "schema_version":1,
+        "run_id":"run-sequence",
+        "sequence":1,
+        "kind":{"type":"future_process_event","pid":42}
+    }"#;
+    let event: RuntimeEvent = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        event.kind,
+        RuntimeEventKind::Unknown {
+            name: "future_process_event".into()
+        }
+    );
+    let mut accumulator = RuntimeStateAccumulator::new("run-sequence");
+    assert!(matches!(
+        accumulator.apply(&event),
+        RuntimeApplyOutcome::Applied(_)
+    ));
+    assert_eq!(accumulator.snapshot().phase, RuntimePhase::Idle);
 }
