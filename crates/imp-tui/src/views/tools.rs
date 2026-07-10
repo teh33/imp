@@ -266,6 +266,7 @@ impl DisplayToolCall {
             "prototype" => format_prototype_args(args),
             "git" => format_git_args(args),
             "web" => format_web_args(args),
+            "browser" => format_browser_args(args),
             _ => summarize_json_object(args),
         }
     }
@@ -491,6 +492,25 @@ fn format_web_args(args: &Value) -> String {
     action_with_fields(action, &fields)
 }
 
+fn format_browser_args(args: &Value) -> String {
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("browser");
+    let mut fields = Vec::new();
+    for key in ["url", "selector", "session_id"] {
+        push_named_field(
+            &mut fields,
+            key,
+            args.get(key).and_then(value_to_short_string),
+        );
+    }
+    if args.get("value").is_some() {
+        fields.push("value [redacted]".into());
+    }
+    action_with_fields(action, &fields)
+}
+
 fn format_edit_args(args: &Value) -> String {
     let path = args
         .get("path")
@@ -534,6 +554,7 @@ pub fn tool_display_icon(name: &str) -> &'static str {
         "git" => "◆",
         "scan" => "⌕",
         "web" => "◎",
+        "browser" => "◉",
         "workflow" => "⚑",
         _ => "•",
     }
@@ -554,6 +575,7 @@ pub fn tool_display_name(name: &str) -> String {
         "prototype" => "Prototype".to_string(),
         "bash" | "shell" => "Terminal".to_string(),
         "multi_edit" => "Edit".to_string(),
+        "browser" => "Browser".to_string(),
         other => {
             let mut chars = other.chars();
             match chars.next() {

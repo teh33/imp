@@ -1,6 +1,7 @@
 mod agent_events;
 mod agent_start;
 mod ask;
+mod browser;
 mod commands;
 mod compaction;
 mod diagnostics;
@@ -101,6 +102,7 @@ fn stop_workflow_run(_id: &str) -> Result<Option<WorkflowRunSummary>, String> {
     Ok(None)
 }
 
+use browser::BrowserUiState;
 use imp_lua::LuaRuntime;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -482,6 +484,7 @@ pub struct App {
     runtime_event_sequence: u64,
     pub runtime_snapshot: RuntimeStateSnapshot,
     pub widgets: HashMap<String, WidgetContent>,
+    browser_state: BrowserUiState,
 
     /// Lua extension runtime (for command dispatch and hot-reload).
     pub lua_runtime: Option<Arc<Mutex<LuaRuntime>>>,
@@ -642,6 +645,7 @@ impl App {
             runtime_event_sequence: 0,
             runtime_snapshot: RuntimeStateSnapshot::default(),
             widgets: HashMap::new(),
+            browser_state: BrowserUiState::default(),
             lua_runtime: None,
             selected_startup_skill: None,
             selected_startup_workflow: None,

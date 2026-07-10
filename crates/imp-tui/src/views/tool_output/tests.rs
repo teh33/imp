@@ -429,3 +429,29 @@ fn git_diff_line_numbers_are_sidebar_only() {
 
     assert_eq!(plain, vec!["@@ -1 +1 @@", "-old", "+new"]);
 }
+
+#[test]
+fn browser_sidebar_card_shows_sanitized_session_metadata() {
+    let mut tc = make_tc("browser", Some("button Submit backendNodeId=7"));
+    tc.args_summary = "observe  session_id browser-1".into();
+    tc.details = json!({
+        "action": "observe",
+        "session_id": "browser-1",
+        "domain": "example.com",
+        "sequence": 3,
+        "interactive_elements": 1
+    });
+    let plain = plain_lines(styled_sidebar_tool_output_lines(
+        &tc,
+        &Highlighter::new(),
+        &Theme::default(),
+        false,
+    ));
+    assert_eq!(plain[0], "◉Browser · Lightpanda · observe");
+    assert!(plain.iter().any(|line| line.contains("session: browser-1")));
+    assert!(plain
+        .iter()
+        .any(|line| line.contains("domain: example.com")));
+    assert!(plain.iter().any(|line| line.contains("sequence: 3")));
+    assert!(plain.iter().any(|line| line.contains("elements: 1")));
+}

@@ -301,14 +301,9 @@ impl App {
                 let _ = self.session.append_tool_result_message(result);
             }
             AgentEvent::Browser { event } => {
-                self.status_items.insert(
-                    "browser".to_string(),
-                    format!(
-                        "{:?} · {}",
-                        event.kind,
-                        event.domain.as_deref().unwrap_or("Lightpanda")
-                    ),
-                );
+                self.browser_state.apply(&event);
+                self.status_items
+                    .insert("browser".to_string(), self.browser_state.status(&event));
                 self.invalidate_chat_render_cache();
             }
             AgentEvent::ContextUsageUpdated {

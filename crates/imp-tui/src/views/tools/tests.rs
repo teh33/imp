@@ -387,3 +387,19 @@ fn compact_height_all_compactable() {
     let h = tool_calls_compact_height(&tcs, 80);
     assert_eq!(h, 1);
 }
+
+#[test]
+fn browser_args_summary_redacts_values() {
+    let summary = DisplayToolCall::make_args_summary(
+        "browser",
+        &serde_json::json!({
+            "action": "fill",
+            "session_id": "browser-1",
+            "selector": "#email",
+            "value": "secret@example.com"
+        }),
+    );
+    assert!(summary.contains("fill"));
+    assert!(summary.contains("value [redacted]"));
+    assert!(!summary.contains("secret@example.com"));
+}

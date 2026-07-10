@@ -24,6 +24,7 @@ pub fn styled_tool_output_lines(
         "workflow" => styled_workflow_output(tc, theme),
         "work" => styled_work_output(tc, theme),
         "web" => styled_web_output(tc, theme),
+        "browser" => styled_browser_output(tc, theme),
         "ask_user" | "extend" | "audit_scan" | "openrouter_secret_run" => {
             styled_status_output(tc, theme)
         }
@@ -48,6 +49,7 @@ pub fn styled_sidebar_tool_output_lines(
         "scan" => styled_scan_sidebar_output(tc, theme),
         "workflow" => styled_workflow_output(tc, theme),
         "web" => styled_web_sidebar_output(tc, theme),
+        "browser" => styled_browser_sidebar_output(tc, theme),
         "prototype" => styled_prototype_sidebar_output(tc, theme),
         "work" => styled_work_output(tc, theme),
         "read" => styled_read_sidebar_output(tc, _highlighter, theme, with_line_numbers),
@@ -578,6 +580,64 @@ fn styled_scan_sidebar_output(tc: &DisplayToolCall, theme: &Theme) -> Vec<Line<'
     }
     body.extend(styled_plain_output_with(tc, theme, scan_line_style));
     tool_card_output("Scan", action, "⌕", body, theme)
+}
+
+fn styled_browser_output(tc: &DisplayToolCall, theme: &Theme) -> Vec<Line<'static>> {
+    let action = tc.details.get("action").and_then(Value::as_str);
+    let location = tc
+        .details
+        .get("domain")
+        .and_then(Value::as_str)
+        .or_else(|| tc.details.get("url").and_then(Value::as_str));
+    let mut spans = vec![Span::styled(
+        action.unwrap_or("browser").to_string(),
+        theme.accent_style(),
+    )];
+    if let Some(location) = location {
+        spans.push(Span::styled(format!(" · {location}"), theme.muted_style()));
+    }
+    if let Some(sequence) = tc.details.get("sequence").and_then(Value::as_u64) {
+        spans.push(Span::styled(format!(" · #{sequence}"), theme.muted_style()));
+    }
+    vec![Line::from(spans)]
+}
+
+fn styled_browser_sidebar_output(tc: &DisplayToolCall, theme: &Theme) -> Vec<Line<'static>> {
+    let action = tc.details.get("action").and_then(Value::as_str);
+    let mut body = Vec::new();
+    append_card_meta(
+        &mut body,
+        "session",
+        tc.details.get("session_id").and_then(Value::as_str),
+        theme,
+    );
+    append_card_meta(
+        &mut body,
+        "domain",
+        tc.details.get("domain").and_then(Value::as_str),
+        theme,
+    );
+    append_card_meta(
+        &mut body,
+        "url",
+        tc.details.get("url").and_then(Value::as_str),
+        theme,
+    );
+    if let Some(sequence) = tc.details.get("sequence").and_then(Value::as_u64) {
+        body.push(card_meta_line("sequence", &sequence.to_string(), theme));
+    }
+    if let Some(elements) = tc
+        .details
+        .get("interactive_elements")
+        .and_then(Value::as_u64)
+    {
+        body.push(card_meta_line("elements", &elements.to_string(), theme));
+    }
+    if !body.is_empty() {
+        body.push(Line::raw(""));
+    }
+    body.extend(styled_plain_output_with(tc, theme, web_line_style));
+    tool_card_output("Browser · Lightpanda", action, "◉", body, theme)
 }
 
 fn styled_web_sidebar_output(tc: &DisplayToolCall, theme: &Theme) -> Vec<Line<'static>> {
