@@ -114,8 +114,14 @@ impl fmt::Debug for ProcessRequest {
             .field("program", &self.command.program)
             .field("argument_count", &self.command.arguments.len())
             .field("cwd", &self.cwd)
-            .field("environment_keys", &self.environment.keys().collect::<Vec<_>>())
-            .field("approved_secret_environment", &self.approved_secret_environment)
+            .field(
+                "environment_keys",
+                &self.environment.keys().collect::<Vec<_>>(),
+            )
+            .field(
+                "approved_secret_environment",
+                &self.approved_secret_environment,
+            )
             .field("mode", &self.mode)
             .field("timeout", &self.timeout)
             .field("output_retention_bytes", &self.output_retention_bytes)
@@ -137,7 +143,10 @@ pub enum ProcessState {
 
 impl ProcessState {
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Exited | Self::Failed | Self::Cancelled | Self::TimedOut)
+        matches!(
+            self,
+            Self::Exited | Self::Failed | Self::Cancelled | Self::TimedOut
+        )
     }
 }
 
@@ -168,7 +177,10 @@ pub struct OutputCursor {
 
 impl OutputCursor {
     pub fn start(process_id: ProcessId) -> Self {
-        Self { process_id, position: 0 }
+        Self {
+            process_id,
+            position: 0,
+        }
     }
 }
 
@@ -214,8 +226,19 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProcessEvent {
-    Started { process_id: ProcessId },
-    OutputAvailable { process_id: ProcessId, next_cursor: OutputCursor },
-    StateChanged { process_id: ProcessId, state: ProcessState },
-    Exited { process_id: ProcessId, exit: ProcessExit },
+    Started {
+        process_id: ProcessId,
+    },
+    OutputAvailable {
+        process_id: ProcessId,
+        next_cursor: OutputCursor,
+    },
+    StateChanged {
+        process_id: ProcessId,
+        state: ProcessState,
+    },
+    Exited {
+        process_id: ProcessId,
+        exit: ProcessExit,
+    },
 }

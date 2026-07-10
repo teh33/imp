@@ -26,7 +26,9 @@ pub struct ProcessRestrictions {
 
 impl Default for ProcessRestrictions {
     fn default() -> Self {
-        Self { allow_children: true }
+        Self {
+            allow_children: true,
+        }
     }
 }
 
@@ -142,7 +144,9 @@ fn validate_cwd(cwd: &Path, readable_roots: &BTreeSet<PathBuf>) -> Result<(), Pr
     if allowed {
         Ok(())
     } else {
-        Err(ProcessError::GrantDenied("working directory is outside readable roots".into()))
+        Err(ProcessError::GrantDenied(
+            "working directory is outside readable roots".into(),
+        ))
     }
 }
 
@@ -155,8 +159,14 @@ fn validate_environment(request: &ProcessRequest) -> Result<(), ProcessError> {
         }
     }
     for secret in &request.approved_secret_environment {
-        if !request.grant.approved_secret_ids.contains(&secret.secret_id)
-            || !request.grant.approved_secret_environment.contains(&secret.name)
+        if !request
+            .grant
+            .approved_secret_ids
+            .contains(&secret.secret_id)
+            || !request
+                .grant
+                .approved_secret_environment
+                .contains(&secret.name)
         {
             return Err(ProcessError::GrantDenied(format!(
                 "secret environment `{}` is not approved",

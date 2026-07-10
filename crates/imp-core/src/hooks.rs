@@ -352,8 +352,7 @@ async fn run_hook_shell_command(
     let mut grant = ExecutionGrant::host(&cwd);
     grant.allowed_environment = environment.keys().cloned().collect();
     let request = ProcessRequest {
-        command: CommandSpec::new("sh")
-            .with_arguments(["-c".into(), command_text.into()]),
+        command: CommandSpec::new("sh").with_arguments(["-c".into(), command_text.into()]),
         cwd,
         environment,
         approved_secret_environment: Vec::new(),
@@ -362,8 +361,14 @@ async fn run_hook_shell_command(
         output_retention_bytes: 256 * 1024,
         grant,
     };
-    let info = manager.start(request).await.map_err(|error| error.to_string())?;
-    let exit = manager.wait(info.id).await.map_err(|error| error.to_string())?;
+    let info = manager
+        .start(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let exit = manager
+        .wait(info.id)
+        .await
+        .map_err(|error| error.to_string())?;
     let mut cursor = OutputCursor::start(info.id);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -384,7 +389,10 @@ async fn run_hook_shell_command(
         }
     }
     if exit.timed_out {
-        return Err(format!("hook command timed out after {}s", timeout.as_secs()));
+        return Err(format!(
+            "hook command timed out after {}s",
+            timeout.as_secs()
+        ));
     }
     Ok(HookCommandOutput {
         success: exit.code == Some(0),
@@ -579,8 +587,8 @@ async fn execute_hook(
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
                     // A non-zero exit code on a BeforeToolCall hook means "block"
-                    let block = matches!(event, HookEvent::BeforeToolCall { .. })
-                        && !output.success;
+                    let block =
+                        matches!(event, HookEvent::BeforeToolCall { .. }) && !output.success;
 
                     let reason = if block {
                         Some(if stderr.is_empty() {
