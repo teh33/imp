@@ -173,8 +173,8 @@ this phase:
 - `crates/imp-core/src/tools/git.rs` — Git subprocesses;
 - `crates/imp-core/src/tools/workflow/checks.rs` — workflow check and Git commands;
 - `crates/imp-core/src/tools/browser/client.rs` and
-  `crates/imp-core/src/tools/browser/diagnostics.rs` — browser helpers;
-- `crates/imp-core/src/tools/browser/diagnostics/protocol.rs` — diagnostics protocol;
+  `crates/imp-core/src/tools/browser/diagnostics/protocol.rs` — persistent browser and MCP
+  protocol helpers; the diagnostics version probe already uses the process runtime;
 - `crates/imp-core/src/repo_intelligence.rs` and
   `crates/imp-core/src/tools/scan/mod.rs` — read-only Git discovery;
 - `crates/imp-cli/src/lib.rs` — installer/update, browser-open, and CLI helpers.
