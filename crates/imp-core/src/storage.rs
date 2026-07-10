@@ -93,6 +93,16 @@ pub fn global_sessions_dir() -> PathBuf {
     global_root().join("sessions")
 }
 
+pub fn session_dirs_for_read() -> Vec<PathBuf> {
+    let mut roots = vec![global_sessions_dir()];
+    roots.extend(
+        legacy_data_roots()
+            .into_iter()
+            .map(|root| root.join("sessions")),
+    );
+    dedupe(roots)
+}
+
 pub fn global_run_index_path() -> PathBuf {
     global_runs_dir().join("index.jsonl")
 }

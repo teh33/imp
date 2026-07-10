@@ -76,19 +76,24 @@ impl App {
         if self.session_list_task.is_some() {
             return;
         }
-        let session_dir = imp_core::storage::global_sessions_dir();
+        let session_dirs = imp_core::storage::session_dirs_for_read();
         let preferred_cwd = self.cwd.clone();
         let signal_tx = self.runtime_signal_tx.clone();
         self.session_list_task = Some(tokio::spawn(async move {
             let signal = match tokio::task::spawn_blocking(move || {
-                SessionManager::list(&session_dir)
-                    .map(|sessions| SessionListResult {
-                        sessions,
-                        preferred_cwd,
-                        offset: 0,
-                        limit: usize::MAX,
-                    })
-                    .map_err(|error| format!("Failed to list sessions: {error}"))
+                SessionManager::list_resumable_page_from_dirs(
+                    &session_dirs,
+                    0,
+                    SESSION_LIST_PAGE_SIZE,
+                    None,
+                )
+                .map(|sessions| SessionListResult {
+                    sessions,
+                    preferred_cwd,
+                    offset: 0,
+                    limit: SESSION_LIST_PAGE_SIZE,
+                })
+                .map_err(|error| format!("Failed to list sessions: {error}"))
             })
             .await
             {
@@ -106,14 +111,14 @@ impl App {
         if self.session_list_task.is_some() {
             return;
         }
-        let session_dir = imp_core::storage::global_sessions_dir();
+        let session_dirs = imp_core::storage::session_dirs_for_read();
         let preferred_cwd = self.cwd.clone();
         let signal_tx = self.runtime_signal_tx.clone();
         let query_for_task = query.clone();
         self.session_list_task = Some(tokio::spawn(async move {
             let signal = match tokio::task::spawn_blocking(move || {
-                SessionManager::list_page(
-                    &session_dir,
+                SessionManager::list_resumable_page_from_dirs(
+                    &session_dirs,
                     offset,
                     SESSION_LIST_PAGE_SIZE,
                     query_for_task.as_deref(),
@@ -153,6 +158,7 @@ impl App {
     }
 
     pub(super) fn finish_session_list_load(&mut self, result: SessionListResult) {
+        self.session_list_task = None;
         let has_more = result.sessions.len() >= result.limit;
         if result.sessions.is_empty() && result.offset == 0 {
             self.mode = UiMode::Normal;
@@ -180,6 +186,7 @@ impl App {
     }
 
     pub(super) fn fail_session_list_load(&mut self, error: String) {
+        self.session_list_task = None;
         if let UiMode::SessionPicker(state) = &mut self.mode {
             state.fail_loading();
             self.mode = UiMode::Normal;

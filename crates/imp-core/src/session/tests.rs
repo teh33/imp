@@ -467,6 +467,44 @@ fn session_list_page_orders_by_updated_time_and_limits() {
 }
 
 #[test]
+fn session_resumable_list_page_skips_empty_sessions_before_applying_offset() {
+    let tmp = TempDir::new().unwrap();
+    let current_dir = tmp.path().join("current");
+    let legacy_dir = tmp.path().join("legacy");
+    let cwd = tmp.path().join("project");
+
+    let mut empty_content = SessionManager::new(&cwd, &current_dir).unwrap();
+    empty_content
+        .append(make_msg_entry("empty-content", "   "))
+        .unwrap();
+    let mut current = SessionManager::new(&cwd, &current_dir).unwrap();
+    current
+        .append(make_msg_entry("current", "current session"))
+        .unwrap();
+    let mut legacy = SessionManager::new(&cwd, &legacy_dir).unwrap();
+    legacy
+        .append(make_msg_entry("legacy", "legacy session"))
+        .unwrap();
+
+    let first = SessionManager::list_resumable_page_from_dirs(
+        &[current_dir.clone(), legacy_dir.clone()],
+        0,
+        1,
+        None,
+    )
+    .unwrap();
+    let second =
+        SessionManager::list_resumable_page_from_dirs(&[current_dir, legacy_dir], 1, 1, None)
+            .unwrap();
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_ne!(first[0].id, second[0].id);
+    assert!(first[0].message_count > 0);
+    assert!(second[0].message_count > 0);
+}
+
+#[test]
 fn session_list_captures_last_message() {
     let tmp = TempDir::new().unwrap();
     let session_dir = tmp.path().join("sessions");

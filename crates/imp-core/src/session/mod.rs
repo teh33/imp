@@ -1056,38 +1056,25 @@ impl SessionManager {
         Self::list_page(session_dir, 0, usize::MAX, None)
     }
 
+    /// List non-empty resumable sessions from multiple directories, newest first.
+    pub fn list_resumable_page_from_dirs(
+        session_dirs: &[PathBuf],
+        offset: usize,
+        limit: usize,
+        query: Option<&str>,
+    ) -> Result<Vec<SessionInfo>> {
+        let files = recent_session_files_from_dirs(session_dirs)?;
+        session_page_from_files(files, offset, limit, query, true, true)
+    }
+
     pub fn list_page(
         session_dir: &Path,
         offset: usize,
         limit: usize,
         query: Option<&str>,
     ) -> Result<Vec<SessionInfo>> {
-        let mut files = recent_session_files(session_dir)?;
-        if offset > 0 {
-            files = files.into_iter().skip(offset).collect();
-        }
-        if query.is_none() {
-            files.truncate(limit);
-        }
-
-        let query = query
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty());
-        let mut sessions = Vec::new();
-        for (path, updated_at) in files {
-            if let Ok(info) = read_session_info(&path, updated_at) {
-                if query
-                    .as_deref()
-                    .is_none_or(|needle| session_info_matches(&info, needle))
-                {
-                    sessions.push(info);
-                    if query.is_none() && sessions.len() >= limit {
-                        break;
-                    }
-                }
-            }
-        }
-        Ok(sessions)
+        let files = recent_session_files_from_dirs(&[session_dir.to_path_buf()])?;
+        session_page_from_files(files, offset, limit, query, false, false)
     }
 }
 
@@ -1742,10 +1729,33 @@ fn summarize_session_title(text: &str, max_chars: usize) -> String {
     truncate_chars_with_suffix(summary.trim(), max_chars, "…")
 }
 
-fn recent_session_files(session_dir: &Path) -> Result<Vec<(PathBuf, u64)>> {
+fn recent_session_files_from_dirs(session_dirs: &[PathBuf]) -> Result<Vec<(PathBuf, u64)>> {
     let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    for session_dir in session_dirs {
+        collect_session_files(session_dir, &mut files)?;
+    }
+    files.sort_by(|(path_a, _, modified_a), (path_b, _, modified_b)| {
+        modified_b.cmp(modified_a).then_with(|| path_b.cmp(path_a))
+    });
+
+    let mut seen_ids = std::collections::HashSet::new();
+    files.retain(|(path, _, _)| {
+        path.file_stem()
+            .map(|id| seen_ids.insert(id.to_os_string()))
+            .unwrap_or(false)
+    });
+    Ok(files
+        .into_iter()
+        .map(|(path, updated_at, _)| (path, updated_at))
+        .collect())
+}
+
+fn collect_session_files(
+    session_dir: &Path,
+    files: &mut Vec<(PathBuf, u64, std::time::SystemTime)>,
+) -> Result<()> {
     if !session_dir.exists() {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     for dir_entry in std::fs::read_dir(session_dir)? {
@@ -1754,7 +1764,6 @@ fn recent_session_files(session_dir: &Path) -> Result<Vec<(PathBuf, u64)>> {
         if path.extension().is_none_or(|e| e != "jsonl") {
             continue;
         }
-
         let modified = dir_entry
             .metadata()
             .ok()
@@ -1766,14 +1775,63 @@ fn recent_session_files(session_dir: &Path) -> Result<Vec<(PathBuf, u64)>> {
             .unwrap_or(0);
         files.push((path, updated_at, modified));
     }
+    Ok(())
+}
 
-    files.sort_by(|(path_a, _, modified_a), (path_b, _, modified_b)| {
-        modified_b.cmp(modified_a).then_with(|| path_b.cmp(path_a))
-    });
-    Ok(files
-        .into_iter()
-        .map(|(path, updated_at, _)| (path, updated_at))
-        .collect())
+fn session_page_from_files(
+    files: Vec<(PathBuf, u64)>,
+    offset: usize,
+    limit: usize,
+    query: Option<&str>,
+    exclude_empty: bool,
+    always_limit: bool,
+) -> Result<Vec<SessionInfo>> {
+    let query = query
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    let mut matched = 0;
+    let mut sessions = Vec::new();
+    for (path, updated_at) in files {
+        let Ok(info) = read_session_info(&path, updated_at) else {
+            continue;
+        };
+        if (exclude_empty && !is_resumable_session(&info))
+            || query
+                .as_deref()
+                .is_some_and(|needle| !session_info_matches(&info, needle))
+        {
+            continue;
+        }
+        if matched < offset {
+            matched += 1;
+            continue;
+        }
+        sessions.push(info);
+        if (always_limit || query.is_none()) && sessions.len() >= limit {
+            break;
+        }
+    }
+    Ok(sessions)
+}
+
+fn is_resumable_session(info: &SessionInfo) -> bool {
+    info.message_count > 0
+        && (info
+            .name
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || info
+                .summary
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || info
+                .first_message
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || info
+                .last_message
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()))
 }
 
 fn session_info_matches(info: &SessionInfo, needle: &str) -> bool {
