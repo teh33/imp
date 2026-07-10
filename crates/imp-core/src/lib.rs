@@ -22,6 +22,7 @@ pub mod import;
 pub mod learning;
 pub mod memory;
 pub mod policy;
+pub mod process;
 pub mod reference_monitor;
 pub mod repo_index;
 pub mod repo_intelligence;
