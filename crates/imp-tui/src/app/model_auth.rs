@@ -61,7 +61,7 @@ pub(super) fn oauth_provider(provider: &str) -> bool {
 }
 
 pub(super) fn model_picker_chatgpt_oauth_models(
-    registry: &ModelRegistry,
+    _registry: &ModelRegistry,
     auth_store: &AuthStore,
 ) -> Vec<ModelMeta> {
     let has_chatgpt_oauth =
@@ -72,7 +72,6 @@ pub(super) fn model_picker_chatgpt_oauth_models(
 
     imp_llm::model::builtin_openai_codex_models()
         .into_iter()
-        .filter(|model| registry.find(&model.id).is_none())
         .map(|mut model| {
             model.provider = "openai".into();
             model
