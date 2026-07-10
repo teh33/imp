@@ -544,6 +544,18 @@ fn resolve_custom_openai_model_does_not_switch_to_chatgpt_provider() {
 }
 
 #[test]
+fn rpc_ready_event_advertises_v1_durable_session_capabilities() {
+    let event = rpc_ready_event();
+    assert_eq!(event["type"], "rpc_ready");
+    assert_eq!(event["protocol"], "imp-rpc");
+    assert_eq!(event["version"], 1);
+    let capabilities = event["capabilities"].as_array().unwrap();
+    for required in ["durable_sessions", "prompt", "followup", "steer", "cancel"] {
+        assert!(capabilities.iter().any(|capability| capability == required));
+    }
+}
+
+#[test]
 fn rpc_session_options_open_or_create_explicit_session_path() {
     let tmp = tempfile::tempdir().unwrap();
     let session_path = tmp.path().join("rpc-session.jsonl");

@@ -23,11 +23,13 @@ RPC owns stdin immediately; piped stdin is never consumed as a one-shot prompt.
 After configuration and session initialization, stdout emits:
 
 ```json
-{"type":"rpc_ready"}
+{"type":"rpc_ready","protocol":"imp-rpc","version":1,"capabilities":["durable_sessions","prompt","followup","steer","cancel"]}
 ```
 
-Hosts must read until `rpc_ready` before sending the first command. Any earlier
-additive events should be preserved or ignored according to the host policy.
+Hosts must read until `rpc_ready` before sending the first command, validate the
+protocol version, and require the capabilities they use. Unknown additional
+capabilities are forward-compatible. Any earlier additive events should be
+preserved or ignored according to the host policy.
 
 After configuration and protocol initialization, stdout emits a readiness barrier:
 

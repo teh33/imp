@@ -2511,7 +2511,7 @@ async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let options = rpc_session_options(cli, &cwd, &config, rpc_ui);
     let mut session = ImpSession::create(options).await?;
     emit_startup_timing(&mut startup_timer, StartupStage::SessionReady);
-    let _ = stdout_tx.send(json!({ "type": "rpc_ready" })).await;
+    let _ = stdout_tx.send(rpc_ready_event()).await;
 
     let (command_tx, mut command_rx) = mpsc::channel(64);
     tokio::spawn(read_rpc_stdin(command_tx, pending_ui, stdout_tx.clone()));
