@@ -20,6 +20,7 @@ resolver = "2"
 default-members = [
     "crates/imp-bin",
     "crates/imp-llm",
+    "crates/imp-audit",
     "crates/imp-core",
     "crates/imp-lua",
     "crates/imp-tui",
@@ -29,6 +30,7 @@ default-members = [
 members = [
     "crates/imp-bin",
     "crates/imp-llm",
+    "crates/imp-audit",
     "crates/imp-core",
     "crates/imp-lua",
     "crates/imp-tui",
@@ -38,7 +40,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 license = "MPL-2.0"
 repository = "https://github.com/kfcafe/imp"
@@ -101,6 +103,7 @@ readability-rust = "0.1"
 project-detect = "0.1"
 
 imp-llm = { version = "0.3.0", path = "crates/imp-llm" }
+imp-audit = { version = "0.3.0", path = "crates/imp-audit" }
 imp-core = { version = "0.3.0", path = "crates/imp-core" }
 imp-lua = { version = "0.3.0", path = "crates/imp-lua" }
 imp-tui = { version = "0.3.0", path = "crates/imp-tui" }

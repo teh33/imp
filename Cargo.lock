@@ -2548,8 +2548,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "imp-audit"
+version = "0.3.4"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "imp-bin"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "imp-cli",
  "imp-core",
@@ -2560,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "imp-cli"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "clap",
@@ -2578,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "imp-core"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2635,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "imp-gui"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "eframe",
  "egui",
@@ -2647,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "imp-install"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "imp-bin",
  "tokio",
@@ -2655,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "imp-llm"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "base64",
@@ -2677,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "imp-lua"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "imp-core",
@@ -2693,7 +2704,7 @@ dependencies = [
 
 [[package]]
 name = "imp-tui"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "async-trait",
  "crossterm 0.28.1",
@@ -3128,7 +3139,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-shim"
-version = "0.3.3"
+version = "0.3.4"
 
 [[package]]
 name = "memchr"
