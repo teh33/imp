@@ -4,7 +4,7 @@ use imp_llm::auth::AuthStore;
 use crate::theme::Theme;
 use crate::views::settings::{SettingsField, SettingsState};
 
-use super::{provider_logged_in, App, DisplayMessage, MessageRole, UiMode};
+use super::{provider_logged_in, App, DisplayMessage, MessageRole, RuntimeSignal, UiMode};
 
 impl App {
     pub(super) fn open_settings(&mut self) {
@@ -62,8 +62,24 @@ impl App {
                 );
                 if is_save {
                     self.save_settings();
-                } else if let UiMode::Settings(ref mut state) = self.mode {
-                    state.start_edit();
+                } else {
+                    let is_browser_health = matches!(
+                        &self.mode,
+                        UiMode::Settings(state)
+                            if state.current_field() == SettingsField::BrowserHealth
+                    );
+                    let is_browser_install = matches!(
+                        &self.mode,
+                        UiMode::Settings(state)
+                            if state.current_field() == SettingsField::BrowserInstall
+                    );
+                    if is_browser_health {
+                        self.run_browser_diagnostics();
+                    } else if is_browser_install {
+                        self.confirm_browser_install();
+                    } else if let UiMode::Settings(ref mut state) = self.mode {
+                        state.start_edit();
+                    }
                 }
             }
             KeyCode::Backspace => {
@@ -80,6 +96,65 @@ impl App {
         }
     }
 
+    fn confirm_browser_install(&mut self) {
+        let configured_binary = match &self.mode {
+            UiMode::Settings(settings) => settings.browser.config().binary,
+            _ => None,
+        };
+        if configured_binary.is_some() {
+            self.push_error_msg(
+                "Clear the explicit Lightpanda binary path before package-manager installation.",
+            );
+            return;
+        }
+        if imp_core::tools::browser::resolve_lightpanda_binary(None).is_ok() {
+            self.push_system_msg("Lightpanda is already installed. Run diagnostics to verify it.");
+            return;
+        }
+        let plan = match imp_core::tools::browser::browser_install_plan() {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.push_error_msg(&error);
+                return;
+            }
+        };
+        let command = plan.command_display();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.handle_ui_request(crate::tui_interface::UiRequest::Confirm {
+            title: "Install Lightpanda".into(),
+            message: format!("Run `{command}`?"),
+            reply: reply_tx,
+        });
+        let signal_tx = self.runtime_signal_tx.clone();
+        tokio::spawn(async move {
+            let confirmed = reply_rx.await.ok().flatten().unwrap_or(false);
+            if !confirmed {
+                return;
+            }
+            let result = imp_core::tools::browser::install_browser(&plan).await;
+            let _ = signal_tx.send(RuntimeSignal::BrowserInstallCompleted(result));
+        });
+    }
+
+    pub(super) fn run_browser_diagnostics(&mut self) {
+        let UiMode::Settings(settings) = &mut self.mode else {
+            return;
+        };
+        if matches!(
+            settings.browser.health,
+            crate::views::settings::browser::BrowserHealth::Checking
+        ) {
+            return;
+        }
+        settings.browser.health = crate::views::settings::browser::BrowserHealth::Checking;
+        let config = settings.browser.config();
+        let signal_tx = self.runtime_signal_tx.clone();
+        tokio::spawn(async move {
+            let report = imp_core::tools::browser::diagnose_browser(&config).await;
+            let _ = signal_tx.send(RuntimeSignal::BrowserDiagnosticCompleted(report));
+        });
+    }
+
     pub(super) fn save_settings(&mut self) {
         // Extract state before mutating self
         let state = match &self.mode {
@@ -88,7 +163,13 @@ impl App {
         };
 
         // Apply to in-session config
-        state.apply_to_config(&mut self.config);
+        let mut next_config = self.config.clone();
+        state.apply_to_config(&mut next_config);
+        if let Err(error) = state.browser.validate() {
+            self.push_system_msg(&format!("Browser settings invalid: {error}"));
+            return;
+        }
+        self.config = next_config;
         self.model_name = state.model.clone();
         self.thinking_level = state.thinking_level;
         self.theme = Theme::named(self.config.theme.as_deref().unwrap_or("default"));

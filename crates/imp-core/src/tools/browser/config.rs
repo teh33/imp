@@ -59,7 +59,7 @@ impl Default for BrowserConfig {
 }
 
 impl BrowserConfig {
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         if self.max_sessions == 0 || self.max_sessions > 16 {
             return Err("browser.max_sessions must be between 1 and 16".into());
         }

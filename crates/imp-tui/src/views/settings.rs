@@ -1,3 +1,6 @@
+pub(crate) mod browser;
+use browser::BrowserSettings;
+
 use imp_core::config::{
     AgentMode, AnimationLevel, ChatToolDisplay, Config, ContextConfig, ContinuePolicy, LuaConfig,
     ShellBackend, SidebarStyle, ToolOutputDisplay, WorkflowConfig, WorkflowRunConfig,
@@ -18,6 +21,17 @@ use crate::theme::Theme;
 /// Which field in the settings panel is focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
+    BrowserHealth,
+    BrowserInstall,
+    BrowserEnabled,
+    BrowserBinary,
+    BrowserMaxSessions,
+    BrowserTimeout,
+    BrowserIdleTimeout,
+    BrowserMaxResponseBytes,
+    BrowserRobots,
+    BrowserPrivateNetworks,
+    BrowserInputPolicy,
     Model,
     ChosenModels,
     Theme,
@@ -69,6 +83,7 @@ pub enum SettingsTab {
     Model,
     Ui,
     Security,
+    Browser,
     Web,
     Workflow,
 }
@@ -78,6 +93,7 @@ const SETTINGS_TABS: &[SettingsTab] = &[
     SettingsTab::Model,
     SettingsTab::Ui,
     SettingsTab::Security,
+    SettingsTab::Browser,
     SettingsTab::Web,
     SettingsTab::Workflow,
 ];
@@ -123,6 +139,20 @@ const SECURITY_FIELDS: &[SettingsField] = &[
     SettingsField::LuaShellExec,
     SettingsField::LuaHttp,
     SettingsField::LuaSecrets,
+];
+
+const BROWSER_FIELDS: &[SettingsField] = &[
+    SettingsField::BrowserHealth,
+    SettingsField::BrowserInstall,
+    SettingsField::BrowserEnabled,
+    SettingsField::BrowserBinary,
+    SettingsField::BrowserMaxSessions,
+    SettingsField::BrowserTimeout,
+    SettingsField::BrowserIdleTimeout,
+    SettingsField::BrowserMaxResponseBytes,
+    SettingsField::BrowserRobots,
+    SettingsField::BrowserPrivateNetworks,
+    SettingsField::BrowserInputPolicy,
 ];
 
 const WEB_FIELDS: &[SettingsField] = &[
@@ -174,6 +204,17 @@ const FIELDS: &[SettingsField] = &[
     SettingsField::LuaSecrets,
     SettingsField::ImproveAutoTurnBudget,
     SettingsField::LoopTurnBudget,
+    SettingsField::BrowserHealth,
+    SettingsField::BrowserInstall,
+    SettingsField::BrowserEnabled,
+    SettingsField::BrowserBinary,
+    SettingsField::BrowserMaxSessions,
+    SettingsField::BrowserTimeout,
+    SettingsField::BrowserIdleTimeout,
+    SettingsField::BrowserMaxResponseBytes,
+    SettingsField::BrowserRobots,
+    SettingsField::BrowserPrivateNetworks,
+    SettingsField::BrowserInputPolicy,
     SettingsField::WebSearchProvider,
     SettingsField::TavilyApiKey,
     SettingsField::ExaApiKey,
@@ -195,6 +236,7 @@ impl SettingsTab {
             SettingsTab::Model => "Model",
             SettingsTab::Ui => "UI",
             SettingsTab::Security => "Security",
+            SettingsTab::Browser => "Browser",
             SettingsTab::Web => "Web",
             SettingsTab::Workflow => "Workflow",
         }
@@ -206,6 +248,7 @@ impl SettingsTab {
             SettingsTab::Model => MODEL_FIELDS,
             SettingsTab::Ui => UI_FIELDS,
             SettingsTab::Security => SECURITY_FIELDS,
+            SettingsTab::Browser => BROWSER_FIELDS,
             SettingsTab::Web => WEB_FIELDS,
             SettingsTab::Workflow => WORKFLOW_FIELDS,
         }
@@ -269,6 +312,7 @@ pub struct SettingsState {
     pub lua_secrets: bool,
     pub improve_auto_turn_budget: u32,
     pub loop_turn_budget: u32,
+    pub(crate) browser: BrowserSettings,
     pub web_search_provider: Option<SearchProvider>,
     pub workflow_scope: WorkflowScopePreference,
     pub workflow_auto_commit: bool,
@@ -387,6 +431,7 @@ impl SettingsState {
             lua_secrets: config.lua.resolve_policy(config.mode).allow_secrets,
             improve_auto_turn_budget: config.ui.improve_auto_turn_budget,
             loop_turn_budget: config.ui.loop_turn_budget,
+            browser: BrowserSettings::new(config),
             web_search_provider: config.web.search_provider,
             workflow_scope: config.workflow.scope,
             workflow_auto_commit: config.workflow.auto_commit,
@@ -450,8 +495,20 @@ impl SettingsState {
 
     /// Cycle the current field's value forward.
     pub fn cycle_forward(&mut self) {
+        let field = self.current_field();
+        if matches!(
+            field,
+            SettingsField::BrowserHealth
+                | SettingsField::BrowserInstall
+                | SettingsField::BrowserBinary
+        ) {
+            return;
+        }
         self.dirty = true;
-        match self.current_field() {
+        if is_browser_health_input(field) {
+            self.browser.invalidate_health();
+        }
+        match field {
             SettingsField::Model => {
                 if !self.model_options.is_empty() {
                     if let Some(idx) = self.model_options.iter().position(|m| *m == self.model) {
@@ -580,6 +637,29 @@ impl SettingsState {
                     self.loop_turn_budget.saturating_add(1)
                 };
             }
+            SettingsField::BrowserHealth => return,
+            SettingsField::BrowserInstall => return,
+            SettingsField::BrowserEnabled => self.browser.enabled = !self.browser.enabled,
+            SettingsField::BrowserBinary => return,
+            SettingsField::BrowserMaxSessions => {
+                self.browser.max_sessions = (self.browser.max_sessions + 1).min(16);
+            }
+            SettingsField::BrowserTimeout => {
+                self.browser.timeout_ms = (self.browser.timeout_ms + 1_000).min(120_000);
+            }
+            SettingsField::BrowserIdleTimeout => {
+                self.browser.idle_timeout_seconds =
+                    self.browser.idle_timeout_seconds.saturating_add(30);
+            }
+            SettingsField::BrowserMaxResponseBytes => {
+                self.browser.max_response_bytes =
+                    (self.browser.max_response_bytes + 65_536).min(16 * 1024 * 1024);
+            }
+            SettingsField::BrowserRobots => self.browser.obey_robots = !self.browser.obey_robots,
+            SettingsField::BrowserPrivateNetworks => {
+                self.browser.block_private_networks = !self.browser.block_private_networks
+            }
+            SettingsField::BrowserInputPolicy => self.browser.cycle_policy(true),
             SettingsField::WebSearchProvider => {
                 self.web_search_provider = match self.web_search_provider {
                     None => Some(SearchProvider::Tavily),
@@ -625,8 +705,20 @@ impl SettingsState {
 
     /// Cycle the current field's value backward.
     pub fn cycle_backward(&mut self) {
+        let field = self.current_field();
+        if matches!(
+            field,
+            SettingsField::BrowserHealth
+                | SettingsField::BrowserInstall
+                | SettingsField::BrowserBinary
+        ) {
+            return;
+        }
         self.dirty = true;
-        match self.current_field() {
+        if is_browser_health_input(field) {
+            self.browser.invalidate_health();
+        }
+        match field {
             SettingsField::Model => {
                 if !self.model_options.is_empty() {
                     if let Some(idx) = self.model_options.iter().position(|m| *m == self.model) {
@@ -760,6 +852,32 @@ impl SettingsState {
             SettingsField::LoopTurnBudget => {
                 self.loop_turn_budget = self.loop_turn_budget.saturating_sub(1);
             }
+            SettingsField::BrowserHealth => return,
+            SettingsField::BrowserInstall => return,
+            SettingsField::BrowserEnabled => self.browser.enabled = !self.browser.enabled,
+            SettingsField::BrowserBinary => return,
+            SettingsField::BrowserMaxSessions => {
+                self.browser.max_sessions = self.browser.max_sessions.saturating_sub(1).max(1);
+            }
+            SettingsField::BrowserTimeout => {
+                self.browser.timeout_ms = self.browser.timeout_ms.saturating_sub(1_000).max(100);
+            }
+            SettingsField::BrowserIdleTimeout => {
+                self.browser.idle_timeout_seconds =
+                    self.browser.idle_timeout_seconds.saturating_sub(30);
+            }
+            SettingsField::BrowserMaxResponseBytes => {
+                self.browser.max_response_bytes = self
+                    .browser
+                    .max_response_bytes
+                    .saturating_sub(65_536)
+                    .max(4_096);
+            }
+            SettingsField::BrowserRobots => self.browser.obey_robots = !self.browser.obey_robots,
+            SettingsField::BrowserPrivateNetworks => {
+                self.browser.block_private_networks = !self.browser.block_private_networks
+            }
+            SettingsField::BrowserInputPolicy => self.browser.cycle_policy(false),
             SettingsField::WebSearchProvider => {
                 self.web_search_provider = match self.web_search_provider {
                     None => Some(SearchProvider::Perplexity),
@@ -805,6 +923,24 @@ impl SettingsState {
     /// Begin direct numeric input for the current field.
     pub fn start_edit(&mut self) {
         match self.current_field() {
+            SettingsField::BrowserMaxSessions => {
+                self.editing_number = true;
+                self.edit_buffer = self.browser.max_sessions.to_string();
+            }
+            SettingsField::BrowserTimeout => {
+                self.editing_number = true;
+                self.edit_buffer = self.browser.timeout_ms.to_string();
+            }
+            SettingsField::BrowserIdleTimeout => {
+                self.editing_number = true;
+                self.edit_buffer = self.browser.idle_timeout_seconds.to_string();
+            }
+            SettingsField::BrowserMaxResponseBytes => {
+                self.editing_number = true;
+                self.edit_buffer = self.browser.max_response_bytes.to_string();
+            }
+            SettingsField::BrowserInstall => {}
+            SettingsField::BrowserBinary => {}
             SettingsField::MaxTokens => {
                 self.editing_number = true;
                 self.edit_buffer = self.max_tokens.to_string();
@@ -865,6 +1001,11 @@ impl SettingsState {
         }
 
         match self.current_field() {
+            SettingsField::BrowserBinary => {
+                self.browser.binary.push(c);
+                self.browser.health = browser::BrowserHealth::NotChecked;
+                self.dirty = true;
+            }
             SettingsField::TavilyApiKey => {
                 self.tavily_api_key.push(c);
                 self.dirty = true;
@@ -896,6 +1037,11 @@ impl SettingsState {
         }
 
         match self.current_field() {
+            SettingsField::BrowserBinary => {
+                self.browser.binary.pop();
+                self.browser.health = browser::BrowserHealth::NotChecked;
+                self.dirty = true;
+            }
             SettingsField::TavilyApiKey => {
                 self.tavily_api_key.pop();
                 self.dirty = true;
@@ -915,7 +1061,31 @@ impl SettingsState {
         }
         self.editing_number = false;
         self.dirty = true;
-        match self.current_field() {
+        let field = self.current_field();
+        if is_browser_health_input(field) {
+            self.browser.invalidate_health();
+        }
+        match field {
+            SettingsField::BrowserMaxSessions => {
+                if let Ok(value) = self.edit_buffer.parse::<usize>() {
+                    self.browser.max_sessions = value;
+                }
+            }
+            SettingsField::BrowserTimeout => {
+                if let Ok(value) = self.edit_buffer.parse::<u64>() {
+                    self.browser.timeout_ms = value;
+                }
+            }
+            SettingsField::BrowserIdleTimeout => {
+                if let Ok(value) = self.edit_buffer.parse::<u64>() {
+                    self.browser.idle_timeout_seconds = value;
+                }
+            }
+            SettingsField::BrowserMaxResponseBytes => {
+                if let Ok(value) = self.edit_buffer.parse::<usize>() {
+                    self.browser.max_response_bytes = value;
+                }
+            }
             SettingsField::MaxTokens => {
                 if let Ok(v) = self.edit_buffer.parse::<u32>() {
                     self.max_tokens = v.max(1);
@@ -1008,6 +1178,7 @@ impl SettingsState {
             improve_auto_turn_budget: self.improve_auto_turn_budget,
             loop_turn_budget: self.loop_turn_budget,
         };
+        self.browser.apply(config);
         config.web = imp_core::tools::web::types::WebConfig {
             search_provider: self.web_search_provider,
         };
@@ -1087,6 +1258,20 @@ fn prev_thinking(level: ThinkingLevel) -> ThinkingLevel {
         ThinkingLevel::High => ThinkingLevel::Medium,
         ThinkingLevel::XHigh => ThinkingLevel::High,
     }
+}
+
+fn is_browser_health_input(field: SettingsField) -> bool {
+    matches!(
+        field,
+        SettingsField::BrowserEnabled
+            | SettingsField::BrowserBinary
+            | SettingsField::BrowserMaxSessions
+            | SettingsField::BrowserTimeout
+            | SettingsField::BrowserIdleTimeout
+            | SettingsField::BrowserMaxResponseBytes
+            | SettingsField::BrowserRobots
+            | SettingsField::BrowserPrivateNetworks
+    )
 }
 
 fn thinking_label(level: ThinkingLevel) -> &'static str {
@@ -1327,6 +1512,142 @@ fn render_settings_field(
     field: SettingsField,
 ) {
     match field {
+        SettingsField::BrowserHealth => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Lightpanda status",
+            &state.browser.health_label(),
+            "Enter: run diagnostics",
+        ),
+        SettingsField::BrowserInstall => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Install Lightpanda",
+            "Supported package manager",
+            "Enter: confirm install",
+        ),
+        SettingsField::BrowserEnabled => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Browser enabled",
+            if state.browser.enabled { "on" } else { "off" },
+            "← →",
+        ),
+        SettingsField::BrowserBinary => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Lightpanda binary",
+            if state.browser.binary.is_empty() {
+                "PATH"
+            } else {
+                &state.browser.binary
+            },
+            "type path",
+        ),
+        SettingsField::BrowserMaxSessions => render_browser_number(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field,
+            state.browser.max_sessions.to_string(),
+        ),
+        SettingsField::BrowserTimeout => render_browser_number(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field,
+            state.browser.timeout_ms.to_string(),
+        ),
+        SettingsField::BrowserIdleTimeout => render_browser_number(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field,
+            state.browser.idle_timeout_seconds.to_string(),
+        ),
+        SettingsField::BrowserMaxResponseBytes => render_browser_number(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field,
+            state.browser.max_response_bytes.to_string(),
+        ),
+        SettingsField::BrowserRobots => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Respect robots.txt",
+            if state.browser.obey_robots {
+                "on"
+            } else {
+                "off"
+            },
+            "← →",
+        ),
+        SettingsField::BrowserPrivateNetworks => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Block private networks",
+            if state.browser.block_private_networks {
+                "on"
+            } else {
+                "off"
+            },
+            "← →",
+        ),
+        SettingsField::BrowserInputPolicy => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Browser input policy",
+            state.browser.policy_label(),
+            "← →",
+        ),
         SettingsField::Model => render_field(
             state,
             theme,
@@ -2085,6 +2406,45 @@ fn render_save_row(
 
 /// Render one settings field row.
 #[allow(clippy::too_many_arguments)]
+fn render_browser_number(
+    state: &SettingsState,
+    theme: &Theme,
+    buf: &mut Buffer,
+    inner: Rect,
+    scroll_offset: u16,
+    row: &mut u16,
+    field: SettingsField,
+    value: String,
+) {
+    let value = if state.editing_number && state.current_field() == field {
+        format!("{}▎", state.edit_buffer)
+    } else {
+        value
+    };
+    render_field(
+        state,
+        theme,
+        buf,
+        inner,
+        scroll_offset,
+        row,
+        field_index(field),
+        browser_number_label(field),
+        &value,
+        "← → / type",
+    );
+}
+
+fn browser_number_label(field: SettingsField) -> &'static str {
+    match field {
+        SettingsField::BrowserMaxSessions => "Max sessions",
+        SettingsField::BrowserTimeout => "Operation timeout (ms)",
+        SettingsField::BrowserIdleTimeout => "Idle timeout (seconds)",
+        SettingsField::BrowserMaxResponseBytes => "Max response bytes",
+        _ => "Browser value",
+    }
+}
+
 fn render_field(
     state: &SettingsState,
     theme: &Theme,

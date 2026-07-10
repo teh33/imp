@@ -3,6 +3,7 @@ mod approval;
 mod client;
 mod config;
 mod diagnostics;
+mod installation;
 mod session;
 
 use std::sync::Arc;
@@ -15,6 +16,9 @@ pub use config::BrowserConfig;
 pub use diagnostics::{
     diagnose_browser, resolve_lightpanda_binary, BrowserDiagnostic, DiagnosticCheck,
     DiagnosticStatus,
+};
+pub use installation::{
+    browser_install_plan, install_browser, BrowserInstallMethod, BrowserInstallPlan,
 };
 use serde_json::{json, Value};
 use session::BrowserSessionManager;

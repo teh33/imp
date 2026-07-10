@@ -53,6 +53,10 @@ Before starting a session, install Lightpanda and ensure `lightpanda version` su
 
 Browser sessions are isolated Lightpanda subprocesses. Use `start`, retain the returned `session_id`, then call semantic actions such as `navigate`, `observe`, `markdown`, `extract`, `click`, and `fill`. Call `stop` when finished. Lightpanda does not render screenshots. Browser input defaults to `policy.browser_input = "ask"`. Interactive runs offer once, domain, and session approval scopes; headless runs fail closed unless policy explicitly allows input. Filled values are redacted from approval prompts and records. imp disables Lightpanda telemetry and core dumps, bounds response sizes and operation timeouts, and can block private-network targets.
 
+### TUI settings and health
+
+The TUI Browser tab exposes the Lightpanda binary, session and timeout bounds, maximum response size, `robots.txt`, private-network blocking, and browser-input policy. The health row runs diagnostics asynchronously. Installation displays and confirms the exact package-manager command before execution. Invalid browser settings are rejected before `config.toml` is written.
+
 ### Reliability harness
 
 The normal `imp-core` suite runs an offline Lightpanda MCP fault harness covering startup timeout, malformed or mismatched protocol responses, missing tools, bounded and partial responses, process exit, cancellation without retry, tool-level errors, session limits, idle cleanup, sequence isolation, and private-network launch policy.

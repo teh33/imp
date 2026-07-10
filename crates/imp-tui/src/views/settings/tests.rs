@@ -158,3 +158,57 @@ fn empty_chosen_models_means_all_models() {
     state.apply_to_config(&mut config);
     assert_eq!(config.enabled_models, None);
 }
+
+#[test]
+fn browser_readonly_rows_do_not_mark_settings_dirty() {
+    let registry = ModelRegistry::with_builtins();
+    let models = registry.list().to_vec();
+    let auth_store = AuthStore::new(std::path::PathBuf::from("/tmp/auth.json"));
+    let config = Config::default();
+    let mut state = SettingsState::new(&config, &models[0].id, &models, &auth_store);
+    state.tab = SettingsTab::Browser;
+    state.selected = field_index(SettingsField::BrowserHealth);
+    state.cycle_forward();
+    assert!(!state.dirty);
+    state.selected = field_index(SettingsField::BrowserInstall);
+    state.cycle_backward();
+    assert!(!state.dirty);
+}
+
+#[test]
+fn browser_tab_round_trips_and_renders_health() {
+    let registry = ModelRegistry::with_builtins();
+    let models = registry.list().to_vec();
+    let auth_store = AuthStore::new(std::path::PathBuf::from("/tmp/auth.json"));
+    let mut config = Config::default();
+    let mut state = SettingsState::new(&config, &models[0].id, &models, &auth_store);
+    state.tab = SettingsTab::Browser;
+    assert_eq!(state.visible_fields(), BROWSER_FIELDS);
+    state.browser.enabled = false;
+    state.browser.max_sessions = 3;
+    state.browser.input_policy = imp_core::config::PolicyAction::Allow;
+    state.apply_to_config(&mut config);
+    assert!(!config.browser.enabled);
+    assert_eq!(config.browser.max_sessions, 3);
+    assert_eq!(
+        config.policy.browser_input,
+        imp_core::config::PolicyAction::Allow
+    );
+
+    let theme = Theme::default();
+    let area = Rect::new(0, 0, 100, 25);
+    let mut buffer = Buffer::empty(area);
+    SettingsView::new(&state, &theme).render(area, &mut buffer);
+    let rendered = (0..area.height)
+        .map(|y| {
+            buffer.content()[usize::from(y * area.width)..usize::from((y + 1) * area.width)]
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Browser"));
+    assert!(rendered.contains("Lightpanda status"));
+    assert!(rendered.contains("not checked"));
+}

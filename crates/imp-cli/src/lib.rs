@@ -1672,46 +1672,14 @@ async fn run_browser_install(yes: bool) -> Result<(), Box<dyn std::error::Error>
         println!("Lightpanda is already installed. Run `imp browser doctor`.");
         return Ok(());
     }
-    let Some((program, args, label)) = browser_install_command() else {
-        return Err(
-            "no supported package manager found; install Lightpanda from https://lightpanda.io/docs/installation/ and run `imp browser doctor`"
-                .into(),
-        );
-    };
-    println!("Install Lightpanda with: {program} {}", args.join(" "));
+    let plan = imp_core::tools::browser::browser_install_plan()?;
+    println!("Install Lightpanda with: {}", plan.command_display());
     if !yes {
         return Err("installation requires explicit confirmation; rerun with --yes".into());
     }
-    let status = tokio::process::Command::new(program)
-        .args(&args)
-        .status()
-        .await?;
-    if !status.success() {
-        return Err(format!("{label} failed with status {status}").into());
-    }
+    imp_core::tools::browser::install_browser(&plan).await?;
     println!("Lightpanda installation completed.");
     run_browser_doctor(false).await
-}
-
-fn browser_install_command() -> Option<(&'static str, Vec<&'static str>, &'static str)> {
-    if cfg!(target_os = "macos") && command_on_path("brew") {
-        return Some((
-            "brew",
-            vec!["install", "lightpanda-io/browser/lightpanda"],
-            "Homebrew installation",
-        ));
-    }
-    None
-}
-
-fn command_on_path(command: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|directory| {
-        let candidate = directory.join(command);
-        std::fs::metadata(candidate).is_ok_and(|metadata| metadata.is_file())
-    })
 }
 
 async fn run_login_command(provider: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {

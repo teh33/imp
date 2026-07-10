@@ -4,6 +4,8 @@ use super::RuntimeSignal;
 
 pub(super) fn runtime_signal_kind(signal: &RuntimeSignal) -> &'static str {
     match signal {
+        RuntimeSignal::BrowserInstallCompleted(_) => "browser_install_completed",
+        RuntimeSignal::BrowserDiagnosticCompleted(_) => "browser_diagnostic_completed",
         RuntimeSignal::AgentEvent(_) => "agent_event",
         RuntimeSignal::AgentTaskCompleted => "agent_task_completed",
         RuntimeSignal::AgentTaskFailed(_) => "agent_task_failed",

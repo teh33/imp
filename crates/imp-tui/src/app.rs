@@ -309,6 +309,8 @@ const AGENT_START_STATUS_DELAY: Duration = Duration::from_millis(500);
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 enum RuntimeSignal {
+    BrowserInstallCompleted(Result<(), String>),
+    BrowserDiagnosticCompleted(imp_core::tools::browser::BrowserDiagnostic),
     AgentEvent(AgentEvent),
     AgentTaskCompleted,
     AgentTaskFailed(String),

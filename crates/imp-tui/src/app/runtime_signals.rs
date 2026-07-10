@@ -146,6 +146,22 @@ impl App {
         let trace_kind = runtime_signal_kind(&signal);
         self.trace_tui(format!("runtime_signal_handle kind={trace_kind}"));
         match signal {
+            RuntimeSignal::BrowserInstallCompleted(result) => {
+                match result {
+                    Ok(()) => self.push_system_msg("Lightpanda installation completed."),
+                    Err(error) => {
+                        self.push_error_msg(&format!("Lightpanda installation failed: {error}"))
+                    }
+                }
+                self.run_browser_diagnostics();
+                self.needs_redraw = true;
+            }
+            RuntimeSignal::BrowserDiagnosticCompleted(report) => {
+                if let UiMode::Settings(settings) = &mut self.mode {
+                    settings.browser.apply_diagnostic(report);
+                }
+                self.needs_redraw = true;
+            }
             RuntimeSignal::AgentEvent(event) => self.handle_agent_event(event),
             RuntimeSignal::AgentTaskCompleted => {
                 self.maybe_notify_agent_completion();
