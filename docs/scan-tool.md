@@ -4,7 +4,7 @@ The `scan` tool gives the model a structured way to inspect local code without s
 
 Implementation entrypoint:
 
-- `crates/imp-core/src/tools/scan/mod.rs`
+- `crates/imp-core/src/tools/scan/mod.rs` — implementation and inline tests
 
 Related implementation:
 
@@ -12,7 +12,7 @@ Related implementation:
 - `crates/imp-core/src/tools/scan/<language>.rs` — language-specific parsers
 - `crates/imp-core/src/repo_index.rs` — structural search/related ranking over scan results
 - `crates/imp-core/src/tools/code_intel.rs` — code block shape reused by extraction
-- `crates/imp-tui/src/views/tool_output.rs` — TUI rendering for scan output
+- `crates/imp-tui/src/views/tool_output/` — TUI rendering for tool output
 
 ## Goals
 
@@ -328,7 +328,7 @@ Important constants live near the top of `scan/mod.rs`:
 - `MAX_OUTPUT_BYTES`
 - `MAX_LINE_CHARS`
 
-TUI rendering has scan-specific formatting in `crates/imp-tui/src/views/tool_output.rs`.
+TUI rendering has scan-specific formatting under `crates/imp-tui/src/views/tool_output/`.
 
 ## Caching and performance
 

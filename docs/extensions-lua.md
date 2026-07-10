@@ -121,6 +121,19 @@ Tool handlers receive a call id, parameter table, and context table. Context inc
 
 Lua extensions can register handlers for runtime events through the host API. Hooks should be kept small and deterministic where possible.
 
+## UI requests
+
+Lua extensions can request structured host interaction through `imp.ui.request` or the `imp.ui.confirm` convenience helper. Supported request kinds include confirm, select, multi-select, input, and custom component specs.
+
+```lua
+local accepted = imp.ui.confirm("Install dependency?", "This runs the configured installer.")
+if accepted ~= true then
+    return "Cancelled"
+end
+```
+
+Headless or unavailable UI contexts fail closed: requests return an unavailable/cancelled result, and `imp.ui.confirm` returns `nil`. Extensions must not interpret missing UI as approval.
+
 ## Stability
 
 Lua is the current shipped extension path. TypeScript extension support exists in repository code paths but should not be documented as the stable shipped extension system.

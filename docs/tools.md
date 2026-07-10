@@ -1,45 +1,53 @@
 # Native tools
 
-imp exposes structured tools to the model. Native tools provide narrower operations than shell-only automation and are easier to validate, display, constrain, and audit.
+imp exposes structured tools to the model. Native tools give the runtime typed parameters, policy metadata, bounded output, and UI-friendly results that shell-only automation cannot provide consistently.
 
-Primary implementation areas:
+The canonical default registration point is `register_native_tools_with_task_state` in `crates/imp-core/src/builder.rs`.
 
-- `crates/imp-core/src/builder.rs`
-- `crates/imp-core/src/tools/`
-- `crates/imp-tui/src/views/tools.rs`
-- `crates/imp-tui/src/views/tool_output.rs`
-
-## Tool inventory
+## Default inventory
 
 | Tool | Purpose |
 |---|---|
-| `read` | ranged file/image reads |
-| `write` | file creation/overwrite |
-| `edit` / `multi_edit` | exact and transactional edits |
-| `bash` | shell commands with timeout/cancellation |
-| `git` | status, diff, log, stage, commit, restore, worktrees |
-| `scan` | tree-sitter code search/extraction |
-| `web` | web/GitHub search and page reads |
-| `browser` | stateful JavaScript browsing through Lightpanda semantic tools |
-| `ask_user` | structured user prompts |
-| `workflow` | workflow list/show/validate/run/update |
-| `memory` | persistent agent memory |
+| `ask_user` | Structured single-select, multi-select, and freeform user questions. |
+| `bash` | Shell commands with timeout, cancellation, output bounds, and secret mediation. |
+| `edit` | Exact replacement, anchored replacement, and transactional multi-file edits. |
+| `git` | Status, diff, log, merge-base, stage, commit, restore, and worktree operations. |
+| `read` | Ranged file reads and supported image reads. |
+| `scan` | Tree-sitter code structure search, extraction, related symbols, and likely tests. |
+| `web` | Web/page and read-only GitHub search. |
+| `subagent` | Validate and launch bounded workflow-generated subagent contracts. |
+| `task` | Maintain the current session's plan, constraints, step status, and blockers. |
+| `workflow` | List, show, validate, run, complete, and update durable workflows. |
+| `write` | Explicit file creation or overwrite. |
 
-## Mutability
+The `browser` tool is also registered when browser support is enabled in configuration and a compatible Lightpanda runtime is available.
 
-Read-only tools can run in parallel. Mutable or side-effecting tools are serialized and checked by runtime policy.
+Lua extensions may add tools at runtime. Experimental modules such as `memory`, `prototype`, and TypeScript/Pi compatibility code exist in the repository but are not part of the default native registry.
 
-Mutable operations include file writes, edits, shell commands, git mutation, workflow updates, and secret-affecting actions.
+## Mutability and concurrency
 
-Browser runtime commands:
+Read-only tool calls may run in parallel. Mutable or side-effecting calls are serialized. Mutation includes file writes, shell commands, git changes, workflow/task updates, subagent launch, and browser actions that alter remote or page state.
 
-```bash
-imp browser doctor
-imp browser doctor --json
-imp browser install --yes  # Homebrew on macOS
+Registration and execution policy are separate. A visible tool call can still be denied by role policy, run policy, autonomy, provenance, write-scope checks, browser-input approval, or a hard rail.
+
+## Important contracts
+
+### `task`
+
+`task` is a session-local planning ledger. It supports:
+
+```text
+show
+plan
+update_step
+add_constraint
+add_blocker
+resolve_blocker
 ```
 
-`doctor` validates the resolved configuration, executable version, MCP handshake, and required Lightpanda tool surface. `install` deliberately uses a supported package manager rather than downloading an unverified release binary.
+Runtime-observed file changes, command outcomes, and verification remain authoritative; the model cannot directly write those evidence fields.
+
+### `browser`
 
 Before starting a session, install Lightpanda and ensure `lightpanda version` succeeds. On macOS with Homebrew: `brew install lightpanda-io/browser/lightpanda`. Structured browser lifecycle events are emitted to TUI, JSONL RPC, trace evidence, and durable sessions. The event contract includes session start/stop/failure, navigation, observations, input approval requests and outcomes, completed actions, duration, domain, and per-session sequence. Browser events never include filled values or page content.
 
@@ -58,25 +66,49 @@ LIGHTPANDA_BIN=/path/to/lightpanda \
 
 The fixture explicitly disables private-network blocking only for its isolated loopback server. Production defaults remain unchanged. CI should provide a pinned, checksum-controlled Lightpanda artifact; tests never download a browser binary.
 
-## Policy interaction
+### `subagent`
 
-Tool execution is affected by:
+`subagent` currently exposes `launch`. It accepts a workflow-generated `SubagentInput`, validates the objective and child id, checks every writable path against run policy, and returns a started event. It is not a general arbitrary child-process API.
 
-- tool allow/deny lists
-- write allow/deny patterns
-- autonomy mode
-- role tool policy
-- hooks
-- verification gates
+### `workflow`
 
-The model may see a tool in the registry but still be blocked by policy at execution time.
+The model-facing workflow actions are:
+
+```text
+list
+show
+validate
+run
+complete_step
+update
+```
+
+See [Workflows](workflows.md) for lifecycle details.
+
+## Browser runtime
+
+Diagnostic and install commands:
+
+```sh
+imp browser doctor
+imp browser doctor --json
+imp browser install --yes
+```
+
+On macOS, the supported manual install path is:
+
+```sh
+brew install lightpanda-io/browser/lightpanda
+```
+
+Browser sessions run in isolated Lightpanda subprocesses. Start a session, keep its `session_id`, use semantic actions such as navigate/observe/markdown/extract/click/fill, then stop it. Lightpanda does not provide screenshot rendering.
+
+Browser input defaults to `policy.browser_input = "ask"`. Interactive approvals can be scoped once, by domain, or for the session. Headless input fails closed unless policy explicitly allows it. Filled values are redacted from approval prompts and records. imp disables Lightpanda telemetry and core dumps, bounds response sizes/timeouts, and can block private-network targets.
 
 ## Display
 
-The TUI renders compact tool summaries in the chat timeline and expanded output in the sidebar. Tool-specific formatters exist for common tools where raw JSON would be noisy.
+The TUI renders compact tool cards in the timeline and detailed output in the sidebar. Tool results retain structured `details` for renderers and machine consumers.
 
-Workflow tool calls render as workflow actions with the `⚑` icon and action-specific details such as workflow id, path, value, and reason.
+## Choosing a tool
 
-## Shell use
-
-`bash` remains available when policy allows it. Prefer native tools for file reads, exact edits, git inspection, structural search, workflow status, and user questions.
+Prefer native tools for precise reads/edits, git operations, structural code lookup, workflow/task state, and user questions. Use `bash` for builds, tests, project scripts, package managers, and raw `rg` text search.

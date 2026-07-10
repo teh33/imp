@@ -1,50 +1,50 @@
 # ACP editor adapter
 
-imp has an early Agent Client Protocol (ACP) stdio adapter behind:
+imp has an early Agent Client Protocol (ACP) stdio adapter:
 
 ```sh
 imp acp
 ```
 
-ACP is a JSON-RPC protocol for editor/agent integration. The adapter is being built as a sibling to imp's existing `--mode rpc` JSONL worker protocol; the two protocols are intentionally not wire-compatible.
+ACP is a JSON-RPC protocol for editor/agent integration. It is separate from imp's `--mode rpc` JSONL host protocol; the two are not wire-compatible.
 
 ## Current status
 
-This implementation is scaffold-level and suitable for protocol/client smoke testing, not daily editor use yet.
+The adapter is suitable for protocol and session-lifecycle smoke testing, not daily editor use.
 
-Implemented now:
+Implemented:
 
-- `imp acp` subcommand.
-- newline-delimited JSON-RPC over stdio.
-- `initialize` handshake for ACP protocol version 1.
-- conservative capability advertisement.
-- `session/new` with absolute `cwd` validation.
-- durable imp session creation for ACP sessions.
-- `session/prompt` request parsing and completion response shape.
-- `session/cancel` notification state handling for the current scaffold.
-- initial imp event to ACP `session/update` mapping helpers.
+- `initialize` for ACP protocol version 1;
+- newline-delimited JSON-RPC over stdio;
+- conservative capability advertisement;
+- `session/new` with absolute `cwd` validation;
+- durable imp session creation;
+- `session/load` and `session/resume` by imp session id;
+- history replay through `session/update` during load;
+- prompt block parsing and durable user-message persistence;
+- `session/cancel` notification state for the scaffold;
+- imp-message to ACP update mapping helpers.
 
-Not implemented yet:
+Not implemented:
 
-- live `Agent::run` turn execution from ACP prompts.
-- real assistant text streaming from provider calls.
-- `session/request_permission` bridge for imp UI/tool approvals.
-- full policy-denial-to-ACP UX.
-- `session/load` / `session/resume` methods, although durable session lookup helpers exist.
-- client-supplied MCP server connections.
-- image/audio prompt content.
+- live agent/model execution from `session/prompt`;
+- real assistant streaming;
+- permission requests for tool and UI approvals;
+- full policy-denial UX;
+- client-supplied MCP servers;
+- image or audio prompt content;
 - ACP registry metadata.
 
-## Transport rules
+A prompt currently returns scaffold metadata and may emit a short acknowledgement. It does not contact a provider or execute tools.
 
-`imp acp` uses ACP's stdio transport:
+## Transport
 
-- stdin: one JSON-RPC 2.0 message per line.
-- stdout: one JSON-RPC 2.0 message per line.
-- stdout must contain only ACP JSON-RPC messages.
-- diagnostics should go to stderr.
+- stdin: one JSON-RPC 2.0 message per line;
+- stdout: one JSON-RPC 2.0 message per line;
+- stdout must contain only ACP messages;
+- diagnostics belong on stderr.
 
-## Minimal smoke test
+## Smoke test
 
 ```sh
 printf '%s\n' \
@@ -53,14 +53,12 @@ printf '%s\n' \
   | imp acp
 ```
 
-Expected behavior:
+Expected:
 
-- response 1 includes `result.protocolVersion: 1` and `agentInfo.name: "imp"`.
-- response 2 includes a durable imp `sessionId`.
+- response 1 contains `result.protocolVersion: 1` and `agentInfo.name: "imp"`;
+- response 2 contains a durable imp `sessionId`.
 
-## Editor configuration shape
-
-Editors that support custom ACP agents generally need a command and args. Use:
+## Editor configuration
 
 ```json
 {
@@ -69,7 +67,7 @@ Editors that support custom ACP agents generally need a command and args. Use:
 }
 ```
 
-You can pass normal imp model/provider options before the subcommand when needed:
+Normal global model/provider options can appear before the subcommand:
 
 ```json
 {
@@ -78,10 +76,12 @@ You can pass normal imp model/provider options before the subcommand when needed
 }
 ```
 
+Those options will matter once live turn execution is wired.
+
 ## Troubleshooting
 
-- If the editor reports invalid JSON, make sure nothing writes logs to stdout in ACP mode.
-- If `session/new` fails, verify the client sends an absolute `cwd`.
-- If MCP server configuration fails, remove client-supplied MCP servers for now; imp does not yet advertise MCP capabilities.
-- If prompt execution appears stubbed, that is expected in the current scaffold. Live agent turn wiring is the next implementation step.
-- If auth/model setup fails once live turns are connected, configure credentials with `imp login <provider>` or pass the appropriate provider/API key options.
+- Invalid JSON: ensure no logs are written to stdout in ACP mode.
+- `session/new` or load failure: send an absolute `cwd`.
+- Unknown session: use an id from imp's durable session store.
+- MCP configuration failure: send an empty `mcpServers` list.
+- Stubbed prompt response: expected; live agent turns are not connected.

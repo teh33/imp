@@ -5,7 +5,7 @@ imp workflows are local project artifacts for planned, multi-step work. They kee
 Primary implementation areas:
 
 - `crates/imp-core/src/workflow/schema.rs`
-- `crates/imp-core/src/tools/workflow.rs`
+- `crates/imp-core/src/tools/workflow/`
 - `crates/imp-core/src/workflow/controller.rs`
 - `crates/imp-core/src/workflow/child_workflow.rs`
 

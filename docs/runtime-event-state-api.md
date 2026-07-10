@@ -1,42 +1,24 @@
-# Runtime Event and State API
+# Runtime event and state API
 
-## Goal
+`imp_core::runtime` defines shared, frontend-neutral runtime facts for CLI, TUI, RPC, tests/replay, and the experimental GUI.
 
-Define a shared runtime event/state contract for CLI, TUI, RPC, tests/replay,
-and future GUI consumers. The contract lives in `imp-core` and keeps semantic
-runtime facts out of frontend-specific state machines.
+The core surface is:
 
-The implemented core surface has three pieces:
+1. `RuntimeEvent`, a schema-versioned event;
+2. `RuntimeStateSnapshot`, current reduced state;
+3. `RuntimeStateAccumulator`, a deterministic event reducer.
 
-1. `RuntimeEvent`: a versioned, append-only event payload for streaming/logging.
-2. `RuntimeStateSnapshot`: a versioned, frontend-neutral current-state snapshot.
-3. `RuntimeStateAccumulator`: a deterministic reducer from ordered runtime
-   events into a snapshot.
+`AgentEvent` remains the agent loop's compatibility stream. Runtime events adapt that stream rather than replacing it.
 
-Existing `AgentEvent` consumers remain supported. Runtime events are an adapter
-layer for shared frontend/RPC/GUI state, not a replacement for the agent loop.
-
-## Module and schema versioning
-
-The implemented types are exported from:
-
-```rust
-imp_core::runtime
-```
-
-The schema version is explicit:
+## Versioning
 
 ```rust
 pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 ```
 
-Both `RuntimeEvent` and `RuntimeStateSnapshot` include `schema_version`. Any
-future breaking schema change must deliberately bump this value and update
-compatibility tests.
+Both events and snapshots carry `schema_version`. Breaking serialized changes require an explicit version bump and compatibility-test updates.
 
-## RuntimeEvent
-
-Implemented shape:
+## Events
 
 ```rust
 pub struct RuntimeEvent {
@@ -48,97 +30,57 @@ pub struct RuntimeEvent {
 }
 ```
 
-`RuntimeEventKind` is serde-tagged with `type` and snake_case variant names.
-Current event coverage:
+Current event kinds cover:
 
-- `agent_started`
-- `agent_ended`
-- `turn_started`
-- `turn_assessed`
-- `turn_ended`
-- `message_started`
-- `message_delta`
-- `message_ended`
-- `tool_started`
-- `tool_output`
-- `tool_completed`
-- `approval_pending`
-- `approval_resolved`
-- `policy_decision`
-- `verification_updated`
-- `evidence_updated`
-- `worktree_updated`
-- `workflow_updated`
-- `warning`
-- `error`
-- `timing`
-- `recovery_checkpoint`
-- `unknown`
+- agent/turn/message lifecycle;
+- tool start, output, and completion;
+- approval pending/resolved;
+- policy decisions;
+- workflow-controller updates;
+- verification and evidence updates;
+- child-workflow updates;
+- worktree updates;
+- legacy mana/workflow references;
+- warnings, errors, timing, recovery checkpoints, and unknown events.
 
-`RuntimeEventKind::Unknown` exists so future/foreign event streams can be tracked
-without corrupting accumulated state.
+`Unknown` preserves forward/foreign event names without corrupting accumulated state.
 
-## AgentEvent compatibility
-
-`AgentEvent` remains the internal streaming compatibility surface. The adapter is
-implemented as:
+## Agent-event adapter
 
 ```rust
 impl AgentEvent {
-    pub fn to_runtime_event(&self, run_id: impl Into<String>, sequence: u64) -> RuntimeEvent;
+    pub fn to_runtime_event(
+        &self,
+        run_id: impl Into<String>,
+        sequence: u64,
+    ) -> RuntimeEvent;
 }
 ```
 
-The adapter maps lifecycle, turns, messages, tools, warnings/errors, timing,
-recovery checkpoints, verification, worktree metadata/closeout, evidence refs,
-and policy decisions into typed runtime payloads. Existing trace/RPC/TUI
-`AgentEvent` paths continue to work while consumers migrate to runtime events and
-snapshots.
+The adapter maps lifecycle, turns, messages, tools, warnings/errors, timing, recovery, workflow-controller state, verification, evidence, worktree metadata, and policy checks into typed runtime payloads.
 
-## RuntimeStateSnapshot
+## Snapshot
 
-Implemented shape:
+`RuntimeStateSnapshot` contains:
 
-```rust
-pub struct RuntimeStateSnapshot {
-    pub schema_version: u32,
-    pub workflow: RuntimeWorkflowSummary,
-    pub autonomy_mode: Option<AutonomyMode>,
-    pub workspace: RuntimeWorkspaceState,
-    pub phase: RuntimePhase,
-    pub active_tools: Vec<RuntimeToolCall>,
-    pub completed_tools: Vec<RuntimeToolCall>,
-    pub pending_approvals: Vec<RuntimeApprovalRef>,
-    pub policy_decisions: Vec<RuntimePolicyDecision>,
-    pub verification_gates: Vec<VerificationGate>,
-    pub evidence_refs: Vec<RuntimeArtifactRef>,
-    pub final_status: Option<RuntimeFinalStatus>,
-    pub workflow_refs: Vec<RuntimeWorkflowRef>,
-    pub warnings: Vec<String>,
-    pub errors: Vec<String>,
-    pub status_items: BTreeMap<String, String>,
-}
-```
+- schema version;
+- run/model summary;
+- autonomy and workspace/worktree state;
+- phase and terminal status;
+- active/completed tools;
+- pending approvals and policy decisions;
+- verification gates and evidence refs;
+- child workflows;
+- legacy workflow refs;
+- warnings/errors;
+- compact `status_items` for presentation adapters.
 
-The snapshot answers reusable frontend questions:
+Presentation-only state does not belong here. Scroll positions, selected tools, pane layout, dialog state, colors, and render caches stay in the frontend.
 
-- which run/model is active
-- current phase/final status
-- active and completed tools
-- pending approvals
-- policy decisions and warnings/errors
-- verification gates
-- evidence artifacts
-- worktree path/branch/diff/closeout state
-- workflow refs
-- compact status items useful for CLI/TUI/GUI rendering
-
-## RuntimeStateAccumulator
-
-Implemented reducer:
+## Accumulator
 
 ```rust
-pub struct RuntimeStateAccumulator { /* private snapshot */ }
+pub struct RuntimeStateAccumulator { /* private */ }
 
 impl RuntimeStateAccumulator {
     pub fn new(run_id: impl Into<String>) -> Self;
@@ -148,102 +90,35 @@ impl RuntimeStateAccumulator {
 }
 ```
 
-The accumulator is deterministic and side-effect free. It tracks lifecycle,
-model/final status, active/completed tools, tool output deltas, approvals, policy
-decisions, verification gates, evidence refs, worktree scope/status/diff/closeout,
-workflow refs, warnings/errors, timing/recovery status, and unknown future events.
+The reducer is deterministic and side-effect free. It upserts tools, approvals, gates, artifacts, child workflows, and worktree state while maintaining phase and compact status labels.
 
-Unknown runtime events are recorded in `status_items["last-unknown-event"]` and do
-not change phase.
+## Consumers
 
-## TUI state mapping
+- The TUI should consume shared runtime facts while keeping terminal interaction local.
+- New RPC consumers can request `--runtime-json`; legacy fields remain for compatibility.
+- The experimental GUI depends on `imp_core::runtime`, not `imp-tui`.
+- Tests can build representative snapshots without launching a provider.
 
-Current TUI state in `imp-tui/src/app.rs` and `turn_tracker.rs` maps to the core
-snapshot like this:
-
-| Current TUI state | Runtime owner | Snapshot field |
-| --- | --- | --- |
-| model/run/phase status labels | core facts + TUI formatting | `workflow`, `phase`, `status_items` |
-| `TurnTracker` tool counts | core | `active_tools`, `completed_tools`, `status_items` |
-| tool output previews | core semantic preview + TUI rendering | `RuntimeToolCall.output_preview` |
-| verification status items | core | `verification_gates`, `status_items["verification"]` |
-| worktree path/branch/diff/closeout | core | `workspace.worktree`, `status_items["worktree*"]` |
-| evidence path/status | core | `evidence_refs`, `status_items["evidence"]` |
-| policy warnings/decisions | core | `policy_decisions`, `warnings` |
-| recovery checkpoint display | core | `status_items["recovery"]` |
-| tool focus/selection/expanded state | TUI only | none |
-| scroll offsets/click maps/render caches | TUI only | none |
-| command palette/dialog/input state | TUI only | none |
-| colors/layout/panes | TUI only | none |
-
-The TUI should consume the snapshot for reusable runtime facts while preserving
-terminal-specific interaction and rendering state locally.
-
-## GUI guidance
-
-A future `imp-gui` should depend on `imp_core::runtime` types, not `imp-tui`.
-Recommended GUI adapter shape:
-
-```rust
-pub struct GuiRunViewModel {
-    pub title: String,
-    pub phase: RuntimePhase,
-    pub status_lines: Vec<String>,
-}
-
-impl GuiRunViewModel {
-    pub fn from_snapshot(snapshot: &RuntimeStateSnapshot) -> Self;
-}
-```
-
-The GUI can render representative snapshots in tests without launching a live
-agent. It should not replay terminal trace JSONL or depend on TUI `App` state.
-
-## RPC and CLI guidance
-
-Existing CLI/RPC `AgentEvent` JSON should remain compatible. Additive runtime
-messages can be emitted as:
+Example additive RPC wrappers:
 
 ```json
-{
-  "type": "runtime_event",
-  "event": { "schema_version": 1, "sequence": 1 }
-}
+{"type":"runtime_event","event":{"schema_version":1,"sequence":1}}
 ```
-
-and/or:
 
 ```json
-{
-  "type": "runtime_state",
-  "snapshot": { "schema_version": 1, "phase": "running" }
-}
+{"type":"runtime_state","snapshot":{"schema_version":1,"phase":"running"}}
 ```
 
-Do not remove existing event messages until downstream consumers have a migration
-path. Prefer additive runtime payloads and schema-versioned tests.
+Consumers should ignore unknown fields and event names where possible.
 
 ## Non-goals
 
 - Rewriting the agent loop.
-- Removing `AgentEvent` in this epic.
-- Moving TUI focus, scroll, pane, or render-cache state into core.
-- Making `imp-gui` depend on `imp-tui`.
-- Persisting large artifact contents in snapshots.
-- Storing secrets or full sensitive command output beyond existing surfaced
-  event data.
+- Removing `AgentEvent` without a migration.
+- Moving frontend interaction state into core.
+- Persisting full artifact contents in snapshots.
+- Storing secret values or unbounded command output.
 
-## Compatibility tests
+## Compatibility coverage
 
-Core tests should make schema changes deliberate. Existing focused tests cover:
-
-- `runtime_event_kind_names_are_stable_json_contract`
-- `runtime_state_snapshot_replay_fixture_is_stable`
-- `runtime_event_roundtrips_through_json`
-- `runtime_state_snapshot_roundtrips_through_json`
-- `runtime_state_accumulator_reduces_representative_stream`
-- `runtime_state_accumulator_tracks_unknown_events_without_corrupting_state`
-- `agent_events_convert_to_runtime_events`
-
-Future tests should add golden JSON samples for CLI/RPC runtime payload wrappers
-once those transports expose runtime events/snapshots.
+Focused tests cover stable kind names, JSON round-trips, representative stream reduction, unknown events, and `AgentEvent` conversion. Any serialized-contract change should update those tests deliberately.

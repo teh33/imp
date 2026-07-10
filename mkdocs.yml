@@ -1,0 +1,84 @@
+site_name: imp
+site_description: Local terminal coding agent in Rust
+site_url: https://kfcafe.github.io/imp/
+repo_url: https://github.com/kfcafe/imp
+repo_name: kfcafe/imp
+
+docs_dir: docs
+site_dir: site
+
+exclude_docs: |
+  .DS_Store
+  audits/
+  bugs/
+  design/
+  plans/
+  feature-checklist.md
+  feature-readiness-tree.html
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Runtime:
+      - Architecture: architecture.md
+      - Runtime Policy: policy.md
+      - Autonomy Modes: autonomy-modes.md
+      - Sessions and Evidence: sessions.md
+      - Runtime Event and State API: runtime-event-state-api.md
+      - Trust and Provenance: trust-labels-and-provenance.md
+  - Tools and Orchestration:
+      - Native Tools: tools.md
+      - Scan Tool: scan-tool.md
+      - Workflows: workflows.md
+      - Worktree-auto: worktree-auto.md
+      - Role Registry: role-registry.md
+  - Interfaces and Extensions:
+      - RPC Protocol: rpc.md
+      - ACP Editor Adapter: acp.md
+      - Lua Extensions: extensions-lua.md
+  - Evaluation:
+      - Eval Candidates: eval-candidates.md
+      - Coding Eval Runner: eval-runner.md

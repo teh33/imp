@@ -1,23 +1,35 @@
-# imp technical docs
+# imp documentation
 
-This directory contains technical reference pages for imp. README.md is the entrypoint; these pages cover details that are too specific for the README.
+These pages document imp's current shipped or intentionally exposed behavior. Start with the [project README](https://github.com/kfcafe/imp#readme) for installation, quickstart, providers, and CLI examples.
 
-## Core references
+## Runtime
 
-- [Workflows](workflows.md) — workflow artifacts, schema, lifecycle, events, prototyping, verification, closeout, and API direction.
-- [ACP editor adapter scaffold](acp.md) — internal/out-of-scope for 0.3.0 unless separately verified; current limitations and editor launch shape.
-- [RPC protocol](rpc.md) — `--mode rpc`, stdin commands, stdout events, `--runtime-json`, and host integration notes.
-- [Scan tool](scan-tool.md) — tree-sitter-backed code discovery, extraction, structural search, related-symbol lookup, file discovery, and verification notes.
-- [Native tools](tools.md) — built-in tools, mutability, policy interaction, execution behavior, and display notes.
-- [Runtime policy](policy.md) — modes, autonomy, tool allow/deny rules, write-path rules, hooks, and verify gates.
-- [Sessions and evidence](sessions.md) — JSONL session records, branches, compaction, traces, evidence packets, and recovery.
-- [Lua extensions](extensions-lua.md) — shipped Lua extension runtime, load paths, custom tools, slash commands, hooks, and capabilities.
-- [Architecture](architecture.md) — crate responsibilities, runtime flow, provider layer, workflow core, UI/CLI/RPC surfaces, and extension runtime.
+- [Architecture](architecture.md) — crate boundaries and runtime flow.
+- [Runtime policy](policy.md) — tool, write, autonomy, hook, and verification policy.
+- [Autonomy modes](autonomy-modes.md) — approval levels, hard rails, and worktree isolation.
+- [Sessions and evidence](sessions.md) — durable sessions, compaction, recovery, traces, and evidence artifacts.
+- [Runtime event and state API](runtime-event-state-api.md) — shared typed events and frontend-neutral snapshots.
+- [Trust labels and provenance](trust-labels-and-provenance.md) — authority boundaries for workspace, tool, and external context.
 
-## Architecture planning
+## Tools and orchestration
 
-- [Crate boundary plan](design/imp-core-crate-boundary-plan.md) — proposed `imp-core` split, including `imp-bin`, `imp-runtime`, `imp-state`, `imp-codeintel`, and `imp-tools` boundaries.
+- [Native tools](tools.md) — built-in model-facing tools and policy behavior.
+- [Scan tool](scan-tool.md) — structural code search, extraction, related symbols, and tests.
+- [Workflows](workflows.md) — durable workflow artifacts, validation, execution, and closeout.
+- [Worktree-auto](worktree-auto.md) — isolated autonomous development and closeout behavior.
+- [Role registry](role-registry.md) — built-in role profiles and configuration.
 
-## Existing design notes
+## Interfaces and extensions
 
-The repository also contains older design, rebuild, and proposal notes under `docs/design/`, `docs/rebuild/`, and `docs/proposals/`. Those files are useful for historical context, but the core references above should be treated as the current technical overview unless a lower-level source file says otherwise.
+- [RPC protocol](rpc.md) — JSONL host protocol.
+- [ACP editor adapter](acp.md) — current scaffold status and smoke test.
+- [Lua extensions](extensions-lua.md) — shipped extension runtime, manifests, commands, tools, hooks, and capabilities.
+
+## Evaluation
+
+- [Eval candidates](eval-candidates.md) — failure/correction artifacts produced during run closeout.
+- [Coding eval runner](eval-runner.md) — pinned, verifier-backed coding evaluations and result comparison.
+
+## Scope
+
+The docs site intentionally excludes superseded implementation plans, one-off audits, release scratchpads, and completed migration proposals. Git history remains the archive for those records. Experimental TypeScript/Pi extension compatibility is not a shipped extension surface; Lua is the supported extension runtime.

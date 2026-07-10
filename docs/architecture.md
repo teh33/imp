@@ -1,110 +1,97 @@
 # Architecture
 
-imp is a Rust workspace organized around agent runtime responsibilities. The core design keeps provider traffic, tool execution, policy checks, workflow state, sessions, UI, CLI, RPC, and extensions in separate crates while sharing typed runtime models where practical.
+imp is a Rust workspace organized around a local agent runtime. Provider traffic, tool execution, policy checks, sessions, workflows, terminal presentation, command-line protocols, and extensions have explicit owners.
 
 ## Crates
 
-```text
-imp-cli   CLI entrypoint, setup/auth flows, one-shot/headless mode, JSONL RPC mode, ACP stdio server, import/install helpers
-imp-core  agent loop, tools, sessions, workflows, policy, recovery, verification, context assembly, storage-facing runtime behavior
-imp-llm   provider/model abstraction, streaming, auth helpers, OAuth, model metadata, pricing
-imp-lua   shipped Lua extension runtime for tools, slash commands, hooks, and capability policy
-imp-tui   terminal UI, interactive app state, rendering, input/event loop, runtime signal handling
-imp-gui   experimental GUI surface
-```
+| Crate | Responsibility |
+|---|---|
+| `imp-bin` | Installed `imp` binary and top-level composition. |
+| `imp-cli` | Command parsing, setup/auth flows, one-shot and JSONL modes, ACP, evaluations, and helper commands. |
+| `imp-core` | Agent loop, native tools, sessions, workflows, policy, recovery, evidence, context, and runtime models. |
+| `imp-llm` | Provider/model abstraction, streaming, auth helpers, model metadata, and pricing. |
+| `imp-lua` | Shipped Lua extension runtime for tools, slash commands, hooks, and capability policy. |
+| `imp-tui` | Terminal UI state, rendering, input, and runtime-signal handling. |
+| `imp-gui` | Experimental GUI consumer of shared runtime state; not a default workspace member. |
+| `mcp-shim` | Internal protocol shim crate. MCP server management in the public CLI is still a placeholder. |
 
 The repository root package is a source-install shim so `cargo install --path .` works from the workspace root.
 
 ## Runtime flow
 
-A typical run follows this path:
+A normal run follows this shape:
 
-1. resolve CLI/TUI/RPC mode and current working directory;
-2. load configuration, trust settings, provider credentials, and model metadata;
-3. construct an `Agent` with tools, policy context, hooks, session state, and UI/event sinks;
-4. build model context from the conversation, selected files, workflow/session hints, and runtime instructions;
-5. stream provider output through `imp-llm`;
-6. collect tool calls and execute them through `imp-core` tool dispatch under policy/reference-monitor checks;
-7. append tool observations back into model context;
-8. evaluate continuation policy, workflow obligations, verification gates, and closeout state;
-9. persist session/evidence/run artifacts and emit UI/RPC/runtime events.
+1. `imp-bin` and `imp-cli` resolve TUI, one-shot, JSONL, or ACP mode.
+2. Configuration, credentials, provider/model metadata, role, autonomy, and run policy are resolved.
+3. `AgentBuilder` constructs an `Agent`, registers native tools, attaches Lua loading, and applies role/tool filters.
+4. The runtime assembles model context from conversation state, selected files, project instructions, and workflow/session hints.
+5. `imp-llm` streams provider events and tool calls.
+6. `imp-core` checks policy and executes tools, then appends observations to context.
+7. The loop evaluates task progress, workflow obligations, verification gates, cancellation, and closeout.
+8. Session, trace, workflow-contract, evidence, and optional worktree artifacts are persisted locally.
+9. CLI, TUI, RPC, or ACP adapters present the result.
 
-The agent loop is intentionally runtime-owned: providers stream text/tool calls, but policy, tool effects, recovery checkpoints, workflow obligations, and closeout decisions are enforced locally.
-
-## Provider layer
-
-`imp-llm` hides provider-specific streaming and auth details behind shared model/provider abstractions. The runtime passes a model, request context, request options, and credentials into the provider; the provider returns stream events such as text deltas, thinking deltas, tool calls, message starts/ends, and errors.
-
-Provider-specific concerns belong in `imp-llm`:
-
-- API request/response mapping;
-- OAuth helpers and token refresh;
-- model metadata and pricing;
-- retry classification for provider failures.
-
-Runtime concerns stay outside providers:
-
-- tool execution;
-- workflow continuation;
-- session persistence;
-- reference-monitor decisions;
-- UI/RPC event translation.
+Providers do not own tool effects, policy, persistence, or completion decisions. Those remain local runtime responsibilities.
 
 ## Tools and policy
 
-Native tools live in `imp-core/src/tools`. Tool definitions describe parameters, mutability, labels, and execution behavior. Tool execution flows through the agent runtime so policy checks can happen before file mutation, command execution, network access, secret access, or workflow mutation.
+Native tools live under `crates/imp-core/src/tools/`. `AgentBuilder::register_native_tools` is the canonical default registration point. Tools expose typed schemas, mutability, policy metadata, and structured output.
 
-Policy-related code is split across configuration, reference monitoring, tool context checks, and workflow closeout enforcement. The important boundary is that tools should not silently bypass write-path checks or user-visible policy decisions.
+Policy checks combine:
+
+- agent mode and role restrictions;
+- per-run tool and write policy;
+- autonomy mode;
+- resource scope and provenance;
+- hard rails for dangerous actions;
+- hooks and verification obligations.
+
+A tool being registered does not guarantee that a particular invocation is allowed.
 
 ## Sessions, evidence, and recovery
 
-Session and evidence behavior is file-backed. The runtime records conversation messages, tool results, recovery checkpoints, run evidence, verification gate outputs, and worktree metadata so runs can be inspected after the fact.
+Sessions are durable JSONL records managed under `crates/imp-core/src/session/`. Recovery checkpoints record provider and tool-loop boundaries so interrupted runs can distinguish safe retry from side effects requiring review.
 
-Recovery-sensitive tool execution records checkpoints around provider requests, assistant tool calls, tool execution start/end, and tool results entering context. This lets imp distinguish safe retry/recovery paths from side effects that require user review.
+Each normal run may create project-local artifacts under `.imp/runs/<run-id>/`, including:
 
-## Workflow core
+- `trace.jsonl`;
+- `workflow-contract.json`;
+- `evidence.md`;
+- verification and policy logs when produced;
+- worktree metadata and diffs for wired worktree runs;
+- closeout eval candidates for selected failure outcomes.
 
-Workflow artifacts live under `.imp/workflows/<id>/` and are parsed/validated by `imp-core/src/workflow`. The model-facing `workflow` tool lives in `imp-core/src/tools/workflow.rs` and currently provides list/show/validate/run/complete_step/update behavior.
+The older `run_evidence` HTML/index module still exists as a compatibility surface, but the active agent loop writes the project-local artifacts above.
 
-The workflow implementation is moving toward a shared service boundary in `imp-core::workflow` so native tools, CLI RPC, ACP/editor integrations, and future app surfaces can share the same operations without duplicating YAML parsing, validation, event append, status reconciliation, or run orchestration.
+## Workflows and bounded workers
 
-Current workflow characteristics:
+Workflow artifacts live under `.imp/workflows/<id>/` and are parsed by `crates/imp-core/src/workflow/`. The model-facing implementation is `crates/imp-core/src/tools/workflow/`.
 
-- local file-backed `workflow.yaml`, `events.jsonl`, `results.md`, and artifacts;
-- strict validation before accepted mutations;
-- command-check execution through `workflow.run`;
-- agent-action contracts for non-command steps;
-- explicit `complete_step` for successful agent-actionable work;
-- durable event records for updates, run checks, completion, and reconciliation.
+The workflow tool can inspect and validate artifacts, run pending command checks, return a main-agent action contract, or return bounded subagent contracts. Agent-completed work uses `complete_step`; explicit status repair and blockers use `update`.
 
-## CLI, TUI, and RPC surfaces
+The `subagent` tool currently validates and records launch contracts. It is bounded by workflow-generated input and write policy. Durable workflow state remains file-backed and separate from transient child-run state.
 
-`imp-cli` owns process entrypoints:
+## User-facing surfaces
 
-- one-shot/headless prompts;
-- TUI launch;
-- JSONL RPC mode;
-- ACP stdio server;
-- setup/auth/import/install helpers.
+- **TUI:** `imp-tui` consumes agent/runtime signals and owns terminal-specific interaction state.
+- **One-shot/JSONL:** `imp-cli` runs prompts and emits human or structured output.
+- **RPC:** `imp --mode rpc` accepts prompt, steer, follow-up, and cancel commands over JSONL.
+- **ACP:** `imp acp` implements session creation/load/resume and scaffold prompt handling, but does not yet run live model turns.
+- **GUI:** `imp-gui` consumes `imp_core::runtime` models experimentally and is not presented as a shipped primary interface.
 
-The TUI in `imp-tui` consumes runtime events, renders messages/tools/status, handles user input, and forwards commands such as cancel/steer/follow-up to the running agent.
+## Extensions
 
-JSONL RPC mode is local-process oriented. It accepts prompt/cancel/steer/follow-up commands over stdin and emits structured runtime events over stdout. Workflow RPC methods are planned to call the shared workflow service boundary rather than reimplement workflow logic in the CLI layer.
+`imp-lua` is the supported extension runtime. Lua extensions can register tools, slash commands, hooks, and UI requests through host-owned APIs and capability policy.
 
-ACP support is an editor-facing stdio JSON-RPC adapter. It should similarly call shared runtime/workflow operations rather than duplicating agent or workflow behavior.
+TypeScript/Pi extension code remains compatibility/experimental code and is not loaded by the normal builder path. It should not be presented as a shipped extension system.
 
-## Extension runtime
+## Planned or partial surfaces
 
-`imp-lua` is the shipped extension runtime. Lua extensions can register tools, slash commands, and hooks through host APIs subject to capability policy. TypeScript extension support is not shipped and should not be documented as available.
+These surfaces must remain labeled partial until their production wiring is verified:
 
-Extension safety depends on explicit capabilities, policy checks, and clear host/runtime boundaries. Extension code should not become an unreviewed path around native tool policy.
-
-## Planned and experimental surfaces
-
-The following are planned or experimental and should not be described as fully shipped unless separately verified:
-
-- workflow API access through RPC/ACP;
-- broader editor integration beyond current ACP scaffolding;
-- hosted sync/team collaboration;
-- experimental GUI surface;
-- future non-Lua extension bridges.
+- live ACP agent turns and permission bridging;
+- MCP server management;
+- automatic worktree-auto creation and user-facing closeout commands;
+- broader hosted/team synchronization;
+- GUI distribution and support;
+- non-Lua extension runtimes.
