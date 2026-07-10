@@ -15,6 +15,9 @@ path = "src/main.rs"
 imp-bin.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
+
 [workspace]
 resolver = "2"
 default-members = [

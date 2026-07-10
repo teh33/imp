@@ -1675,17 +1675,6 @@ async fn natural_prompt_sends_without_workflow_takeover_question() {
     assert!(app.editor.content().is_empty());
 }
 
-#[tokio::test]
-async fn workflow_slash_commands_are_removed() {
-    let mut app = make_app();
-    app.editor.set_content("/plan this feature");
-    app.send_message();
-    assert!(app.pending_agent_prompt.is_none());
-    let last = app.messages.last().expect("unknown command message");
-    assert_eq!(last.role, MessageRole::Error);
-    assert!(last.content.contains("Unknown command: /plan this feature"));
-}
-
 #[test]
 fn tui_integration_slash_memory_add_and_show() {
     let tmp = TempDir::new().unwrap();

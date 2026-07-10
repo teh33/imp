@@ -2661,6 +2661,7 @@ name = "imp-install"
 version = "0.3.5"
 dependencies = [
  "imp-bin",
+ "tempfile",
  "tokio",
 ]
 
