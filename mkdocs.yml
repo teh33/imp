@@ -81,4 +81,3 @@ nav:
       - Lua Extensions: extensions-lua.md
   - Evaluation:
       - Eval Candidates: eval-candidates.md
-      - Coding Eval Runner: eval-runner.md

@@ -28,7 +28,6 @@ These pages document imp's current shipped or intentionally exposed behavior. St
 ## Evaluation
 
 - [Eval candidates](eval-candidates.md) — failure/correction artifacts produced during run closeout.
-- [Coding eval runner](eval-runner.md) — pinned, verifier-backed coding evaluations and result comparison.
 
 ## Scope
 

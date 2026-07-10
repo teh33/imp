@@ -2,7 +2,7 @@
 
 Eval candidates capture useful failures and corrections from normal agent runs so they can later become regression tasks. They are records, not executable eval specifications.
 
-For the executable harness, see [Coding eval runner](eval-runner.md).
+Executable evaluation currently lives in repository-specific harnesses under `evals/`; there is no shipped native coding-eval CLI.
 
 ## Current behavior
 
@@ -109,7 +109,7 @@ Local storage is not an export guarantee. Review candidate JSON and every refere
 
 - There is no shipped CLI/TUI browser for candidate sidecars.
 - Manual “save correction as candidate” UX is not wired.
-- Candidates are not automatically promoted into `evals/coding-agent/tasks`.
-- The coding eval runner does not directly ingest candidate JSON.
+- Candidates are not automatically promoted into repository evaluation fixtures.
+- Repository evaluation harnesses do not directly ingest candidate JSON.
 
-Promotion should remain deliberate: choose a stable fixture or pinned repository, write a deterministic verifier, remove sensitive context, and create a normal eval task spec.
+Promotion should remain deliberate: choose a stable fixture or pinned repository, write a deterministic verifier, remove sensitive context, and create an input accepted by the chosen evaluation harness.
