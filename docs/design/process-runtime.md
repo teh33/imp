@@ -166,6 +166,10 @@ zero-test rejection, exit metadata, ordered workflow event updates, and status
 reconciliation while adding bounded output, stdin EOF, five-minute timeouts, and
 process-tree cleanup.
 
+Browser diagnostics version and MCP request/response probes use the process runtime.
+The MCP probe preserves environment isolation, protocol arguments, line framing,
+request writes, response parsing, timeout cleanup, and required-tool reporting.
+
 ## Remaining subprocess inventory
 
 The following production paths still launch processes directly and are not migrated in
@@ -176,9 +180,8 @@ this phase:
 - `crates/imp-core/src/tools/prototype.rs` — prototype execution and runtime probes;
 - `crates/imp-core/src/workflow/worktree_run.rs` — workflow Git children;
 - `crates/imp-core/src/tools/git.rs` — Git subprocesses;
-- `crates/imp-core/src/tools/browser/client.rs` and
-  `crates/imp-core/src/tools/browser/diagnostics/protocol.rs` — persistent browser and MCP
-  protocol helpers; the diagnostics version probe already uses the process runtime;
+- `crates/imp-core/src/tools/browser/client.rs` — persistent browser MCP client; diagnostics
+  version and request/response probes already use the process runtime;
 - `crates/imp-core/src/repo_intelligence.rs` and
   `crates/imp-core/src/tools/scan/mod.rs` — read-only Git discovery;
 - `crates/imp-cli/src/lib.rs` — installer/update, browser-open, and CLI helpers.
