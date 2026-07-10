@@ -467,7 +467,7 @@ pub fn register_native_tools(tools: &mut ToolRegistry) {
     tools.register(Arc::new(WriteTool));
     tools.register(Arc::new(ScanTool));
     tools.register(Arc::new(WebTool));
-    tools.register(Arc::new(SubagentTool));
+    tools.register(Arc::new(SubagentTool::new()));
     tools.register(Arc::new(WorkflowTool));
 }
 
