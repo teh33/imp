@@ -279,6 +279,27 @@ impl Agent {
         }
     }
 
+    async fn record_partial_assistant_turn(
+        &mut self,
+        turn: u32,
+        content: &[ContentBlock],
+        tool_calls: &[(String, String, serde_json::Value)],
+    ) {
+        if content.is_empty() && tool_calls.is_empty() {
+            return;
+        }
+
+        let partial = build_assistant_message(content, tool_calls, None);
+        self.messages.push(Message::Assistant(partial.clone()));
+        let workflow_review = self.finish_turn_workflow_review(turn);
+        self.emit(AgentEvent::TurnEnd {
+            index: turn,
+            message: partial,
+            workflow_review,
+        })
+        .await;
+    }
+
     pub async fn run(&mut self, prompt: String) -> Result<()> {
         let trace_path = std::env::var_os("IMP_TUI_TRACE").map(std::path::PathBuf::from);
         let trace_run = |phase: &str, started: std::time::Instant| {
@@ -824,21 +845,11 @@ impl Agent {
                                     ),
                                 })
                                 .await;
-                                // Build a minimal error message to push
-                                let err_msg = AssistantMessage {
-                                    content: vec![ContentBlock::Text { text: error }],
-                                    usage: None,
-                                    stop_reason: StopReason::Error("Stream error".to_string()),
-                                    timestamp: imp_llm::now(),
-                                };
-                                self.messages.push(Message::Assistant(err_msg.clone()));
-                                turn_state.enter(TurnPhase::RecordObservations);
-                                let workflow_review = self.finish_turn_workflow_review(turn);
-                                self.emit(AgentEvent::TurnEnd {
-                                    index: turn,
-                                    message: err_msg,
-                                    workflow_review,
-                                })
+                                self.record_partial_assistant_turn(
+                                    turn,
+                                    &ordered_content,
+                                    &tool_calls,
+                                )
                                 .await;
                                 let cost = total_usage.cost(&self.model.meta.pricing);
                                 self.emit(AgentEvent::AgentEnd {
@@ -891,6 +902,8 @@ impl Agent {
                             error: error.clone(),
                         })
                         .await;
+                        self.record_partial_assistant_turn(turn, &ordered_content, &tool_calls)
+                            .await;
                         if !had_partial_output
                             && recoverable_context_failure(&e)
                             && context_recovery_attempts < MAX_CONTEXT_RECOVERY_ATTEMPTS
@@ -990,6 +1003,8 @@ impl Agent {
                         error: error.clone(),
                     })
                     .await;
+                    self.record_partial_assistant_turn(turn, &ordered_content, &tool_calls)
+                        .await;
                     if let Some(follow_up) = recoverable_stream_failure_message(&error) {
                         if stream_recovery_attempts < MAX_STREAM_RECOVERY_ATTEMPTS {
                             stream_recovery_attempts += 1;

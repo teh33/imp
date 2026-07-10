@@ -275,12 +275,12 @@ impl App {
 
         let display_error = format_error_for_display(&error);
         if self.last_agent_error.as_deref() != Some(display_error.as_str()) {
-            if !self.replace_latest_streaming_with_error(&display_error) {
+            if !self.replace_empty_streaming_with_error(&display_error) {
                 self.push_error_msg(&display_error);
             }
             self.last_agent_error = Some(display_error);
         } else {
-            self.replace_latest_streaming_with_error(&display_error);
+            self.replace_empty_streaming_with_error(&display_error);
         }
     }
 }

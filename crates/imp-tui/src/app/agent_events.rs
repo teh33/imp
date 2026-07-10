@@ -79,6 +79,25 @@ impl App {
                 self.begin_llm_thought_segment();
                 self.turn_tracker.clear_counts();
             }
+            AgentEvent::TurnStart { .. } => {
+                self.is_streaming = true;
+                if !self.messages.iter().any(|message| message.is_streaming) {
+                    self.messages.push(DisplayMessage {
+                        role: MessageRole::Assistant,
+                        content: String::new(),
+                        thinking: None,
+                        tool_calls: Vec::new(),
+                        assistant_blocks: Vec::new(),
+                        is_streaming: true,
+                        timestamp: imp_llm::now(),
+                    });
+                    self.streaming_anchor_user_index = self
+                        .messages
+                        .iter()
+                        .rposition(|message| message.role == MessageRole::User);
+                    self.invalidate_chat_render_cache();
+                }
+            }
             AgentEvent::AgentEnd { cost, status, .. } => {
                 let had_visible_turn_output = self.completed_turns_in_run > 0
                     || self.latest_streaming_message_mut().is_some_and(|message| {
@@ -96,7 +115,7 @@ impl App {
                         let display_error = format_error_for_display(&message);
                         if self.last_agent_error.as_deref() != Some(display_error.as_str()) {
                             self.last_agent_error = Some(display_error.clone());
-                            self.replace_latest_streaming_with_error(&display_error);
+                            self.replace_empty_streaming_with_error(&display_error);
                         }
                     }
                 }
@@ -432,14 +451,14 @@ impl App {
                 // Parse the error for a cleaner display
                 let display_error = format_error_for_display(&error);
                 if self.last_agent_error.as_deref() == Some(display_error.as_str()) {
-                    if !self.replace_latest_streaming_with_error(&display_error) {
+                    if !self.replace_empty_streaming_with_error(&display_error) {
                         self.invalidate_chat_render_cache();
                     }
                     return;
                 }
                 self.last_agent_error = Some(display_error.clone());
 
-                if !self.replace_latest_streaming_with_error(&display_error) {
+                if !self.replace_empty_streaming_with_error(&display_error) {
                     self.messages.push(DisplayMessage {
                         role: MessageRole::Error,
                         content: display_error,

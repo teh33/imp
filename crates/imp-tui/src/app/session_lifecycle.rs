@@ -1403,6 +1403,93 @@ async fn agent_error_replaces_pending_assistant_placeholder_with_error() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn agent_error_after_visible_output_preserves_progress_and_appends_error() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("work before provider failure".to_string());
+
+    app.handle_agent_event(AgentEvent::MessageDelta {
+        delta: StreamEvent::TextDelta {
+            text: "I made progress.".into(),
+        },
+    });
+    app.handle_agent_event(AgentEvent::MessageDelta {
+        delta: StreamEvent::ToolCall {
+            id: "tool-before-error".into(),
+            name: "read".into(),
+            arguments: serde_json::json!({"path": "README.md"}),
+        },
+    });
+    app.handle_agent_event(AgentEvent::Error {
+        error: "Provider error: server_error: request failed".into(),
+    });
+
+    assert!(!app.is_streaming);
+    assert_eq!(app.messages.len(), 3);
+    assert_eq!(app.messages[1].role, MessageRole::Assistant);
+    assert_eq!(app.messages[1].content, "I made progress.");
+    assert_eq!(app.messages[1].tool_calls.len(), 1);
+    assert!(!app.messages[1].is_streaming);
+    assert_eq!(app.messages[2].role, MessageRole::Error);
+    assert!(app.messages[2].content.contains("request failed"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_task_failure_after_visible_output_preserves_progress_and_appends_error() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("work before task failure".to_string());
+
+    app.handle_agent_event(AgentEvent::MessageDelta {
+        delta: StreamEvent::TextDelta {
+            text: "Partial response".into(),
+        },
+    });
+    app.handle_runtime_signal(RuntimeSignal::AgentTaskFailed(
+        "Provider error: server_error: request failed".into(),
+    ));
+
+    assert!(!app.is_streaming);
+    assert_eq!(app.messages.len(), 3);
+    assert_eq!(app.messages[1].role, MessageRole::Assistant);
+    assert_eq!(app.messages[1].content, "Partial response");
+    assert!(!app.messages[1].is_streaming);
+    assert_eq!(app.messages[2].role, MessageRole::Error);
+    assert!(app.messages[2].content.contains("request failed"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recovery_turn_keeps_failed_partial_output_and_streams_continuation() {
+    let mut app = make_app();
+    app.enqueue_visible_agent_turn("work through a transient failure".to_string());
+
+    app.handle_agent_event(AgentEvent::TurnStart { index: 0 });
+    app.handle_agent_event(AgentEvent::MessageDelta {
+        delta: StreamEvent::TextDelta {
+            text: "Work before failure.".into(),
+        },
+    });
+    app.handle_agent_event(AgentEvent::Error {
+        error: "Provider stream failed after partial output: connection reset".into(),
+    });
+    app.handle_agent_event(AgentEvent::TurnStart { index: 1 });
+    app.handle_agent_event(AgentEvent::MessageDelta {
+        delta: StreamEvent::TextDelta {
+            text: "Recovered continuation.".into(),
+        },
+    });
+
+    assert!(app.is_streaming);
+    assert_eq!(app.messages.len(), 4);
+    assert_eq!(app.messages[1].role, MessageRole::Assistant);
+    assert_eq!(app.messages[1].content, "Work before failure.");
+    assert!(!app.messages[1].is_streaming);
+    assert_eq!(app.messages[2].role, MessageRole::Error);
+    assert!(app.messages[2].content.contains("connection reset"));
+    assert_eq!(app.messages[3].role, MessageRole::Assistant);
+    assert_eq!(app.messages[3].content, "Recovered continuation.");
+    assert!(app.messages[3].is_streaming);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_agent_end_before_turn_output_replaces_pending_assistant_placeholder() {
     let mut app = make_app();
     app.enqueue_visible_agent_turn("will fail at end".to_string());

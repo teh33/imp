@@ -2676,6 +2676,38 @@ async fn agent_recovers_after_partial_stream_failure() {
 }
 
 #[tokio::test]
+async fn agent_persists_partial_output_before_in_band_stream_error() {
+    let provider = Arc::new(MockProvider::new(vec![vec![
+        StreamEvent::TextDelta {
+            text: "partial before provider error".into(),
+        },
+        StreamEvent::Error {
+            error: "upstream server error".into(),
+        },
+    ]]));
+    let model = test_model(provider);
+    let (mut agent, handle) = Agent::new(model, PathBuf::from("/tmp"));
+
+    let events_task = tokio::spawn(collect_events(handle));
+    let result = agent.run("Handle provider error".into()).await;
+    drop(agent);
+
+    assert!(result.is_err());
+    let events = events_task.await.unwrap();
+    let partial = events.iter().find_map(|event| match event {
+        AgentEvent::TurnEnd { message, .. } => Some(message),
+        _ => None,
+    });
+    let partial = partial.expect("partial assistant turn should be recorded");
+    assert!(partial.content.iter().any(|block| {
+        matches!(block, ContentBlock::Text { text } if text == "partial before provider error")
+    }));
+    assert!(!partial.content.iter().any(|block| {
+        matches!(block, ContentBlock::Text { text } if text == "upstream server error")
+    }));
+}
+
+#[tokio::test]
 async fn agent_surfaces_error_after_repeated_partial_stream_failures() {
     let provider = Arc::new(MockProvider::new_results(vec![
         vec![
@@ -2730,6 +2762,21 @@ async fn agent_surfaces_error_after_repeated_partial_stream_failures() {
     assert!(text_delta.is_some());
     assert!(error_idx.is_some());
     assert!(text_delta.unwrap() < error_idx.unwrap());
+
+    let persisted_partials: Vec<&AssistantMessage> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TurnEnd { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(persisted_partials.len(), 3);
+    for (index, expected) in ["partial-1", "partial-2", "partial-3"].iter().enumerate() {
+        assert!(persisted_partials[index]
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text } if text == expected)));
+    }
 }
 
 #[tokio::test]
