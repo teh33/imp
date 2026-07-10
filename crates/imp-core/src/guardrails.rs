@@ -1,13 +1,14 @@
 use std::path::Path;
-use std::process::Stdio;
 
 use imp_llm::truncate_chars_with_suffix;
 use project_detect::{detect_walk, ProjectKind};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
-use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+use crate::guardrail_execution::execute;
+use crate::process::ProcessManager;
+
+#[path = "guardrails/guidance.rs"]
+mod guidance;
 
 const GUARDRAIL_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -53,14 +54,14 @@ impl GuardrailProfile {
     pub fn prompt_guidance(&self) -> &'static str {
         match self {
             Self::Auto => Self::Generic.prompt_guidance(),
-            Self::Generic => GUIDANCE_GENERIC,
-            Self::Zig => GUIDANCE_ZIG,
-            Self::Rust => GUIDANCE_RUST,
-            Self::TypeScript => GUIDANCE_TYPESCRIPT,
-            Self::C => GUIDANCE_C,
-            Self::Go => GUIDANCE_GO,
-            Self::Elixir => GUIDANCE_ELIXIR,
-            Self::Kotlin => GUIDANCE_KOTLIN,
+            Self::Generic => guidance::GENERIC,
+            Self::Zig => guidance::ZIG,
+            Self::Rust => guidance::RUST,
+            Self::TypeScript => guidance::TYPESCRIPT,
+            Self::C => guidance::C,
+            Self::Go => guidance::GO,
+            Self::Elixir => guidance::ELIXIR,
+            Self::Kotlin => guidance::KOTLIN,
         }
     }
 
@@ -218,18 +219,17 @@ pub async fn run_after_write_checks(
             .collect(),
     };
 
+    let manager = ProcessManager::new();
     let mut results = Vec::new();
     for cmd in &commands {
-        let result = run_guardrail_command(cmd, cwd, GUARDRAIL_CHECK_TIMEOUT).await;
+        let result = execute(&manager, cmd, cwd, GUARDRAIL_CHECK_TIMEOUT).await;
 
         match result {
             Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = if stderr.is_empty() {
-                    stdout.to_string()
+                let combined = if output.stderr.is_empty() {
+                    output.stdout
                 } else {
-                    format!("{stdout}{stderr}")
+                    format!("{}{}", output.stdout, output.stderr)
                 };
                 // Truncate to avoid flooding context
                 let truncated = if combined.len() > 2000 {
@@ -242,7 +242,7 @@ pub async fn run_after_write_checks(
                 };
                 results.push(CheckResult {
                     command: cmd.clone(),
-                    success: output.status.success(),
+                    success: output.success,
                     output: truncated,
                 });
             }
@@ -256,53 +256,6 @@ pub async fn run_after_write_checks(
         }
     }
     results
-}
-
-async fn run_guardrail_command(
-    cmd: &str,
-    cwd: &Path,
-    timeout: std::time::Duration,
-) -> std::io::Result<std::process::Output> {
-    let mut command = Command::new("sh");
-    command
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    isolate_tokio_command(&mut command);
-
-    let mut child = command.spawn()?;
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status_result) => {
-            let status = status_result?;
-            let mut stdout_bytes = Vec::new();
-            let mut stderr_bytes = Vec::new();
-            if let Some(mut stream) = stdout.take() {
-                stream.read_to_end(&mut stdout_bytes).await?;
-            }
-            if let Some(mut stream) = stderr.take() {
-                stream.read_to_end(&mut stderr_bytes).await?;
-            }
-            Ok(std::process::Output {
-                status,
-                stdout: stdout_bytes,
-                stderr: stderr_bytes,
-            })
-        }
-        Err(_) => {
-            kill_tokio_process_group(&child).await;
-            let _ = child.kill().await;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("guardrail command timed out after {}s", timeout.as_secs()),
-            ))
-        }
-    }
 }
 
 /// Format check results into a message for the agent.
@@ -339,342 +292,6 @@ pub fn format_check_results(results: &[CheckResult], level: GuardrailLevel) -> S
     s
 }
 
-// -- Prompt guidance text per profile ----------------------------------------
-
-const GUIDANCE_GENERIC: &str = "\
-- Prefer the smallest, local fix over a cross-file refactor.
-- Search for existing patterns first; mirror naming, error handling, and conventions.
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and timeouts bounded.
-- Make error handling explicit — don't silently ignore failures.
-- Leave code warning-free and easy to verify.
-- Don't add new dependencies without explicit user approval.
-";
-
-const GUIDANCE_ZIG: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and buffers bounded.
-- Handle errors explicitly with try/catch — avoid casual catch unreachable.
-- Keep allocator ownership and lifetime clear.
-- Prefer small, readable functions with minimal hidden control flow.
-- Leave code formatted, buildable, and warning-free.
-";
-
-const GUIDANCE_RUST: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and timeouts bounded.
-- Use Result with meaningful error propagation — avoid unwrap() in non-test code.
-- Keep async behavior bounded and timeouts explicit.
-- Prefer small, focused changes over broad rewrites.
-- Leave code clippy-clean with zero warnings.
-";
-
-const GUIDANCE_TYPESCRIPT: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and timeouts bounded.
-- Make error handling explicit — don't silently swallow rejections or errors.
-- Use strict typing — avoid any unless justified.
-- Keep async/Promise flows bounded and understandable.
-- Leave typecheck and lint status clean.
-";
-
-const GUIDANCE_C: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and buffer sizes bounded.
-- Make error handling explicit — check return values.
-- Keep pointer usage straightforward and well-scoped.
-- Avoid preprocessor complexity when simpler code works.
-- Leave build and test status clean.
-";
-
-const GUIDANCE_GO: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep loops, retries, and timeouts bounded.
-- Check and propagate errors explicitly — don't ignore returned errors.
-- Keep goroutine lifecycle and cancellation understandable.
-- Prefer small functions and direct control flow.
-- Leave formatting and vet status clean.
-";
-
-const GUIDANCE_ELIXIR: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Keep retries and message flows bounded.
-- Keep process and supervision boundaries clear.
-- Handle {:ok, value} / {:error, reason} tuples explicitly.
-- Avoid hiding important behavior in opaque control flow.
-- Leave formatting and compilation warnings-free.
-";
-
-const GUIDANCE_KOTLIN: &str = "\
-- Keep control flow straightforward and easy to follow.
-- Prefer val over var; keep mutation local and obvious.
-- Treat nullability as part of the design — avoid !! outside tests or impossible states.
-- Use structured concurrency; avoid GlobalScope and do not swallow CancellationException.
-- Keep Gradle/Maven verification project-specific and use ./gradlew when available.
-- Leave formatting, lint, and tests clean for the touched module.
-";
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde::Deserialize;
-    use tempfile::TempDir;
-
-    #[derive(Debug, Deserialize)]
-    struct GuardrailToml {
-        guardrails: GuardrailConfig,
-    }
-
-    #[tokio::test]
-    async fn guardrail_command_timeout_returns_error() {
-        let dir = TempDir::new().unwrap();
-        let started = std::time::Instant::now();
-
-        let result =
-            run_guardrail_command("sleep 5", dir.path(), std::time::Duration::from_millis(50))
-                .await;
-
-        assert!(started.elapsed() < std::time::Duration::from_secs(2));
-        assert!(matches!(
-            result,
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut
-        ));
-    }
-
-    #[test]
-    fn guardrail_toml_deserializes() {
-        let parsed: GuardrailToml = toml::from_str(
-            r#"
-[guardrails]
-enabled = true
-level = "enforce"
-profile = "zig"
-critical_paths = ["src/**", "lib/**"]
-after_write = ["zig fmt --check .", "zig build"]
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(parsed.guardrails.enabled, Some(true));
-        assert_eq!(parsed.guardrails.level, Some(GuardrailLevel::Enforce));
-        assert_eq!(parsed.guardrails.profile, Some(GuardrailProfile::Zig));
-        assert_eq!(
-            parsed.guardrails.critical_paths,
-            Some(vec!["src/**".into(), "lib/**".into()])
-        );
-        assert_eq!(
-            parsed.guardrails.after_write,
-            Some(vec!["zig fmt --check .".into(), "zig build".into()])
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_resolves_zig() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("build.zig"), "").unwrap();
-
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(dir.path()),
-            GuardrailProfile::Zig
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_resolves_rust_from_subdirectory() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("Cargo.toml"),
-            "[package]\nname='x'\nversion='0.1.0'\n",
-        )
-        .unwrap();
-        let nested = dir.path().join("src").join("nested");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(&nested),
-            GuardrailProfile::Rust
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_resolves_go() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("go.mod"), "module example.com/test\n").unwrap();
-
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(dir.path()),
-            GuardrailProfile::Go
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_resolves_elixir() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("mix.exs"),
-            "defmodule Demo.MixProject do end\n",
-        )
-        .unwrap();
-
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(dir.path()),
-            GuardrailProfile::Elixir
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_resolves_kotlin_gradle() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("settings.gradle.kts"),
-            "pluginManagement {}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("build.gradle.kts"),
-            "plugins { kotlin(\"jvm\") version \"2.0.0\" }\n",
-        )
-        .unwrap();
-
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(dir.path()),
-            GuardrailProfile::Kotlin
-        );
-    }
-
-    #[test]
-    fn guardrail_auto_profile_falls_back_to_generic() {
-        let dir = TempDir::new().unwrap();
-        let config = GuardrailConfig {
-            profile: Some(GuardrailProfile::Auto),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            config.resolve_effective_profile(dir.path()),
-            GuardrailProfile::Generic
-        );
-    }
-
-    #[test]
-    fn guardrail_prompt_guidance_varies_by_profile() {
-        let zig = GuardrailProfile::Zig.prompt_guidance();
-        let rust = GuardrailProfile::Rust.prompt_guidance();
-        let generic = GuardrailProfile::Generic.prompt_guidance();
-
-        assert!(zig.contains("catch unreachable"));
-        assert!(zig.contains("allocator"));
-        assert!(rust.contains("clippy"));
-        assert!(rust.contains("unwrap"));
-        assert!(generic.contains("warning-free"));
-        assert_ne!(zig, rust);
-        assert_ne!(zig, generic);
-    }
-
-    #[test]
-    fn guardrail_default_after_write_zig() {
-        let cmds = GuardrailProfile::Zig.default_after_write();
-        assert_eq!(cmds.len(), 3);
-        assert!(cmds[0].contains("zig fmt"));
-    }
-
-    #[test]
-    fn guardrail_default_after_write_generic_is_empty() {
-        assert!(GuardrailProfile::Generic.default_after_write().is_empty());
-    }
-
-    #[test]
-    fn guardrail_layer_contains_header() {
-        let layer = guardrails_layer(GuardrailProfile::Zig);
-        assert!(layer.starts_with("## Engineering Guardrails"));
-        assert!(layer.contains("catch unreachable"));
-    }
-
-    #[test]
-    fn guardrail_format_check_results_all_passed() {
-        let results = vec![CheckResult {
-            command: "zig build".into(),
-            success: true,
-            output: String::new(),
-        }];
-        let msg = format_check_results(&results, GuardrailLevel::Advisory);
-        assert_eq!(msg, "Guardrail checks passed.");
-    }
-
-    #[test]
-    fn guardrail_format_check_results_failure_enforce() {
-        let results = vec![CheckResult {
-            command: "cargo clippy".into(),
-            success: false,
-            output: "warning: unused variable".into(),
-        }];
-        let msg = format_check_results(&results, GuardrailLevel::Enforce);
-        assert!(msg.contains("GUARDRAIL CHECK FAILED"));
-        assert!(msg.contains("enforce"));
-        assert!(msg.contains("cargo clippy"));
-    }
-
-    #[test]
-    fn guardrail_format_check_results_failure_advisory() {
-        let results = vec![CheckResult {
-            command: "mix test".into(),
-            success: false,
-            output: "1 test failed".into(),
-        }];
-        let msg = format_check_results(&results, GuardrailLevel::Advisory);
-        assert!(msg.contains("advisory"));
-        assert!(msg.contains("mix test"));
-    }
-
-    #[test]
-    fn guardrail_merge_only_overrides_present_fields() {
-        let mut base = GuardrailConfig {
-            enabled: Some(true),
-            level: Some(GuardrailLevel::Advisory),
-            profile: Some(GuardrailProfile::Rust),
-            critical_paths: Some(vec!["src/**".into()]),
-            after_write: None,
-        };
-
-        let overlay = GuardrailConfig {
-            enabled: None,
-            level: Some(GuardrailLevel::Enforce),
-            profile: None,
-            critical_paths: None,
-            after_write: Some(vec!["cargo test".into()]),
-        };
-
-        base.merge(overlay);
-
-        assert_eq!(base.enabled, Some(true));
-        assert_eq!(base.level, Some(GuardrailLevel::Enforce));
-        assert_eq!(base.profile, Some(GuardrailProfile::Rust));
-        assert_eq!(base.critical_paths, Some(vec!["src/**".into()]));
-        assert_eq!(base.after_write, Some(vec!["cargo test".into()]));
-    }
-}
+#[path = "guardrails_tests.rs"]
+mod tests;

@@ -54,6 +54,7 @@ pub(crate) fn signal_process_group(pid: u32, signal: ProcessGroupSignal) {
 }
 
 /// Send SIGKILL to the process group created for an async child process.
+#[allow(dead_code)]
 pub(crate) async fn kill_tokio_process_group(child: &tokio::process::Child) {
     if let Some(pid) = child.id() {
         signal_process_group(pid, ProcessGroupSignal::Kill);

@@ -157,12 +157,15 @@ Workflow verification command gates use their runner's shared manager. Gate stat
 transitions, private artifacts, separate stream summaries, byte accounting, truncation,
 and timeout blocking remain owned by the verification layer.
 
+Guardrail check batches use one manager while preserving sequential execution,
+stdout-then-stderr reporting, context truncation, timeout errors, and advisory or
+enforcing result semantics.
+
 ## Remaining subprocess inventory
 
 The following production paths still launch processes directly and are not migrated in
 this phase:
 
-- `crates/imp-core/src/guardrails.rs` — guardrail shell commands;
 - `crates/imp-lua/src/bridge.rs` — Lua tool subprocess execution;
 - `crates/imp-core/src/typescript_extensions/bun_runner.rs` — TypeScript/Bun hosts;
 - `crates/imp-core/src/tools/prototype.rs` — prototype execution and runtime probes;

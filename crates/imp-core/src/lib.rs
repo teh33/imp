@@ -15,6 +15,7 @@ pub mod error_display;
 pub mod eval_candidate;
 pub mod eval_candidate_closeout;
 pub mod evidence;
+mod guardrail_execution;
 pub mod guardrails;
 pub mod hooks;
 pub mod imp_session;
