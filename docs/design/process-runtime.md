@@ -161,6 +161,11 @@ Guardrail check batches use one manager while preserving sequential execution,
 stdout-then-stderr reporting, context truncation, timeout errors, and advisory or
 enforcing result semantics.
 
+Workflow command and changed-files checks use one manager per step run. They preserve
+zero-test rejection, exit metadata, ordered workflow event updates, and status
+reconciliation while adding bounded output, stdin EOF, five-minute timeouts, and
+process-tree cleanup.
+
 ## Remaining subprocess inventory
 
 The following production paths still launch processes directly and are not migrated in
@@ -171,7 +176,6 @@ this phase:
 - `crates/imp-core/src/tools/prototype.rs` — prototype execution and runtime probes;
 - `crates/imp-core/src/workflow/worktree_run.rs` — workflow Git children;
 - `crates/imp-core/src/tools/git.rs` — Git subprocesses;
-- `crates/imp-core/src/tools/workflow/checks.rs` — workflow check and Git commands;
 - `crates/imp-core/src/tools/browser/client.rs` and
   `crates/imp-core/src/tools/browser/diagnostics/protocol.rs` — persistent browser and MCP
   protocol helpers; the diagnostics version probe already uses the process runtime;
