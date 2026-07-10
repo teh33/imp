@@ -11,6 +11,10 @@ use crate::process::{
     SecretEnvironment,
 };
 
+#[path = "bash/jobs.rs"]
+mod jobs;
+use jobs::BashJobs;
+
 use imp_llm::auth::AuthStore;
 
 use super::{
@@ -365,12 +369,14 @@ pub struct BashTool;
 
 pub struct SharedBashTool {
     manager: ProcessManager,
+    jobs: BashJobs,
 }
 
 impl BashTool {
     pub fn canonical() -> SharedBashTool {
         SharedBashTool {
             manager: ProcessManager::new(),
+            jobs: BashJobs::default(),
         }
     }
 }
@@ -386,7 +392,7 @@ impl Tool for SharedBashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a one-shot shell command in the workspace or an optional workdir."
+        "Run a shell command, or poll, write to, or stop a managed background job."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -403,7 +409,7 @@ impl Tool for SharedBashTool {
         params: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput> {
-        execute_bash(&self.manager, params, ctx).await
+        execute_bash(&self.manager, Some(&self.jobs), params, ctx).await
     }
 }
 
@@ -431,55 +437,95 @@ impl Tool for BashTool {
         params: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput> {
-        execute_bash(&ProcessManager::new(), params, ctx).await
+        execute_bash(&ProcessManager::new(), None, params, ctx).await
     }
 }
 
 fn bash_parameters() -> serde_json::Value {
     json!({
-        "type": "object",
-        "properties": {
-            "command": { "type": "string" },
-            "timeout": { "type": "number" },
-            "workdir": { "type": "string" },
-            "with_secrets": {
-                "type": "array",
-                "description": "Imp secret names to expose as deterministic env vars.",
-                "items": { "type": "string" }
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string" },
+                    "background": { "type": "boolean", "default": false },
+                    "yield_time_ms": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "timeout": { "type": "number" },
+                    "workdir": { "type": "string" },
+                    "with_secrets": {
+                        "type": "array",
+                        "description": "Imp secret names to expose as deterministic env vars.",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["command"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "string" },
+                    "stdin": { "type": "string" },
+                    "stop": { "type": "boolean", "default": false },
+                    "yield_time_ms": { "type": "integer", "minimum": 0, "maximum": 5000 }
+                },
+                "required": ["job_id"]
             }
-        },
-        "required": ["command"]
+        ]
     })
 }
 
 async fn execute_bash(
     manager: &ProcessManager,
+    jobs: Option<&BashJobs>,
     params: serde_json::Value,
     ctx: ToolContext,
 ) -> Result<ToolOutput> {
-        let command = params["command"]
-            .as_str()
-            .ok_or_else(|| crate::error::Error::Tool("missing 'command' parameter".into()))?;
+    let has_command = params.get("command").is_some();
+    let has_job = params.get("job_id").is_some();
+    if has_command == has_job {
+        return Err(Error::Tool(
+            "provide exactly one of 'command' or 'job_id'".into(),
+        ));
+    }
+    if has_job {
+        let jobs =
+            jobs.ok_or_else(|| Error::Tool("managed jobs require the canonical bash tool".into()))?;
+        return jobs.interact(manager, &params, &ctx).await;
+    }
+    let command = params["command"]
+        .as_str()
+        .ok_or_else(|| crate::error::Error::Tool("missing 'command' parameter".into()))?;
 
-        let timeout_secs = params["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let timeout_secs = params["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-        // Support per-command workdir override
-        let ctx = if let Some(workdir) = params["workdir"].as_str() {
-            let wd = super::resolve_path(&ctx.cwd, workdir);
-            if !wd.is_dir() {
-                return Ok(ToolOutput::error(format!(
-                    "workdir not found or not a directory: {}",
-                    wd.display()
-                )));
-            }
-            ToolContext { cwd: wd, ..ctx }
-        } else {
-            ctx
-        };
+    // Support per-command workdir override
+    let ctx = if let Some(workdir) = params["workdir"].as_str() {
+        let wd = super::resolve_path(&ctx.cwd, workdir);
+        if !wd.is_dir() {
+            return Ok(ToolOutput::error(format!(
+                "workdir not found or not a directory: {}",
+                wd.display()
+            )));
+        }
+        ToolContext { cwd: wd, ..ctx }
+    } else {
+        ctx
+    };
 
-        let with_secrets = parse_with_secrets(params.get("with_secrets"))?;
+    let with_secrets = parse_with_secrets(params.get("with_secrets"))?;
+    if params
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let jobs =
+            jobs.ok_or_else(|| Error::Tool("managed jobs require the canonical bash tool".into()))?;
+        return jobs
+            .start(manager, command, timeout_secs, &ctx, with_secrets, &params)
+            .await;
+    }
 
-        run_command_with_manager(manager, command, timeout_secs, &ctx, with_secrets).await
+    run_command_with_manager(manager, command, timeout_secs, &ctx, with_secrets).await
 }
 
 #[cfg(test)]
@@ -497,6 +543,42 @@ async fn run_command(
         with_secrets,
     )
     .await
+}
+
+fn build_process_request(
+    command: &str,
+    timeout_secs: u64,
+    ctx: &ToolContext,
+    resolved_secret_env: &[ResolvedSecretEnvBinding],
+) -> ProcessRequest {
+    let shell = detect_shell(&ctx.config.shell);
+    let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    let mut grant = ExecutionGrant::host(&ctx.cwd);
+    grant.allowed_environment = environment.keys().cloned().collect();
+    grant.approved_secret_ids = injected_secret_names(resolved_secret_env)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    grant.approved_secret_environment = injected_env_names(resolved_secret_env)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let secret_environment = resolved_secret_env
+        .iter()
+        .map(|binding| SecretEnvironment {
+            secret_id: binding.secret_name.clone(),
+            name: binding.env.clone(),
+            value: binding.value.clone(),
+        })
+        .collect();
+    ProcessRequest {
+        command: CommandSpec::new(shell).with_arguments(["-c".into(), command.into()]),
+        cwd: ctx.cwd.clone(),
+        environment,
+        approved_secret_environment: secret_environment,
+        mode: ProcessMode::Pipes,
+        timeout: Some(Duration::from_secs(timeout_secs)),
+        output_retention_bytes: 4 * 1024 * 1024,
+        grant,
+    }
 }
 
 async fn run_command_with_manager(
@@ -575,34 +657,7 @@ async fn run_command_with_manager(
         // rush failed — fall through to sh.
     }
 
-    let shell = detect_shell(&ctx.config.shell);
-    let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-    let mut grant = ExecutionGrant::host(&ctx.cwd);
-    grant.allowed_environment = environment.keys().cloned().collect();
-    grant.approved_secret_ids = injected_secret_names(&resolved_secret_env)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    grant.approved_secret_environment = injected_env_names(&resolved_secret_env)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let secret_environment = resolved_secret_env
-        .iter()
-        .map(|binding| SecretEnvironment {
-            secret_id: binding.secret_name.clone(),
-            name: binding.env.clone(),
-            value: binding.value.clone(),
-        })
-        .collect();
-    let request = ProcessRequest {
-        command: CommandSpec::new(shell).with_arguments(["-c".into(), command.into()]),
-        cwd: ctx.cwd.clone(),
-        environment,
-        approved_secret_environment: secret_environment,
-        mode: ProcessMode::Pipes,
-        timeout: Some(Duration::from_secs(timeout_secs)),
-        output_retention_bytes: 4 * 1024 * 1024,
-        grant,
-    };
+    let request = build_process_request(command, timeout_secs, ctx, &resolved_secret_env);
     let process = manager
         .start(request)
         .await
@@ -612,7 +667,11 @@ async fn run_command_with_manager(
     let mut pending = String::new();
 
     loop {
-        if ctx.is_cancelled() && !manager.get(process.id).is_ok_and(|info| info.state.is_terminal()) {
+        if ctx.is_cancelled()
+            && !manager
+                .get(process.id)
+                .is_ok_and(|info| info.state.is_terminal())
+        {
             manager
                 .cancel(process.id)
                 .await

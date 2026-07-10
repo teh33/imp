@@ -176,6 +176,114 @@ fn field_env_name_is_deterministic() {
 }
 
 #[tokio::test]
+async fn managed_job_rejects_ambiguous_request() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, _rx) = test_ctx(tmp.path());
+    let tool = BashTool::canonical();
+    let error = match tool
+        .execute(
+            "ambiguous",
+            json!({ "command": "true", "job_id": uuid::Uuid::new_v4().to_string() }),
+            ctx,
+        )
+        .await
+    {
+        Ok(_) => panic!("ambiguous request should be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("exactly one"));
+}
+
+#[tokio::test]
+async fn managed_job_supports_poll_stdin_and_stop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, _rx) = test_ctx(tmp.path());
+    let tool = BashTool::canonical();
+    let started = tool
+        .execute(
+            "start",
+            json!({
+                "command": "printf 'ready\\n'; while IFS= read -r line; do printf 'got:%s\\n' \"$line\"; done",
+                "background": true,
+                "yield_time_ms": 500,
+                "timeout": 10
+            }),
+            ctx.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(!started.is_error);
+    assert!(started.text_content().unwrap().contains("ready"));
+    let job_id = started.details["job_id"].as_str().unwrap().to_string();
+    let written = tool
+        .execute(
+            "write",
+            json!({ "job_id": job_id, "stdin": "hello\n", "yield_time_ms": 500 }),
+            ctx.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(!written.is_error);
+    assert!(written.text_content().unwrap().contains("got:hello"));
+    let stopped = tool
+        .execute(
+            "stop",
+            json!({ "job_id": job_id, "stop": true }),
+            ctx.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(!stopped.is_error);
+    assert!(stopped.details["exit"].is_object());
+    let repeated = tool
+        .execute("stop-again", json!({ "job_id": job_id, "stop": true }), ctx)
+        .await
+        .unwrap();
+    assert!(!repeated.is_error);
+}
+
+#[tokio::test]
+async fn managed_job_poll_returns_only_new_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, _rx) = test_ctx(tmp.path());
+    let tool = BashTool::canonical();
+    let started = tool
+        .execute(
+            "start",
+            json!({
+                "command": "printf 'first\\n'; sleep 0.1; printf 'second\\n'",
+                "background": true,
+                "yield_time_ms": 0,
+                "timeout": 5
+            }),
+            ctx.clone(),
+        )
+        .await
+        .unwrap();
+    let job_id = started.details["job_id"].as_str().unwrap().to_string();
+    let mut combined = started.text_content().unwrap_or_default().to_owned();
+    let mut terminal = started.details["exit"].is_object();
+    for index in 0..3 {
+        if terminal {
+            break;
+        }
+        let polled = tool
+            .execute(
+                &format!("poll-{index}"),
+                json!({ "job_id": job_id, "yield_time_ms": 1000 }),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        combined.push_str(&polled.text_content().unwrap_or_default());
+        terminal = polled.details["exit"].is_object();
+    }
+    assert!(terminal, "job did not exit: {combined:?}");
+    assert_eq!(combined.matches("first").count(), 1, "{combined:?}");
+    assert_eq!(combined.matches("second").count(), 1, "{combined:?}");
+}
+
+#[tokio::test]
 async fn bash_simple_command() {
     let tmp = tempfile::tempdir().unwrap();
     let (ctx, _rx) = test_ctx(tmp.path());

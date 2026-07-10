@@ -256,6 +256,19 @@ fn hook_resolve_unknown_action_returns_none() {
 }
 
 #[tokio::test]
+async fn hook_shell_command_timeout_uses_process_runtime_cleanup() {
+    let manager = crate::process::ProcessManager::new();
+    let error = run_hook_shell_command(
+        &manager,
+        "trap '' TERM; exec sleep 60",
+        Duration::from_millis(20),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("timed out"));
+}
+
+#[tokio::test]
 async fn hook_blocking_shell_executes() {
     let mut runner = HookRunner::new();
     runner.load_from_config(vec![HookDef {

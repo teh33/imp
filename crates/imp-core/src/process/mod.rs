@@ -1,9 +1,15 @@
+mod drain;
 mod error;
 mod grant;
+mod launch;
 mod manager;
 mod model;
+mod observe;
 mod one_shot;
 mod output;
+mod redaction;
+mod retention;
+mod supervisor;
 
 pub use error::{ProcessError, StopOptions};
 pub use grant::{
@@ -18,5 +24,13 @@ pub use model::{
 };
 pub use one_shot::{state_is_success, OneShotOutcome};
 
+impl Default for ProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests;

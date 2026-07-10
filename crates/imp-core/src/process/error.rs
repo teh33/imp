@@ -22,6 +22,8 @@ pub enum ProcessError {
     Spawn(#[source] std::io::Error),
     #[error("process I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("process manager capacity of {0} active processes is exhausted")]
+    CapacityExceeded(usize),
     #[error("process supervisor stopped unexpectedly")]
     SupervisorStopped,
 }
