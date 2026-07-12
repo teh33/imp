@@ -69,7 +69,7 @@ impl Tool for SubagentTool {
     }
     fn parameters(&self) -> serde_json::Value {
         json!({"type":"object","required":["action"],"properties":{
-            "action":{"type":"string","enum":["launch","status","wait","send","cancel"]},
+            "action":{"type":"string","enum":["launch","status","wait","send","cancel","ready","integrate"]},
             "input":{"type":"object","description":"Workflow-generated SubagentInput required for launch."},
             "child_run_id":{"type":"string","description":"Previously launched imp child id."},
             "message":{"type":"string","description":"Follow-up required for send."},
@@ -116,6 +116,8 @@ impl Tool for SubagentTool {
                 &ctx,
             ),
             "cancel" => self.cancel(child_id(params.child_run_id)?, &ctx).await,
+            "ready" => self.ready(child_id(params.child_run_id)?, &ctx).await,
+            "integrate" => self.integrate(child_id(params.child_run_id)?, &ctx).await,
             action => Ok(ToolOutput::error(format!(
                 "unsupported subagent action `{action}`"
             ))),
@@ -217,6 +219,53 @@ impl SubagentTool {
             false,
         ))
     }
+    async fn ready(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+        let record = self.executor.status(&ctx.cwd, &child)?;
+        let id = promotable_workspace_id(&record)?;
+        let workspace = crate::managed_workspace::ManagedWorkspaceService::global()
+            .mark_ready(&ctx.cwd, id)
+            .await
+            .map_err(|error| {
+                Error::Tool(format!(
+                    "failed to mark subagent workspace `{id}` ready: {error}"
+                ))
+            })?;
+        Ok(output(
+            "ready",
+            &record,
+            json!({"child_run_id": child, "record": record, "workspace": workspace}),
+            false,
+        ))
+    }
+    async fn integrate(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+        let record = self.executor.status(&ctx.cwd, &child)?;
+        let id = promotable_workspace_id(&record)?;
+        let workspace = crate::managed_workspace::ManagedWorkspaceService::global()
+            .integrate(&ctx.cwd, id)
+            .await
+            .map_err(|error| {
+                Error::Tool(format!(
+                    "failed to integrate subagent workspace `{id}`: {error}"
+                ))
+            })?;
+        Ok(output(
+            "integrate",
+            &record,
+            json!({"child_run_id": child, "record": record, "workspace": workspace}),
+            false,
+        ))
+    }
+}
+
+fn promotable_workspace_id(record: &imp_subagent::Record) -> Result<&str> {
+    if record.status != imp_subagent::Status::Success {
+        return Err(Error::Tool(format!(
+            "subagent workspace promotion requires terminal success; child is {}",
+            executor::status_name(&record.status)
+        )));
+    }
+    managed_workspace_id(record)
+        .ok_or_else(|| Error::Tool("subagent has no managed workspace to promote".into()))
 }
 
 fn managed_workspace_id(record: &imp_subagent::Record) -> Option<&str> {

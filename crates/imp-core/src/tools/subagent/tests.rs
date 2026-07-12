@@ -6,7 +6,15 @@ fn subagent_tool_schema_exposes_lifecycle_actions() {
     let actions = &tool.parameters()["properties"]["action"]["enum"];
     assert_eq!(
         actions,
-        &json!(["launch", "status", "wait", "send", "cancel"])
+        &json!([
+            "launch",
+            "status",
+            "wait",
+            "send",
+            "cancel",
+            "ready",
+            "integrate"
+        ])
     );
 }
 
@@ -103,6 +111,31 @@ fn record_with_workspace(status: imp_subagent::Status) -> imp_subagent::Record {
 fn durable_record_resolves_managed_workspace_id() {
     let record = record_with_workspace(imp_subagent::Status::Running);
     assert_eq!(managed_workspace_id(&record), Some("subagent-child-1"));
+}
+
+#[test]
+fn promotion_requires_success_and_a_managed_workspace() {
+    let running = record_with_workspace(imp_subagent::Status::Running);
+    assert!(promotable_workspace_id(&running)
+        .unwrap_err()
+        .to_string()
+        .contains("requires terminal success"));
+
+    let mut workspace_free = record_with_workspace(imp_subagent::Status::Success);
+    workspace_free.metadata = serde_json::json!({});
+    assert!(promotable_workspace_id(&workspace_free)
+        .unwrap_err()
+        .to_string()
+        .contains("no managed workspace"));
+}
+
+#[test]
+fn successful_workspace_can_be_promoted_explicitly() {
+    let record = record_with_workspace(imp_subagent::Status::Success);
+    assert_eq!(
+        promotable_workspace_id(&record).unwrap(),
+        "subagent-child-1"
+    );
 }
 
 #[test]

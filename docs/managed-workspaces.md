@@ -111,6 +111,10 @@ workspace active and expose its current cleanliness and changed paths for explic
 review. Blocked, incomplete, failed, and cancelled children transition the
 workspace to retained with child diagnostics.
 
-A successful child is not automatically committed, marked ready, integrated, or
-cleaned. Those actions remain explicit until verification and host commit ownership
-are connected to the subagent contract.
+A successful child is not automatically committed, verified, marked ready, integrated,
+or cleaned. After the parent has reviewed the result, created the candidate commit, and
+completed its own verification, it may explicitly call `subagent` with `ready` to pin
+the clean committed candidate, then `integrate` to use the managed workspace's existing
+fast-forward and conservative cleanup safeguards. Both promotion actions require the
+durable child record to report success and own a managed workspace. Failed preconditions
+leave the workspace recoverable.
