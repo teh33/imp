@@ -458,6 +458,10 @@ pub struct Config {
     /// Default model (alias or full ID).
     pub model: Option<String>,
 
+    /// Default model for bounded subagents. Falls back to the parent model.
+    #[serde(default)]
+    pub subagent_model: Option<String>,
+
     /// Default thinking level.
     pub thinking: Option<ThinkingLevel>,
 
@@ -1014,6 +1018,9 @@ impl Config {
     fn merge(&mut self, other: Config) {
         if other.model.is_some() {
             self.model = other.model;
+        }
+        if other.subagent_model.is_some() {
+            self.subagent_model = other.subagent_model;
         }
         if other.thinking.is_some() {
             self.thinking = other.thinking;

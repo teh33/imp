@@ -306,6 +306,11 @@ impl AgentBuilder {
             }
         };
 
+        let default_subagent_model = self
+            .config
+            .subagent_model
+            .clone()
+            .unwrap_or_else(|| self.model.meta.id.clone());
         let (mut agent, handle) = Agent::new(self.model, self.cwd.clone());
         agent.api_key = self.api_key;
         if let Some(thinking) = self.config.thinking {
@@ -342,7 +347,11 @@ impl AgentBuilder {
 
         let phase_started = Instant::now();
         if !self.no_tools {
-            register_native_tools_with_task_state(&mut agent.tools, Arc::clone(&agent.task_state));
+            register_native_tools_with_task_state(
+                &mut agent.tools,
+                Arc::clone(&agent.task_state),
+                Some(default_subagent_model),
+            );
             register_browser_tool(&mut agent.tools, &self.config);
         }
         if let Some(extra) = self.extra_tools {
@@ -465,6 +474,7 @@ pub fn register_native_tools(tools: &mut ToolRegistry) {
         Arc::new(std::sync::Mutex::new(
             crate::agent::task_state::SessionTaskState::default(),
         )),
+        None,
     );
 }
 
@@ -479,6 +489,7 @@ fn register_browser_tool(tools: &mut ToolRegistry, config: &Config) {
 fn register_native_tools_with_task_state(
     tools: &mut ToolRegistry,
     task_state: Arc<std::sync::Mutex<crate::agent::task_state::SessionTaskState>>,
+    default_subagent_model: Option<String>,
 ) {
     use crate::tools::{
         ask::AskTool, bash::BashTool, edit::EditTool, git::GitTool, read::ReadTool, scan::ScanTool,
@@ -494,7 +505,9 @@ fn register_native_tools_with_task_state(
     tools.register(Arc::new(WriteTool));
     tools.register(Arc::new(ScanTool));
     tools.register(Arc::new(WebTool));
-    tools.register(Arc::new(SubagentTool::new()));
+    tools.register(Arc::new(SubagentTool::with_default_model(
+        default_subagent_model,
+    )));
     tools.register(Arc::new(TaskTool::new(Arc::clone(&task_state))));
     tools.register(Arc::new(WorkflowTool));
 }

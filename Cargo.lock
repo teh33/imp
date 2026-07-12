@@ -2719,10 +2719,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "imp-process"
+version = "0.3.5"
+dependencies = [
+ "libc",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "imp-subagent"
 version = "0.3.5"
 dependencies = [
  "fs2",
+ "imp-process",
  "libc",
  "serde",
  "serde_json",

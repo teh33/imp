@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use imp_process::{CommandSpec, ManagedChild, StreamMode};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{ArtifactPaths, Error, LaunchRequest, Record, Result, Status, STATE_VERSION};
@@ -39,6 +39,7 @@ impl Executor {
             version: STATE_VERSION,
             parent_id: request.parent_id,
             child_id: request.child_id,
+            model: Some(request.model),
             cwd: request.cwd,
             executable: request.executable,
             worker_executable: request.worker_executable,
@@ -62,19 +63,16 @@ impl Executor {
             updated_at_ms: now_ms(),
         };
         save_record(&record)?;
-        let mut worker = Command::new(&record.worker_executable);
-        worker
-            .arg("__imp-subagent-worker")
-            .arg(&record.artifacts.state)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            worker.process_group(0);
-        }
-        worker.spawn().map_err(|error| {
+        let mut worker = CommandSpec::new(&record.worker_executable);
+        worker.args = vec![
+            "__imp-subagent-worker".into(),
+            record.artifacts.state.to_string_lossy().into_owned(),
+        ];
+        worker.stdin = StreamMode::Null;
+        worker.stdout = StreamMode::Null;
+        worker.stderr = StreamMode::Null;
+        worker.process_group = true;
+        ManagedChild::spawn(&worker).map_err(|error| {
             Error::Process(format!("failed to start imp-subagent worker: {error}"))
         })?;
         wait_ready(&record)?;

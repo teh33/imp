@@ -35,6 +35,10 @@ impl ImpSubagentExecutor {
             .launch(imp_subagent::LaunchRequest {
                 parent_id: input.parent_run_id.as_str().into(),
                 child_id: input.child_run_id.as_str().into(),
+                model: input
+                    .model
+                    .clone()
+                    .ok_or_else(|| Error::Tool("subagent model was not resolved".into()))?,
                 cwd: ctx.cwd.clone(),
                 prompt: child_prompt(input),
                 executable: self.executable.clone(),
@@ -160,16 +164,15 @@ fn parent_id(cwd: &Path, child: &SubagentRunId) -> Result<String> {
             .join("subagents")
             .join(child.as_str())
             .join("state.json");
-        if state.is_file() {
-            if parent
+        if state.is_file()
+            && parent
                 .replace(entry.file_name().to_string_lossy().into_owned())
                 .is_some()
-            {
-                return Err(Error::Tool(format!(
-                    "ambiguous subagent child id `{}`",
-                    child.as_str()
-                )));
-            }
+        {
+            return Err(Error::Tool(format!(
+                "ambiguous subagent child id `{}`",
+                child.as_str()
+            )));
         }
     }
     parent.ok_or_else(|| {

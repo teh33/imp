@@ -447,6 +447,7 @@ pub fn workflow_subagent_input(
     SubagentInput {
         parent_run_id: ParentRunId::new(format!("workflow-{workflow_id}")),
         child_run_id,
+        model: None,
         role,
         objective: action.objective.clone(),
         context: SubagentContext {

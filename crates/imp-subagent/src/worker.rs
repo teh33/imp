@@ -1,10 +1,10 @@
-use std::fs::{self, File};
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use imp_process::{CommandSpec, ManagedChild, StreamMode};
 use serde_json::Value;
 
 use crate::events::{fail, handle_event, mark_worker_failed, remove_socket, send_child};
@@ -47,33 +47,27 @@ fn worker_unix(state: &Path) -> Result<()> {
     }
     let listener = UnixListener::bind(&record.socket)?;
     listener.set_nonblocking(true)?;
-    let stderr = File::create(&record.artifacts.stderr)?;
-    let mut command = Command::new(&record.executable);
-    command
-        .args(&record.child_args)
-        .args(["--mode", "rpc", "--session"])
-        .arg(&record.artifacts.session)
-        .envs(record.environment.iter().map(|(key, value)| (key, value)))
-        .current_dir(&record.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(stderr));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
+    let mut command = CommandSpec::new(&record.executable);
+    command.args = record.child_args.clone();
+    command.args.extend([
+        "--mode".into(),
+        "rpc".into(),
+        "--session".into(),
+        record.artifacts.session.to_string_lossy().into_owned(),
+    ]);
+    if let Some(model) = &record.model {
+        command.args.extend(["--model".into(), model.clone()]);
     }
-    let mut child = command
-        .spawn()
+    command.environment = record.environment.clone();
+    command.cwd = Some(record.cwd.clone());
+    command.stdin = StreamMode::Piped;
+    command.stdout = StreamMode::Piped;
+    command.stderr_file = Some(record.artifacts.stderr.clone());
+    command.process_group = true;
+    let mut child = ManagedChild::spawn(&command)
         .map_err(|error| Error::Process(format!("failed to start child imp: {error}")))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| Error::Process("child stdin unavailable".into()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| Error::Process("child stdout unavailable".into()))?;
+    let mut stdin = child.take_stdin().map_err(process_error)?;
+    let stdout = child.take_stdout().map_err(process_error)?;
     let (events_tx, events_rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(|line| line.ok()) {
@@ -167,7 +161,7 @@ fn worker_unix(state: &Path) -> Result<()> {
             save_record(&record)?;
             break;
         }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.try_wait().map_err(process_error)? {
             fail(
                 &mut record,
                 format!("child exited unexpectedly with {status}"),
@@ -176,21 +170,13 @@ fn worker_unix(state: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    #[cfg(unix)]
-    {
-        let _ = terminate_process_group(child.id());
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
+    let _ = child.terminate(Duration::from_secs(2));
     let _ = fs::remove_file(&record.socket);
     Ok(())
 }
 
 #[cfg(unix)]
-fn wait_rpc_ready(child: &mut Child, events: &Receiver<Value>) -> Result<()> {
+fn wait_rpc_ready(child: &mut ManagedChild, events: &Receiver<Value>) -> Result<()> {
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
         match events.recv_timeout(Duration::from_millis(20)) {
@@ -208,7 +194,7 @@ fn wait_rpc_ready(child: &mut Child, events: &Receiver<Value>) -> Result<()> {
                 ))
             }
         }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = child.try_wait().map_err(process_error)? {
             return Err(Error::Process(format!(
                 "child exited during RPC startup with {status}"
             )));
@@ -220,13 +206,7 @@ fn wait_rpc_ready(child: &mut Child, events: &Receiver<Value>) -> Result<()> {
         }
     }
 }
-#[cfg(unix)]
-fn terminate_process_group(pid: u32) -> Result<()> {
-    let pid = i32::try_from(pid).map_err(|_| Error::Process("pid exceeds i32".into()))?;
-    // SAFETY: the child is made its own process group before spawn.
-    let result = unsafe { libc::kill(-pid, libc::SIGTERM) };
-    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(Error::Io(std::io::Error::last_os_error()))
+
+fn process_error(error: imp_process::Error) -> Error {
+    Error::Process(error.to_string())
 }

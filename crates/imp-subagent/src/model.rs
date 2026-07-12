@@ -62,6 +62,8 @@ pub struct Record {
     pub version: u32,
     pub parent_id: String,
     pub child_id: String,
+    #[serde(default)]
+    pub model: Option<String>,
     pub cwd: PathBuf,
     pub executable: PathBuf,
     pub worker_executable: PathBuf,
@@ -84,6 +86,7 @@ pub struct Record {
 pub struct LaunchRequest {
     pub parent_id: String,
     pub child_id: String,
+    pub model: String,
     pub cwd: PathBuf,
     pub prompt: String,
     pub executable: PathBuf,

@@ -25,6 +25,7 @@ default-members = [
     "crates/imp-llm",
     "crates/imp-audit",
     "crates/imp-core",
+    "crates/imp-process",
     "crates/imp-subagent",
     "crates/imp-lua",
     "crates/imp-tui",
@@ -36,6 +37,7 @@ members = [
     "crates/imp-llm",
     "crates/imp-audit",
     "crates/imp-core",
+    "crates/imp-process",
     "crates/imp-subagent",
     "crates/imp-lua",
     "crates/imp-tui",
@@ -110,6 +112,7 @@ project-detect = "0.1"
 imp-llm = { version = "0.3.0", path = "crates/imp-llm" }
 imp-audit = { version = "0.3.0", path = "crates/imp-audit" }
 imp-core = { version = "0.3.0", path = "crates/imp-core" }
+imp-process = { version = "0.3.0", path = "crates/imp-process" }
 imp-subagent = { version = "0.3.0", path = "crates/imp-subagent" }
 imp-lua = { version = "0.3.0", path = "crates/imp-lua" }
 imp-tui = { version = "0.3.0", path = "crates/imp-tui" }

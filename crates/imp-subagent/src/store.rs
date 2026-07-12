@@ -35,6 +35,7 @@ pub(crate) fn save_record(record: &Record) -> Result<()> {
     fs::create_dir_all(parent)?;
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(parent.join("state.lock"))?;

@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 
 pub struct SubagentTool {
     executor: ImpSubagentExecutor,
+    default_model: Option<String>,
 }
 
 impl Default for SubagentTool {
@@ -24,9 +25,25 @@ impl Default for SubagentTool {
 
 impl SubagentTool {
     pub fn new() -> Self {
+        Self::with_default_model(None)
+    }
+
+    pub fn with_default_model(default_model: Option<String>) -> Self {
         Self {
             executor: ImpSubagentExecutor::from_current_executable(),
+            default_model,
         }
+    }
+
+    fn resolve_model(&self, mut input: SubagentInput) -> Result<SubagentInput> {
+        input.model = Some(self.resolved_model(input.model)?);
+        Ok(input)
+    }
+
+    fn resolved_model(&self, explicit: Option<String>) -> Result<String> {
+        explicit
+            .or_else(|| self.default_model.clone())
+            .ok_or_else(|| Error::Tool("subagent launch requires a resolved model".into()))
     }
 }
 
@@ -72,9 +89,11 @@ impl Tool for SubagentTool {
             .map_err(|error| Error::Tool(format!("invalid subagent params: {error}")))?;
         match params.action.as_str() {
             "launch" => self.launch(
-                params
-                    .input
-                    .ok_or_else(|| Error::Tool("missing `input` parameter".into()))?,
+                self.resolve_model(
+                    params
+                        .input
+                        .ok_or_else(|| Error::Tool("missing `input` parameter".into()))?,
+                )?,
                 &ctx,
             ),
             "status" => self.status(child_id(params.child_run_id)?, &ctx),

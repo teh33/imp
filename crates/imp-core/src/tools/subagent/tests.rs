@@ -16,3 +16,18 @@ fn subagent_ids_reject_path_traversal() {
     assert!(valid_id("../child").is_err());
     assert!(valid_id("").is_err());
 }
+
+#[test]
+fn explicit_subagent_model_overrides_configured_default() {
+    let tool = SubagentTool::with_default_model(Some("default-child".into()));
+    assert_eq!(
+        tool.resolved_model(Some("explicit-child".into())).unwrap(),
+        "explicit-child"
+    );
+}
+
+#[test]
+fn configured_subagent_model_fills_missing_contract_model() {
+    let tool = SubagentTool::with_default_model(Some("default-child".into()));
+    assert_eq!(tool.resolved_model(None).unwrap(), "default-child");
+}

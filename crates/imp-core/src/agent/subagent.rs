@@ -101,6 +101,8 @@ pub enum SubagentMergePolicy {
 pub struct SubagentInput {
     pub parent_run_id: ParentRunId,
     pub child_run_id: SubagentRunId,
+    #[serde(default)]
+    pub model: Option<String>,
     pub role: SubagentRole,
     pub objective: String,
     pub context: SubagentContext,
@@ -324,6 +326,7 @@ mod tests {
         SubagentInput {
             parent_run_id: ParentRunId::new("parent-1"),
             child_run_id: SubagentRunId::new("child-1"),
+            model: None,
             role: SubagentRole::Verifier,
             objective: "Check the patch".to_string(),
             context: SubagentContext::default(),
