@@ -362,8 +362,26 @@ async fn bash_cancellation_during_execution() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
 
-    let result = task.await.unwrap().unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("bash cancellation should be prompt")
+        .unwrap()
+        .unwrap();
     assert!(result.details["cancelled"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn foreground_bash_closes_stdin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ctx, _rx) = test_ctx(tmp.path());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        run_command("cat; printf eof", DEFAULT_TIMEOUT_SECS, &ctx, Vec::new()),
+    )
+    .await
+    .expect("foreground bash should receive stdin EOF")
+    .unwrap();
+    assert!(result.text_content().unwrap_or_default().contains("eof"));
 }
 
 #[tokio::test]

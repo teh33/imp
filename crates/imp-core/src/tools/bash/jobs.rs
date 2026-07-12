@@ -37,6 +37,7 @@ impl BashJobs {
             .start(request)
             .await
             .map_err(|error| Error::Tool(error.to_string()))?;
+        self.prune(manager);
         self.remember(info.id);
         let output = manager
             .observe(
@@ -93,6 +94,10 @@ impl BashJobs {
             .map_err(|error| Error::Tool(error.to_string()))?;
         lock(&self.cursors).insert(id, output.next_cursor);
         Ok(job_output(manager, output, stopped))
+    }
+
+    fn prune(&self, manager: &ProcessManager) {
+        lock(&self.cursors).retain(|id, _| manager.get(*id).is_ok());
     }
 }
 

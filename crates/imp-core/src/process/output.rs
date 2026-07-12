@@ -57,7 +57,8 @@ impl OutputBuffer {
             }
             let offset = effective.saturating_sub(chunk.start) as usize;
             let available = &chunk.bytes[offset..];
-            let take = available.len().min(remaining);
+            let requested = available.len().min(remaining);
+            let take = complete_utf8_prefix_len(available, requested);
             let bytes = &available[..take];
             let start = chunk.start + offset as u64;
             next = start + take as u64;
@@ -89,9 +90,10 @@ impl OutputBuffer {
             };
             let excess = self.retained_bytes - self.capacity_bytes;
             if excess < chunk.bytes.len() {
-                chunk.bytes.drain(..excess);
-                chunk.start += excess as u64;
-                self.retained_bytes -= excess;
+                let evicted = complete_utf8_suffix_start(&chunk.bytes, excess);
+                chunk.bytes.drain(..evicted);
+                chunk.start += evicted as u64;
+                self.retained_bytes -= evicted;
                 self.first_position = chunk.start;
                 self.chunks.push_front(chunk);
                 break;
@@ -100,6 +102,28 @@ impl OutputBuffer {
             self.first_position = chunk.start + chunk.bytes.len() as u64;
         }
     }
+}
+
+fn complete_utf8_prefix_len(bytes: &[u8], requested: usize) -> usize {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return requested;
+    };
+    let mut end = requested;
+    while end < bytes.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+    end
+}
+
+fn complete_utf8_suffix_start(bytes: &[u8], requested: usize) -> usize {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return requested;
+    };
+    let mut start = requested;
+    while start < bytes.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    start
 }
 
 pub(crate) struct BufferRead {
@@ -122,5 +146,19 @@ mod tests {
         assert!(read.evicted);
         assert_eq!(read.chunks[0].text, "cdef");
         assert_eq!(read.next_position, 6);
+    }
+
+    #[test]
+    fn read_and_eviction_preserve_utf8_boundaries() {
+        let id = ProcessId::new();
+        let mut buffer = OutputBuffer::new(id, 4);
+        buffer.push(OutputStream::Stdout, "aébc".as_bytes());
+        let retained = buffer.read(0, 8);
+        assert!(retained.evicted);
+        assert_eq!(retained.chunks[0].text, "ébc");
+
+        let first = buffer.read(retained.chunks[0].start, 2);
+        assert_eq!(first.chunks[0].text, "é");
+        assert!(!first.chunks[0].text.contains('\u{fffd}'));
     }
 }

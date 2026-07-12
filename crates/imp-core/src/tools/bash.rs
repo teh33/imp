@@ -662,6 +662,10 @@ async fn run_command_with_manager(
         .start(request)
         .await
         .map_err(|error| Error::Tool(error.to_string()))?;
+    manager
+        .close_stdin(process.id)
+        .await
+        .map_err(|error| Error::Tool(error.to_string()))?;
     let mut cursor = OutputCursor::start(process.id);
     let mut output = String::new();
     let mut pending = String::new();
@@ -678,9 +682,10 @@ async fn run_command_with_manager(
                 .map_err(|error| Error::Tool(error.to_string()))?;
         }
         let read = manager
-            .collect_until_terminal(process.id, &mut cursor)
+            .observe(process.id, cursor, Duration::from_millis(20), usize::MAX)
             .await
             .map_err(|error| Error::Tool(error.to_string()))?;
+        cursor = read.next_cursor;
         let terminal_and_drained = read.state.is_terminal() && !read.response_truncated;
         for chunk in read.chunks {
             let clean = sanitize_output_text(&chunk.text);

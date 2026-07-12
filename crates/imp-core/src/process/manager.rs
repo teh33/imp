@@ -19,7 +19,7 @@ use super::{
 };
 
 const DEFAULT_RETENTION_BYTES: usize = 64 * 1024;
-const MAX_RETENTION_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RETENTION_BYTES: usize = 17 * 1024 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const EVENT_CAPACITY: usize = 256;
 

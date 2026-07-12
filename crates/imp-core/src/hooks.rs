@@ -365,6 +365,10 @@ async fn run_hook_shell_command(
         .start(request)
         .await
         .map_err(|error| error.to_string())?;
+    manager
+        .close_stdin(info.id)
+        .await
+        .map_err(|error| error.to_string())?;
     let exit = manager
         .wait(info.id)
         .await

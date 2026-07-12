@@ -17,17 +17,45 @@ pub(super) fn spawn_drain(
     tokio::spawn(async move {
         let mut bytes = vec![0; 8192];
         let mut redactor = StreamRedactor::new(redactions);
+        let mut pending_utf8 = Vec::new();
         loop {
             let Ok(count) = reader.read(&mut bytes).await else {
                 break;
             };
             if count == 0 {
-                publish_output(&record, &events, stream, &redactor.finish());
+                pending_utf8.extend_from_slice(&redactor.finish());
+                publish_output(&record, &events, stream, &pending_utf8);
                 break;
             }
-            publish_output(&record, &events, stream, &redactor.push(&bytes[..count]));
+            pending_utf8.extend_from_slice(&redactor.push(&bytes[..count]));
+            let publishable = publishable_utf8_len(&pending_utf8);
+            publish_output(&record, &events, stream, &pending_utf8[..publishable]);
+            pending_utf8.drain(..publishable);
         }
     })
+}
+
+fn publishable_utf8_len(bytes: &[u8]) -> usize {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => bytes.len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publishable_utf8_len;
+
+    #[test]
+    fn retains_incomplete_utf8_suffix() {
+        let value = "page café".as_bytes();
+        assert_eq!(
+            publishable_utf8_len(&value[..value.len() - 1]),
+            value.len() - 2
+        );
+        assert_eq!(publishable_utf8_len(value), value.len());
+    }
 }
 
 fn publish_output(
