@@ -2502,10 +2502,6 @@ async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::resolve(&imp_core::storage::global_root(), Some(&cwd))?;
     emit_startup_timing(&mut startup_timer, StartupStage::ConfigResolved);
     let stdout_tx = spawn_json_lines_stdout_writer();
-    stdout_tx
-        .send(rpc_ready_event())
-        .await
-        .map_err(|error| io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))?;
     let rpc_ui = Arc::new(RpcUi::new(stdout_tx.clone()));
     let pending_ui = rpc_ui.pending();
     let options = rpc_session_options(cli, &cwd, &config, rpc_ui);
