@@ -8,6 +8,8 @@ use crate::policy::{RunPolicy, ToolPolicyDecision as RunToolDecision, WritePolic
 use crate::workflow::{RiskLevel, WorkflowContract, WorkflowType, WorkspaceScope};
 use crate::{guardrails::GuardrailLevel, hooks::HookResult, trust::Provenance};
 
+mod workspace_boundary;
+
 /// Central policy boundary for deciding whether a tool/action may proceed.
 ///
 /// This initial type is a model-only facade. Later tasks route tool execution
@@ -501,7 +503,7 @@ impl ReferenceMonitor {
         if path.as_os_str().is_empty() {
             return false;
         }
-        !path.starts_with(cwd)
+        !workspace_boundary::contains(cwd, path)
     }
 }
 
@@ -595,7 +597,7 @@ impl ToolPolicyContext {
             || self.resource_scope.path().is_some_and(|path| {
                 self.cwd
                     .as_deref()
-                    .is_some_and(|cwd| !path.starts_with(cwd))
+                    .is_some_and(|cwd| !workspace_boundary::contains(cwd, path))
             })
     }
 }
