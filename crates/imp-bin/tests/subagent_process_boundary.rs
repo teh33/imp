@@ -11,7 +11,7 @@ fn fake_child(dir: &std::path::Path) -> PathBuf {
         &path,
         r##"#!/usr/bin/env python3
 import json, sys
-print(json.dumps({"type":"rpc_ready","protocol":"imp-rpc","version":1}), flush=True)
+print(json.dumps({"type":"rpc_ready","protocol":"imp-rpc","version":1,"capabilities":["prompt","followup","cancel"]}), flush=True)
 for line in sys.stdin:
     command = json.loads(line)
     message = {"role":"assistant","content":[{"type":"text","text":command["content"]}]}
@@ -41,6 +41,7 @@ fn durable_imp_subagent_worker_uses_only_imp_process_boundaries() {
         .launch(LaunchRequest {
             parent_id: "parent_1".into(),
             child_id: "child_1".into(),
+            model: "test-model".into(),
             cwd: temp.path().to_path_buf(),
             prompt: "first".into(),
             executable: fake_child(temp.path()),
@@ -73,6 +74,7 @@ fn durable_imp_subagent_worker_uses_only_imp_process_boundaries() {
         .launch(LaunchRequest {
             parent_id: "parent_1".into(),
             child_id: "child_2".into(),
+            model: "test-model".into(),
             cwd: temp.path().to_path_buf(),
             prompt: "third".into(),
             executable: fake_child(temp.path()),
