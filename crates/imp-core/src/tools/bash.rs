@@ -1,13 +1,19 @@
-use std::process::Stdio;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
-use crate::child_process::{isolate_tokio_command, terminate_tokio_process_group};
+use crate::process::{
+    CommandSpec, ExecutionGrant, OutputCursor, ProcessManager, ProcessMode, ProcessRequest,
+    SecretEnvironment,
+};
+
+#[path = "bash/jobs.rs"]
+mod jobs;
+use jobs::BashJobs;
 
 use imp_llm::auth::AuthStore;
 
@@ -361,9 +367,49 @@ fn truncate_command_output(command: &str, output: &str) -> TruncationResult {
 
 pub struct BashTool;
 
+pub struct SharedBashTool {
+    manager: ProcessManager,
+    jobs: BashJobs,
+}
+
 impl BashTool {
-    pub fn canonical() -> Self {
-        Self
+    pub fn canonical() -> SharedBashTool {
+        SharedBashTool {
+            manager: ProcessManager::new(),
+            jobs: BashJobs::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for SharedBashTool {
+    fn name(&self) -> &str {
+        "bash"
+    }
+
+    fn label(&self) -> &str {
+        "Shell"
+    }
+
+    fn description(&self) -> &str {
+        "Run a shell command, or poll, write to, or stop a managed background job."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        bash_parameters()
+    }
+
+    fn is_readonly(&self) -> bool {
+        false
+    }
+
+    async fn execute(
+        &self,
+        _call_id: &str,
+        params: serde_json::Value,
+        ctx: ToolContext,
+    ) -> Result<ToolOutput> {
+        execute_bash(&self.manager, Some(&self.jobs), params, ctx).await
     }
 }
 
@@ -379,20 +425,7 @@ impl Tool for BashTool {
         "Run a shell command in the workspace or an optional workdir."
     }
     fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "command": { "type": "string" },
-                "timeout": { "type": "number" },
-                "workdir": { "type": "string" },
-                "with_secrets": {
-                    "type": "array",
-                    "description": "Imp secret names to expose as deterministic env vars.",
-                    "items": { "type": "string" }
-                }
-            },
-            "required": ["command"]
-        })
+        bash_parameters()
     }
     fn is_readonly(&self) -> bool {
         false
@@ -404,39 +437,157 @@ impl Tool for BashTool {
         params: serde_json::Value,
         ctx: ToolContext,
     ) -> Result<ToolOutput> {
-        let command = params["command"]
-            .as_str()
-            .ok_or_else(|| crate::error::Error::Tool("missing 'command' parameter".into()))?;
-
-        let timeout_secs = params["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
-
-        // Support per-command workdir override
-        let ctx = if let Some(workdir) = params["workdir"].as_str() {
-            let wd = super::resolve_path(&ctx.cwd, workdir);
-            if !wd.is_dir() {
-                return Ok(ToolOutput::error(format!(
-                    "workdir not found or not a directory: {}",
-                    wd.display()
-                )));
-            }
-            ToolContext { cwd: wd, ..ctx }
-        } else {
-            ctx
-        };
-
-        let with_secrets = parse_with_secrets(params.get("with_secrets"))?;
-
-        run_command(command, timeout_secs, &ctx, with_secrets).await
+        execute_bash(&ProcessManager::new(), None, params, ctx).await
     }
 }
 
+fn bash_parameters() -> serde_json::Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string" },
+                    "background": { "type": "boolean", "default": false },
+                    "yield_time_ms": { "type": "integer", "minimum": 0, "maximum": 5000 },
+                    "timeout": { "type": "number" },
+                    "workdir": { "type": "string" },
+                    "with_secrets": {
+                        "type": "array",
+                        "description": "Imp secret names to expose as deterministic env vars.",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["command"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "job_id": { "type": "string" },
+                    "stdin": { "type": "string" },
+                    "stop": { "type": "boolean", "default": false },
+                    "yield_time_ms": { "type": "integer", "minimum": 0, "maximum": 5000 }
+                },
+                "required": ["job_id"]
+            }
+        ]
+    })
+}
+
+async fn execute_bash(
+    manager: &ProcessManager,
+    jobs: Option<&BashJobs>,
+    params: serde_json::Value,
+    ctx: ToolContext,
+) -> Result<ToolOutput> {
+    let has_command = params.get("command").is_some();
+    let has_job = params.get("job_id").is_some();
+    if has_command == has_job {
+        return Err(Error::Tool(
+            "provide exactly one of 'command' or 'job_id'".into(),
+        ));
+    }
+    if has_job {
+        let jobs =
+            jobs.ok_or_else(|| Error::Tool("managed jobs require the canonical bash tool".into()))?;
+        return jobs.interact(manager, &params, &ctx).await;
+    }
+    let command = params["command"]
+        .as_str()
+        .ok_or_else(|| crate::error::Error::Tool("missing 'command' parameter".into()))?;
+
+    let timeout_secs = params["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+    // Support per-command workdir override
+    let ctx = if let Some(workdir) = params["workdir"].as_str() {
+        let wd = super::resolve_path(&ctx.cwd, workdir);
+        if !wd.is_dir() {
+            return Ok(ToolOutput::error(format!(
+                "workdir not found or not a directory: {}",
+                wd.display()
+            )));
+        }
+        ToolContext { cwd: wd, ..ctx }
+    } else {
+        ctx
+    };
+
+    let with_secrets = parse_with_secrets(params.get("with_secrets"))?;
+    if params
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let jobs =
+            jobs.ok_or_else(|| Error::Tool("managed jobs require the canonical bash tool".into()))?;
+        return jobs
+            .start(manager, command, timeout_secs, &ctx, with_secrets, &params)
+            .await;
+    }
+
+    run_command_with_manager(manager, command, timeout_secs, &ctx, with_secrets).await
+}
+
+#[cfg(test)]
 async fn run_command(
     command: &str,
     timeout_secs: u64,
     ctx: &ToolContext,
     with_secrets: Vec<RequestedSecret>,
 ) -> Result<ToolOutput> {
-    // Check cancellation before spawning.
+    run_command_with_manager(
+        &ProcessManager::new(),
+        command,
+        timeout_secs,
+        ctx,
+        with_secrets,
+    )
+    .await
+}
+
+fn build_process_request(
+    command: &str,
+    timeout_secs: u64,
+    ctx: &ToolContext,
+    resolved_secret_env: &[ResolvedSecretEnvBinding],
+) -> ProcessRequest {
+    let shell = detect_shell(&ctx.config.shell);
+    let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    let mut grant = ExecutionGrant::host(&ctx.cwd);
+    grant.allowed_environment = environment.keys().cloned().collect();
+    grant.approved_secret_ids = injected_secret_names(resolved_secret_env)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    grant.approved_secret_environment = injected_env_names(resolved_secret_env)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let secret_environment = resolved_secret_env
+        .iter()
+        .map(|binding| SecretEnvironment {
+            secret_id: binding.secret_name.clone(),
+            name: binding.env.clone(),
+            value: binding.value.clone(),
+        })
+        .collect();
+    ProcessRequest {
+        command: CommandSpec::new(shell).with_arguments(["-c".into(), command.into()]),
+        cwd: ctx.cwd.clone(),
+        environment,
+        approved_secret_environment: secret_environment,
+        mode: ProcessMode::Pipes,
+        timeout: Some(Duration::from_secs(timeout_secs)),
+        output_retention_bytes: 4 * 1024 * 1024,
+        grant,
+    }
+}
+
+async fn run_command_with_manager(
+    manager: &ProcessManager,
+    command: &str,
+    timeout_secs: u64,
+    ctx: &ToolContext,
+    with_secrets: Vec<RequestedSecret>,
+) -> Result<ToolOutput> {
     if ctx.is_cancelled() {
         return Ok(ToolOutput {
             content: vec![imp_llm::ContentBlock::Text {
@@ -506,106 +657,56 @@ async fn run_command(
         // rush failed — fall through to sh.
     }
 
-    let mut child = {
-        // Use configured shell for standard command execution.
-        let shell = detect_shell(&ctx.config.shell);
-        let mut cmd = Command::new(&shell);
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&ctx.cwd)
-            // Tool commands are non-interactive. Keep stdin disconnected so
-            // subprocesses cannot consume raw terminal input (for example SGR
-            // mouse reporting sequences) from the interactive TUI.
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        for binding in &resolved_secret_env {
-            cmd.env(&binding.env, &binding.value);
-        }
-
-        // Create a new process group so we can kill the entire tree.
-        isolate_tokio_command(&mut cmd);
-
-        cmd.spawn()
-            .map_err(|e| crate::error::Error::Tool(format!("failed to spawn command: {e}")))?
-    };
-
-    let stdout = child.stdout.take().ok_or_else(|| {
-        crate::error::Error::Tool(
-            "failed to capture child stdout despite stdout being piped".to_string(),
-        )
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        crate::error::Error::Tool(
-            "failed to capture child stderr despite stderr being piped".to_string(),
-        )
-    })?;
-
-    // Merge stdout and stderr into a single stream.
-    let mut stdout_reader = BufReader::new(stdout).lines();
-    let mut stderr_reader = BufReader::new(stderr).lines();
-
+    let request = build_process_request(command, timeout_secs, ctx, &resolved_secret_env);
+    let process = manager
+        .start(request)
+        .await
+        .map_err(|error| Error::Tool(error.to_string()))?;
+    manager
+        .close_stdin(process.id)
+        .await
+        .map_err(|error| Error::Tool(error.to_string()))?;
+    let mut cursor = OutputCursor::start(process.id);
     let mut output = String::new();
-    let mut timed_out = false;
-    let mut stdout_done = false;
-    let mut stderr_done = false;
+    let mut pending = String::new();
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-
-    while !stdout_done || !stderr_done {
-        tokio::select! {
-            biased;
-
-            _ = tokio::time::sleep_until(deadline) => {
-                timed_out = true;
-                terminate_tokio_process_group(&child).await;
-                break;
-            }
-
-            _ = wait_for_cancellation(&ctx.cancelled), if !ctx.is_cancelled() => {
-                terminate_tokio_process_group(&child).await;
-                break;
-            }
-
-            line = stdout_reader.next_line(), if !stdout_done => {
-                match line {
-                    Ok(Some(line)) => {
-                        if !line.bytes().any(|b| b == 0) {
-                            let clean = sanitize_output_text(&line);
-                            let clean = redact_injected_secrets(&clean, &resolved_secret_env);
-                            if !clean.is_empty() {
-                                append_line(&mut output, &clean, &ctx.update_tx).await;
-                            }
-                        }
-                    }
-                    _ => { stdout_done = true; }
-                }
-            }
-
-            line = stderr_reader.next_line(), if !stderr_done => {
-                match line {
-                    Ok(Some(line)) => {
-                        if !line.bytes().any(|b| b == 0) {
-                            let clean = sanitize_output_text(&line);
-                            let clean = redact_injected_secrets(&clean, &resolved_secret_env);
-                            if !clean.is_empty() {
-                                append_line(&mut output, &clean, &ctx.update_tx).await;
-                            }
-                        }
-                    }
-                    _ => { stderr_done = true; }
-                }
-            }
+    loop {
+        if ctx.is_cancelled()
+            && !manager
+                .get(process.id)
+                .is_ok_and(|info| info.state.is_terminal())
+        {
+            manager
+                .cancel(process.id)
+                .await
+                .map_err(|error| Error::Tool(error.to_string()))?;
+        }
+        let read = manager
+            .observe(process.id, cursor, Duration::from_millis(20), usize::MAX)
+            .await
+            .map_err(|error| Error::Tool(error.to_string()))?;
+        cursor = read.next_cursor;
+        let terminal_and_drained = read.state.is_terminal() && !read.response_truncated;
+        for chunk in read.chunks {
+            let clean = sanitize_output_text(&chunk.text);
+            pending.push_str(&clean);
+            stream_complete_lines(&mut pending, &mut output, &ctx.update_tx).await;
+        }
+        if terminal_and_drained {
+            break;
         }
     }
+    if !pending.is_empty() {
+        let line = std::mem::take(&mut pending);
+        append_line(&mut output, &line, &ctx.update_tx).await;
+    }
 
-    // Wait for child with a timeout — don't hang if process won't exit
-    let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+    let exit = manager
+        .wait(process.id)
         .await
-        .ok()
-        .and_then(|r| r.ok());
-    let exit_code = status.and_then(|s| s.code()).unwrap_or(-1);
+        .map_err(|error| Error::Tool(error.to_string()))?;
+    let exit_code = exit.code.unwrap_or(-1);
+    let timed_out = exit.timed_out;
 
     // Keep only redacted command output after streaming so any truncation temp
     // file cannot persist injected secret values to disk.
@@ -675,9 +776,17 @@ async fn run_command(
     })
 }
 
-async fn wait_for_cancellation(cancelled: &std::sync::atomic::AtomicBool) {
-    while !cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+async fn stream_complete_lines(
+    pending: &mut String,
+    output: &mut String,
+    update_tx: &tokio::sync::mpsc::Sender<ToolUpdate>,
+) {
+    while let Some(newline) = pending.find('\n') {
+        let line = pending.drain(..=newline).collect::<String>();
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
+        if !line.is_empty() && !line.bytes().any(|byte| byte == 0) {
+            append_line(output, line, update_tx).await;
+        }
     }
 }
 

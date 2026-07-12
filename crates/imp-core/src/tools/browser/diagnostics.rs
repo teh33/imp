@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::process::Command;
 
 mod protocol;
+mod version;
 use protocol::{probe_mcp, REQUIRED_TOOLS};
+use version::read_version;
 
 use super::BrowserConfig;
 
@@ -87,7 +87,7 @@ pub async fn diagnose_browser(config: &BrowserConfig) -> BrowserDiagnostic {
         DiagnosticStatus::Pass,
         format!("found {}", binary.display()),
     ));
-    match read_version(&binary).await {
+    match read_version(&binary, PROBE_TIMEOUT).await {
         Ok(version) => {
             report.version_supported = version_is_supported(&version);
             report.version = Some(version.clone());
@@ -160,30 +160,6 @@ pub fn resolve_lightpanda_binary(configured: Option<&Path>) -> Result<PathBuf, S
         }
     }
     Err("Lightpanda was not found. Install it or set browser.binary".into())
-}
-
-async fn read_version(binary: &Path) -> Result<String, String> {
-    let output = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        Command::new(binary)
-            .arg("version")
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| "Lightpanda version check timed out".to_string())?
-    .map_err(|error| format!("could not run Lightpanda version: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Lightpanda version failed with status {}",
-            output.status
-        ));
-    }
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if version.is_empty() {
-        return Err("Lightpanda version returned no version".into());
-    }
-    Ok(version)
 }
 
 fn version_is_supported(version: &str) -> bool {

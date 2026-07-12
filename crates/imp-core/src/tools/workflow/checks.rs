@@ -4,6 +4,7 @@ use std::path::Path;
 use chrono::Utc;
 use serde::Serialize;
 
+use super::check_execution::evaluate as evaluate_process_check;
 use super::render::CaseExt;
 use super::status::{
     append_workflow_event, open_workflow_event_file, set_mapping_string, set_nested_mapping_string,
@@ -11,6 +12,7 @@ use super::status::{
 use super::ToolContext;
 use super::WorkflowUpdateEvent;
 use crate::error::Result;
+use crate::process::ProcessManager;
 use crate::workflow::{CheckKind, CheckStatus, WorkflowCheck, WorkflowDocument};
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,8 +92,9 @@ pub(super) async fn run_command_checks(
         .parent()
         .and_then(Path::parent)
         .unwrap_or(workflows_root);
+    let manager = ProcessManager::new();
     for (check_id, check) in runnable {
-        let (status, reason, exit_code) = match evaluate_pending_check(check, cwd).await {
+        let (status, reason, exit_code) = match evaluate_pending_check(&manager, check, cwd).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 failed_check = true;
@@ -237,65 +240,14 @@ pub(super) fn reconcile_workflow_statuses(
     Ok(reconciled)
 }
 
-fn command_output_has_zero_test_evidence(stdout: &[u8], stderr: &[u8]) -> bool {
-    let mut combined = String::from_utf8_lossy(stdout).to_lowercase();
-    combined.push_str(&String::from_utf8_lossy(stderr).to_lowercase());
-    combined.contains("running 0 tests") || combined.contains("0 tests, 0 benchmarks")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::command_output_has_zero_test_evidence;
-
-    #[test]
-    fn workflow_zero_test_detection_matches_cargo_zero_tests() {
-        let stdout = b"running 0 tests\ntest result: ok. 0 passed; 0 failed";
-        assert!(command_output_has_zero_test_evidence(stdout, b""));
-    }
-
-    #[test]
-    fn workflow_zero_test_detection_ignores_nonempty_cargo_tests() {
-        let stdout = b"running 1 test\ntest result: ok. 1 passed; 0 failed";
-        assert!(!command_output_has_zero_test_evidence(stdout, b""));
-    }
-}
-
 async fn evaluate_pending_check(
+    manager: &ProcessManager,
     check: &WorkflowCheck,
     cwd: &Path,
 ) -> std::result::Result<(String, String, Option<i32>), String> {
     match check.kind {
-        CheckKind::Command => {
-            let command = check
-                .command
-                .as_deref()
-                .ok_or_else(|| "command check is missing command".to_string())?;
-            let output = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(cwd)
-                .output()
-                .await
-                .map_err(|error| format!("failed to run command check: {error}"))?;
-            let zero_test_evidence = output.status.success()
-                && command_output_has_zero_test_evidence(&output.stdout, &output.stderr);
-            let status = if output.status.success() && !zero_test_evidence {
-                "passed"
-            } else {
-                "failed"
-            };
-            let exit = output
-                .status
-                .code()
-                .map_or_else(|| "signal".to_string(), |code| code.to_string());
-            let reason = if zero_test_evidence {
-                format!(
-                    "command `{command}` exited with {exit} but matched zero tests; command checks require non-empty test evidence by default"
-                )
-            } else {
-                format!("command `{command}` exited with {exit}")
-            };
-            Ok((status.to_string(), reason, output.status.code()))
+        CheckKind::Command | CheckKind::ChangedFiles => {
+            evaluate_process_check(manager, check, cwd).await
         }
         CheckKind::Presence | CheckKind::Absence => {
             let path = check
@@ -330,41 +282,6 @@ async fn evaluate_pending_check(
                 status.to_string(),
                 format!("{} {} `{}`", path.display(), expectation, pattern),
                 None,
-            ))
-        }
-        CheckKind::ChangedFiles => {
-            if check.paths.is_empty() {
-                return Err("changed_files check is missing paths".to_string());
-            }
-            let mut command = tokio::process::Command::new("git");
-            command
-                .arg("status")
-                .arg("--porcelain")
-                .arg("--")
-                .args(&check.paths)
-                .current_dir(cwd);
-            let output = command
-                .output()
-                .await
-                .map_err(|error| format!("failed to inspect git status: {error}"))?;
-            if !output.status.success() {
-                return Err(format!(
-                    "git status failed with {}",
-                    output
-                        .status
-                        .code()
-                        .map_or_else(|| "signal".to_string(), |code| code.to_string())
-                ));
-            }
-            let changed = !String::from_utf8_lossy(&output.stdout).trim().is_empty();
-            let status = if changed { "passed" } else { "failed" };
-            Ok((
-                status.to_string(),
-                format!(
-                    "changed files check inspected {} path(s)",
-                    check.paths.len()
-                ),
-                output.status.code(),
             ))
         }
         _ => Err(format!("check kind {:?} is not runnable", check.kind)),

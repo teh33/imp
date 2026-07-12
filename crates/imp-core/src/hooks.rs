@@ -1,15 +1,16 @@
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use glob::Pattern;
 use imp_llm::{AssistantMessage, ContentBlock, Message, ToolResultMessage};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
 
-use crate::child_process::{isolate_tokio_command, kill_tokio_process_group};
+use crate::process::{
+    CommandSpec, ExecutionGrant, OutputCursor, OutputStream, ProcessManager, ProcessMode,
+    ProcessRequest,
+};
 
 const HOOK_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -154,6 +155,7 @@ pub struct HookResult {
 
 /// Manages and executes hooks.
 pub struct HookRunner {
+    process_manager: ProcessManager,
     /// TOML-defined hooks (fire first, in config order).
     toml_hooks: Vec<HookDefinition>,
     /// Programmatically registered hooks (fire after TOML hooks, in registration order).
@@ -165,6 +167,7 @@ pub struct HookRunner {
 impl HookRunner {
     pub fn new() -> Self {
         Self {
+            process_manager: ProcessManager::new(),
             toml_hooks: Vec::new(),
             programmatic_hooks: Vec::new(),
             background_reporter: None,
@@ -240,13 +243,14 @@ impl HookRunner {
             }
 
             if hook.blocking {
-                let result = execute_hook(hook, event).await;
+                let result = execute_hook(&self.process_manager, hook, event).await;
                 results.push(result);
             } else {
                 // Keep non-blocking hooks asynchronous, but supervise failures.
                 if let HookAction::Shell { command } = &hook.action {
                     let cmd = interpolate_command(command, event);
                     run_non_blocking_shell_hook(
+                        self.process_manager.clone(),
                         hook_event_label(event),
                         cmd,
                         self.background_reporter.clone(),
@@ -270,42 +274,45 @@ fn hook_event_label(event: &HookEvent<'_>) -> String {
     event.event_name().to_string()
 }
 
+#[derive(Debug)]
+struct HookCommandOutput {
+    success: bool,
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
 fn report_non_blocking_hook_outcome(
-    join_result: Result<std::io::Result<std::process::Output>, tokio::task::JoinError>,
+    join_result: Result<Result<HookCommandOutput, String>, tokio::task::JoinError>,
     event_name: String,
     command_for_report: String,
     reporter: Arc<dyn Fn(HookBackgroundEvent) + Send + Sync>,
 ) {
     match join_result {
-        Ok(Ok(output)) => {
-            if !output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let error = if !stderr.is_empty() {
-                    stderr
-                } else if !stdout.is_empty() {
-                    stdout
-                } else {
-                    format!(
-                        "command exited with status {}",
-                        output
-                            .status
-                            .code()
-                            .map(|code| code.to_string())
-                            .unwrap_or_else(|| "terminated by signal".into())
-                    )
-                };
-                reporter(HookBackgroundEvent::NonBlockingHookFailed {
-                    event: event_name,
-                    command: command_for_report,
-                    error,
-                });
-            }
+        Ok(Ok(output)) if !output.success => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let error = if !stderr.is_empty() {
+                stderr
+            } else if !stdout.is_empty() {
+                stdout
+            } else {
+                output.code.map_or_else(
+                    || "command terminated by signal".into(),
+                    |code| format!("command exited with status {code}"),
+                )
+            };
+            reporter(HookBackgroundEvent::NonBlockingHookFailed {
+                event: event_name,
+                command: command_for_report,
+                error,
+            });
         }
+        Ok(Ok(_)) => {}
         Ok(Err(error)) => reporter(HookBackgroundEvent::NonBlockingHookFailed {
             event: event_name,
             command: command_for_report,
-            error: error.to_string(),
+            error,
         }),
         Err(join_error) => reporter(HookBackgroundEvent::NonBlockingHookPanicked {
             event: event_name,
@@ -316,6 +323,7 @@ fn report_non_blocking_hook_outcome(
 }
 
 fn run_non_blocking_shell_hook(
+    manager: ProcessManager,
     event_name: String,
     command: String,
     reporter: Option<Arc<dyn Fn(HookBackgroundEvent) + Send + Sync>>,
@@ -324,7 +332,7 @@ fn run_non_blocking_shell_hook(
         let command_for_run = command.clone();
         let command_for_report = command;
         let join_result = tokio::spawn(async move {
-            run_hook_shell_command(&command_for_run, HOOK_COMMAND_TIMEOUT).await
+            run_hook_shell_command(&manager, &command_for_run, HOOK_COMMAND_TIMEOUT).await
         })
         .await;
 
@@ -335,48 +343,67 @@ fn run_non_blocking_shell_hook(
 }
 
 async fn run_hook_shell_command(
+    manager: &ProcessManager,
     command_text: &str,
     timeout: Duration,
-) -> std::io::Result<std::process::Output> {
-    let mut command = Command::new("sh");
-    command
-        .arg("-c")
-        .arg(command_text)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    isolate_tokio_command(&mut command);
-
-    let mut child = command.spawn()?;
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-    match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(status_result) => {
-            let status = status_result?;
-            let mut stdout_bytes = Vec::new();
-            let mut stderr_bytes = Vec::new();
-            if let Some(mut stream) = stdout.take() {
-                stream.read_to_end(&mut stdout_bytes).await?;
+) -> Result<HookCommandOutput, String> {
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+    let mut grant = ExecutionGrant::host(&cwd);
+    grant.allowed_environment = environment.keys().cloned().collect();
+    let request = ProcessRequest {
+        command: CommandSpec::new("sh").with_arguments(["-c".into(), command_text.into()]),
+        cwd,
+        environment,
+        approved_secret_environment: Vec::new(),
+        mode: ProcessMode::Pipes,
+        timeout: Some(timeout),
+        output_retention_bytes: 256 * 1024,
+        grant,
+    };
+    let info = manager
+        .start(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    manager
+        .close_stdin(info.id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let exit = manager
+        .wait(info.id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut cursor = OutputCursor::start(info.id);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    loop {
+        let output = manager
+            .read(info.id, cursor, usize::MAX)
+            .await
+            .map_err(|error| error.to_string())?;
+        cursor = output.next_cursor;
+        for chunk in output.chunks {
+            match chunk.stream {
+                OutputStream::Stdout => stdout.extend_from_slice(chunk.text.as_bytes()),
+                OutputStream::Stderr => stderr.extend_from_slice(chunk.text.as_bytes()),
             }
-            if let Some(mut stream) = stderr.take() {
-                stream.read_to_end(&mut stderr_bytes).await?;
-            }
-            Ok(std::process::Output {
-                status,
-                stdout: stdout_bytes,
-                stderr: stderr_bytes,
-            })
         }
-        Err(_) => {
-            kill_tokio_process_group(&child).await;
-            let _ = child.kill().await;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("hook command timed out after {}s", timeout.as_secs()),
-            ))
+        if !output.response_truncated {
+            break;
         }
     }
+    if exit.timed_out {
+        return Err(format!(
+            "hook command timed out after {}s",
+            timeout.as_secs()
+        ));
+    }
+    Ok(HookCommandOutput {
+        success: exit.code == Some(0),
+        code: exit.code,
+        stdout,
+        stderr,
+    })
 }
 
 fn resolve_hook_def(def: HookDef) -> Option<HookDefinition> {
@@ -550,18 +577,22 @@ fn shell_double_quote(value: &str) -> String {
 }
 
 /// Execute a single hook and return its result.
-async fn execute_hook(hook: &HookDefinition, event: &HookEvent<'_>) -> HookResult {
+async fn execute_hook(
+    manager: &ProcessManager,
+    hook: &HookDefinition,
+    event: &HookEvent<'_>,
+) -> HookResult {
     match &hook.action {
         HookAction::Shell { command } => {
             let cmd = interpolate_command(command, event);
-            match run_hook_shell_command(&cmd, HOOK_COMMAND_TIMEOUT).await {
+            match run_hook_shell_command(manager, &cmd, HOOK_COMMAND_TIMEOUT).await {
                 Ok(output) => {
                     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
                     // A non-zero exit code on a BeforeToolCall hook means "block"
-                    let block = matches!(event, HookEvent::BeforeToolCall { .. })
-                        && !output.status.success();
+                    let block =
+                        matches!(event, HookEvent::BeforeToolCall { .. }) && !output.success;
 
                     let reason = if block {
                         Some(if stderr.is_empty() {
@@ -576,7 +607,7 @@ async fn execute_hook(hook: &HookDefinition, event: &HookEvent<'_>) -> HookResul
                     // For AfterToolCall, stdout is treated as modified content
                     let modified_content = if matches!(event, HookEvent::AfterToolCall { .. })
                         && !stdout.trim().is_empty()
-                        && output.status.success()
+                        && output.success
                     {
                         Some(vec![ContentBlock::Text {
                             text: stdout.trim().to_string(),

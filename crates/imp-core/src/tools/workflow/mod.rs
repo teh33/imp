@@ -9,6 +9,7 @@ use crate::agent::SubagentInput;
 use crate::error::Result;
 use crate::workflow::{ValidateOptions, ValidationMode};
 
+mod check_execution;
 mod checks;
 mod contracts;
 mod files;

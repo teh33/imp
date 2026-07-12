@@ -12,6 +12,7 @@ mod schema;
 mod service;
 mod verification;
 mod verification_runner;
+mod verification_runner_execution;
 mod worktree_run;
 
 pub use bootstrap::*;

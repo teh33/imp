@@ -1,20 +1,20 @@
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
+use super::client_process::process_request;
 use super::config::BrowserConfig;
+use crate::process::{OutputCursor, OutputStream, ProcessId, ProcessManager, StopOptions};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 pub(crate) struct LightpandaClient {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    manager: ProcessManager,
+    process_id: ProcessId,
+    cursor: OutputCursor,
+    response_buffer: String,
     next_id: u64,
     max_response_bytes: usize,
 }
@@ -25,41 +25,18 @@ impl LightpandaClient {
         cwd: &std::path::Path,
     ) -> Result<Self, String> {
         let binary = super::resolve_lightpanda_binary(config.binary.as_deref())?;
-        let mut command = Command::new(&binary);
-        command
-            .arg("mcp")
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .env_clear()
-            .env("LIGHTPANDA_DISABLE_TELEMETRY", "true")
-            .env("LIGHTPANDA_DISABLE_CORE_DUMP", "1");
-        if config.obey_robots {
-            command.arg("--obey-robots");
-        }
-        if config.block_private_networks {
-            command.arg("--block-private-networks");
-        }
-        let mut child = command.spawn().map_err(|error| {
+        let manager = ProcessManager::new();
+        let process = manager.start(process_request(&binary, config, cwd)).await.map_err(|error| {
             format!(
                 "could not start Lightpanda at {}: {error}. Install Lightpanda or set browser.binary",
                 binary.display()
             )
         })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Lightpanda stdin was not available".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Lightpanda stdout was not available".to_string())?;
         let mut client = Self {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
+            manager,
+            process_id: process.id,
+            cursor: OutputCursor::start(process.id),
+            response_buffer: String::new(),
             next_id: 1,
             max_response_bytes: config.max_response_bytes,
         };
@@ -113,10 +90,10 @@ impl LightpandaClient {
             .and_then(Value::as_array)
             .ok_or_else(|| "Lightpanda tools/list response was invalid".to_string())?;
         for required in REQUIRED_TOOLS {
-            let found = tools
+            if !tools
                 .iter()
-                .any(|tool| tool.get("name").and_then(Value::as_str) == Some(*required));
-            if !found {
+                .any(|tool| tool.get("name").and_then(Value::as_str) == Some(*required))
+            {
                 return Err(format!(
                     "Lightpanda is incompatible: required MCP tool `{required}` is missing"
                 ));
@@ -153,19 +130,8 @@ impl LightpandaClient {
             "params": params
         }))
         .await?;
-
-        let line = tokio::time::timeout(
-            timeout,
-            read_line_bounded(&mut self.stdout, self.max_response_bytes),
-        )
-        .await
-        .map_err(|_| {
-            format!(
-                "Lightpanda {method} timed out after {} ms",
-                timeout.as_millis()
-            )
-        })??;
-        let response: Value = serde_json::from_slice(&line)
+        let line = self.read_response(method, timeout).await?;
+        let response: Value = serde_json::from_str(&line)
             .map_err(|error| format!("invalid JSON from Lightpanda: {error}"))?;
         if response.get("id").and_then(Value::as_u64) != Some(id) {
             return Err("Lightpanda returned a mismatched response id".into());
@@ -183,38 +149,94 @@ impl LightpandaClient {
             .ok_or_else(|| "Lightpanda response did not include a result".into())
     }
 
-    async fn write_message(&mut self, message: Value) -> Result<(), String> {
-        let mut encoded = serde_json::to_vec(&message)
-            .map_err(|error| format!("failed encoding Lightpanda request: {error}"))?;
-        encoded.push(b'\n');
-        self.stdin
-            .write_all(&encoded)
-            .await
-            .map_err(|error| format!("failed writing Lightpanda request: {error}"))?;
-        self.stdin
-            .flush()
-            .await
-            .map_err(|error| format!("failed flushing Lightpanda request: {error}"))
-    }
-
-    pub(crate) fn abort(&mut self) {
-        let _ = self.child.start_kill();
-    }
-
-    pub(crate) async fn shutdown(mut self) -> Result<(), String> {
-        let _ = self.stdin.shutdown().await;
-        match tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => Err(format!("failed waiting for Lightpanda: {error}")),
-            Err(_) => {
-                self.child
-                    .kill()
-                    .await
-                    .map_err(|error| format!("failed to stop Lightpanda: {error}"))?;
-                Ok(())
+    async fn read_response(&mut self, method: &str, timeout: Duration) -> Result<String, String> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if let Some(line) = take_line(&mut self.response_buffer) {
+                if line.len() > self.max_response_bytes {
+                    return Err(response_limit_error(self.max_response_bytes));
+                }
+                return Ok(line);
+            }
+            if self.response_buffer.len() > self.max_response_bytes {
+                return Err(response_limit_error(self.max_response_bytes));
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Err(timeout_error(method, timeout));
+            }
+            let output = self
+                .manager
+                .observe(self.process_id, self.cursor, deadline - now, 64 * 1024)
+                .await
+                .map_err(|error| format!("failed reading Lightpanda response: {error}"))?;
+            self.cursor = output.next_cursor;
+            if output.unread_output_evicted {
+                return Err(
+                    "Lightpanda response output was evicted before it could be read".into(),
+                );
+            }
+            for chunk in output.chunks {
+                if chunk.stream == OutputStream::Stdout {
+                    self.response_buffer.push_str(&chunk.text);
+                }
+            }
+            if output.state.is_terminal() {
+                return Err("Lightpanda exited before responding".into());
             }
         }
     }
+
+    async fn write_message(&self, message: Value) -> Result<(), String> {
+        let mut encoded = serde_json::to_vec(&message)
+            .map_err(|error| format!("failed encoding Lightpanda request: {error}"))?;
+        encoded.push(b'\n');
+        self.manager
+            .write(self.process_id, &encoded)
+            .await
+            .map(|_| ())
+            .map_err(|error| format!("failed writing Lightpanda request: {error}"))
+    }
+
+    pub(crate) fn abort(&mut self) {
+        self.manager = ProcessManager::new();
+    }
+
+    pub(crate) async fn shutdown(self) -> Result<(), String> {
+        self.manager
+            .close_stdin(self.process_id)
+            .await
+            .map_err(|error| format!("failed closing Lightpanda stdin: {error}"))?;
+        match tokio::time::timeout(Duration::from_secs(2), self.manager.wait(self.process_id)).await
+        {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => Err(format!("failed waiting for Lightpanda: {error}")),
+            Err(_) => self
+                .manager
+                .stop(self.process_id, StopOptions::default())
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("failed to stop Lightpanda: {error}")),
+        }
+    }
+}
+
+fn take_line(buffer: &mut String) -> Option<String> {
+    let newline = buffer.find('\n')?;
+    let line = buffer[..newline].trim_end_matches('\r').to_string();
+    buffer.drain(..=newline);
+    Some(line)
+}
+
+fn response_limit_error(max_bytes: usize) -> String {
+    format!("Lightpanda response exceeded {max_bytes} bytes")
+}
+
+fn timeout_error(method: &str, timeout: Duration) -> String {
+    format!(
+        "Lightpanda {method} timed out after {} ms",
+        timeout.as_millis()
+    )
 }
 
 const REQUIRED_TOOLS: &[&str] = &[
@@ -239,35 +261,6 @@ const REQUIRED_TOOLS: &[&str] = &[
 async fn wait_for_cancellation(cancelled: Arc<AtomicBool>) {
     while !cancelled.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-async fn read_line_bounded(
-    reader: &mut BufReader<ChildStdout>,
-    max_bytes: usize,
-) -> Result<Vec<u8>, String> {
-    let mut line = Vec::new();
-    loop {
-        let available = reader
-            .fill_buf()
-            .await
-            .map_err(|error| format!("failed reading Lightpanda response: {error}"))?;
-        if available.is_empty() {
-            return Err("Lightpanda exited before responding".into());
-        }
-        let newline = available.iter().position(|byte| *byte == b'\n');
-        let take = newline.map_or(available.len(), |index| index + 1);
-        if line.len().saturating_add(take) > max_bytes {
-            return Err(format!("Lightpanda response exceeded {max_bytes} bytes"));
-        }
-        line.extend_from_slice(&available[..take]);
-        reader.consume(take);
-        if newline.is_some() {
-            while matches!(line.last(), Some(b'\n' | b'\r')) {
-                line.pop();
-            }
-            return Ok(line);
-        }
     }
 }
 
@@ -296,30 +289,6 @@ fn parse_tool_result(result: Value) -> Result<McpOutput, String> {
     })
 }
 
-impl Drop for LightpandaClient {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_text_tool_result() {
-        let result = parse_tool_result(json!({
-            "content": [{"type": "text", "text": "page state"}],
-            "isError": false
-        }))
-        .unwrap();
-        assert_eq!(result.text, "page state");
-        assert!(!result.is_error);
-    }
-
-    #[test]
-    fn rejects_tool_result_without_content() {
-        let error = parse_tool_result(json!({})).unwrap_err();
-        assert!(error.contains("content"));
-    }
-}
+#[path = "client_tests.rs"]
+mod tests;

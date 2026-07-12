@@ -1,6 +1,7 @@
 mod action;
 mod approval;
 mod client;
+mod client_process;
 mod config;
 mod diagnostics;
 mod installation;
