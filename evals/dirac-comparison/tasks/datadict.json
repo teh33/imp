@@ -1,14 +1,48 @@
 {
   "id": "datadict",
-  "source": "github.com/dirac-run/dirac evals/README.md master",
   "repo": "https://github.com/django/django.git",
   "commit": "253f552c5809fa096116b601bd842ca4f3504860",
   "prompt": "We want to rename the value_from_datadict method to extract_value_from_request in django.forms.Widget and all its subclasses, and update all calls to this method across the codebase. only update the code, no docs or txt files. make sure to run ruff using .venv locally (only run on the files you modify). do NOT run any tests",
-  "imp_command": "/Users/asher/imp/target/debug/imp --provider $PROVIDER --model $MODEL --mode json --max-turns 80 --print @prompt.md",
-  "verifier": ".venv/bin/ruff check <modified-files>",
+  "verifier": ".venv/bin/ruff check <modified-files> && ! git grep -n 'value_from_datadict' -- '*.py' && git grep -q 'extract_value_from_request' -- '*.py'",
   "dirac_reference": {
     "patch": "evals/dirac-comparison/reference/dirac/dirac_refactor_datadict",
     "metadata": "evals/dirac-comparison/reference/metadata/dirac/dirac_refactor_datadict.json",
     "source_url": "https://raw.githubusercontent.com/dirac-run/dirac/master/evals/dirac/dirac_refactor_datadict"
+  },
+  "setup": "test -x .venv/bin/python || uv venv .venv --python 3.12; uv pip install --python .venv/bin/python ruff==0.15.12",
+  "max_turns": 40,
+  "timeout_seconds": 1800,
+  "verifier_timeout_seconds": 300,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": [
+      "django/contrib/admin/widgets.py",
+      "django/contrib/postgres/forms/array.py",
+      "django/forms/forms.py",
+      "django/forms/widgets.py",
+      "tests/forms_tests/field_tests/test_booleanfield.py",
+      "tests/forms_tests/field_tests/test_datefield.py",
+      "tests/forms_tests/field_tests/test_nullbooleanfield.py",
+      "tests/forms_tests/widget_tests/test_checkboxinput.py",
+      "tests/forms_tests/widget_tests/test_clearablefileinput.py",
+      "tests/forms_tests/widget_tests/test_fileinput.py",
+      "tests/forms_tests/widget_tests/test_multiwidget.py",
+      "tests/forms_tests/widget_tests/test_selectdatewidget.py"
+    ],
+    "required_changed_paths": [
+      "django/contrib/admin/widgets.py",
+      "django/contrib/postgres/forms/array.py",
+      "django/forms/forms.py",
+      "django/forms/widgets.py",
+      "tests/forms_tests/field_tests/test_booleanfield.py",
+      "tests/forms_tests/field_tests/test_datefield.py",
+      "tests/forms_tests/field_tests/test_nullbooleanfield.py",
+      "tests/forms_tests/widget_tests/test_checkboxinput.py",
+      "tests/forms_tests/widget_tests/test_clearablefileinput.py",
+      "tests/forms_tests/widget_tests/test_fileinput.py",
+      "tests/forms_tests/widget_tests/test_multiwidget.py",
+      "tests/forms_tests/widget_tests/test_selectdatewidget.py"
+    ],
+    "max_files_changed": 12
   }
 }

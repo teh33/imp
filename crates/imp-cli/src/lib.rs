@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod cli_config;
+mod eval_cli;
+mod eval_runner;
 mod evidence;
 mod import;
 mod local_install;
@@ -241,6 +243,11 @@ enum Commands {
     },
     /// Repeat the same prompt until an exit condition is met
     Loop(LoopArgs),
+    /// Run and compare reproducible verifier-backed coding evaluations
+    Eval {
+        #[command(subcommand)]
+        command: eval_cli::EvalCommand,
+    },
     /// Open or inspect run evidence artifacts
     Evidence {
         #[command(subcommand)]
@@ -534,6 +541,13 @@ pub async fn run_headless(cli: Cli) {
             }
             Commands::Loop(args) => {
                 if let Err(e) = run_loop_mode(&cli, args).await {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            Commands::Eval { command } => {
+                if let Err(e) = eval_cli::run(command).await {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -1573,6 +1587,11 @@ struct PrintRunMetrics {
     wall_time_ms: Option<u64>,
     ttft_ms: Option<u64>,
     first_stream_event_ms: Option<u64>,
+    provider_requests: u32,
+    provider_total_ms: u64,
+    tool_total_ms: u64,
+    context_assembly_total_ms: u64,
+    post_turn_assessment_total_ms: u64,
     turns: u32,
     tool_calls: u32,
     failed_tool_calls: u32,
@@ -1598,6 +1617,8 @@ struct PrintPolicyViolation {
 struct PrintToolCall {
     tool: String,
     status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1831,7 +1852,6 @@ async fn run_print_mode(
         status: "done".to_string(),
         ..Default::default()
     };
-    let mut active_tool: Option<String> = None;
 
     while let Some(event) = session.recv_event().await {
         if jsonl_output {
@@ -1861,7 +1881,6 @@ async fn run_print_mode(
             AgentEvent::ToolExecutionStart {
                 tool_name, args, ..
             } if !cli.no_tools => {
-                active_tool = Some(tool_name.clone());
                 let summary = match tool_name.as_str() {
                     "bash" => args
                         .get("command")
@@ -1896,7 +1915,7 @@ async fn run_print_mode(
                 }
             }
             AgentEvent::ToolExecutionEnd { result, .. } if !cli.no_tools => {
-                let tool_name = active_tool.take().unwrap_or_else(|| "unknown".to_string());
+                let tool_name = result.tool_name.clone();
                 let status = if result.is_error { "error" } else { "ok" }.to_string();
                 let text: String = result
                     .content
@@ -1921,6 +1940,9 @@ async fn run_print_mode(
                     json_outcome.tool_calls.push(PrintToolCall {
                         tool: tool_name,
                         status,
+                        error: result
+                            .is_error
+                            .then(|| truncate_chars_with_suffix(&text, 500, "…")),
                     });
                 } else if result.is_error && !text.is_empty() && !suppress_transcript {
                     eprintln!("[error: {}]", truncate_chars_with_suffix(&text, 100, ""));
@@ -1961,6 +1983,23 @@ async fn run_print_mode(
                             json_outcome.metrics.ttft_ms =
                                 Some(run_started_at.elapsed().as_millis() as u64);
                         }
+                    }
+                    imp_core::TimingStage::MessageEnd => {
+                        json_outcome.metrics.provider_requests += 1;
+                        json_outcome.metrics.provider_total_ms +=
+                            timing.since_llm_request_start_ms.unwrap_or_default();
+                    }
+                    imp_core::TimingStage::ToolExecutionEnd => {
+                        json_outcome.metrics.tool_total_ms +=
+                            timing.duration_ms.unwrap_or_default();
+                    }
+                    imp_core::TimingStage::ContextAssemblyEnd => {
+                        json_outcome.metrics.context_assembly_total_ms +=
+                            timing.duration_ms.unwrap_or_default();
+                    }
+                    imp_core::TimingStage::PostTurnAssessmentEnd => {
+                        json_outcome.metrics.post_turn_assessment_total_ms +=
+                            timing.duration_ms.unwrap_or_default();
                     }
                     _ => {}
                 }

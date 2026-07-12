@@ -1,14 +1,31 @@
 {
   "id": "stoppingcriteria",
-  "source": "github.com/dirac-run/dirac evals/README.md master",
   "repo": "https://github.com/huggingface/transformers.git",
   "commit": "82a73ad62531b62582f32852bf997479b902eeb6",
   "prompt": "Users have requested the ability to stop text generation early if the model becomes highly uncertain. Find the GenerationConfig class and add two new parameters: entropy_threshold: float | None = None and entropy_patience: int = 1. Next, locate the file containing the StoppingCriteria base class. In that same file, implement a new EntropyStoppingCriteria class that inherits from it. It should compute the Shannon entropy of the scores (logits) at each step. If the entropy exceeds entropy_threshold for entropy_patience consecutive steps, generation should stop. Wire this new criterion into the generation setup so it is activated when entropy_threshold is set.",
-  "imp_command": "/Users/asher/imp/target/debug/imp --provider $PROVIDER --model $MODEL --mode json --max-turns 80 --print @prompt.md",
-  "verifier": "repo-specific ruff command TBD after pinning commit",
+  "verifier": ".venv/bin/ruff check <modified-files> && git grep -q 'class EntropyStoppingCriteria' -- src/transformers/generation/stopping_criteria.py && git grep -q 'entropy_threshold' -- src/transformers/generation/configuration_utils.py src/transformers/generation/utils.py",
   "dirac_reference": {
     "patch": "evals/dirac-comparison/reference/dirac/dirac_refactor_stoppingcriteria",
     "metadata": "evals/dirac-comparison/reference/metadata/dirac/dirac_refactor_stoppingcriteria.json",
     "source_url": "https://raw.githubusercontent.com/dirac-run/dirac/master/evals/dirac/dirac_refactor_stoppingcriteria"
+  },
+  "setup": "test -x .venv/bin/python || uv venv .venv --python 3.12; uv pip install --python .venv/bin/python ruff==0.15.12",
+  "max_turns": 50,
+  "timeout_seconds": 2400,
+  "verifier_timeout_seconds": 300,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": [
+      "src/transformers/generation/configuration_utils.py",
+      "src/transformers/generation/stopping_criteria.py",
+      "src/transformers/generation/utils.py",
+      "tests/generation/test_stopping_criteria.py"
+    ],
+    "required_changed_paths": [
+      "src/transformers/generation/configuration_utils.py",
+      "src/transformers/generation/stopping_criteria.py",
+      "src/transformers/generation/utils.py"
+    ],
+    "max_files_changed": 4
   }
 }

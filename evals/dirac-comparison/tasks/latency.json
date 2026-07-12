@@ -1,14 +1,26 @@
 {
   "id": "latency",
-  "source": "github.com/dirac-run/dirac evals/README.md master",
   "repo": "https://github.com/huggingface/transformers.git",
   "commit": "5135e5efa7203cd23aac0866de12dfeef038422d",
   "prompt": "We want to introduce built-in latency telemetry across the entire Hugging Face Pipelines architecture for debugging purposes. Update the base class to accept a new keyword argument record_latency: bool = False, and save it as an instance attribute. You must update every pipeline class in src/transformers/pipelines/  that implements _forward method. Modify each method so that if self._record_latency is True, it records the exact time taken by the underlying model inference call using time.perf_counter and stores it on the pipeline instance for later inspection.\n\nVerification: Ensure ruff check passes across the entire pipelines directory. Do not run any other checks\n\nfor ruff commands, use the local .venv",
-  "imp_command": "/Users/asher/imp/target/debug/imp --provider $PROVIDER --model $MODEL --mode json --max-turns 80 --print @prompt.md",
-  "verifier": ".venv/bin/ruff check src/transformers/pipelines/",
+  "verifier": ".venv/bin/ruff check src/transformers/pipelines/ && git grep -q 'record_latency' -- src/transformers/pipelines/base.py && test \"$(git grep -l 'perf_counter' -- 'src/transformers/pipelines/*.py' | wc -l | tr -d ' ')\" -ge 20",
   "dirac_reference": {
     "patch": "evals/dirac-comparison/reference/dirac/dirac_refactor_latency",
     "metadata": "evals/dirac-comparison/reference/metadata/dirac/dirac_refactor_latency.json",
     "source_url": "https://raw.githubusercontent.com/dirac-run/dirac/master/evals/dirac/dirac_refactor_latency"
+  },
+  "setup": "test -x .venv/bin/python || uv venv .venv --python 3.12; uv pip install --python .venv/bin/python ruff==0.15.12",
+  "max_turns": 80,
+  "timeout_seconds": 3000,
+  "verifier_timeout_seconds": 600,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": [
+      "src/transformers/pipelines/*.py"
+    ],
+    "required_changed_paths": [
+      "src/transformers/pipelines/base.py"
+    ],
+    "max_files_changed": 30
   }
 }

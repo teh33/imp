@@ -6,6 +6,35 @@ Source: `github.com/dirac-run/dirac`, `evals/README.md` on `master`, read 2026-0
 
 The goal is not to clone Dirac's IDE architecture. The goal is to turn the qualitative comparison into reproducible evidence for imp's code-intelligence and edit tooling: command, provider/model, prompt, diff, verifier output, pass/fail, and cost/usage when available.
 
+## Native eval runner
+
+Use the built-in eval commands for validation, isolated checkout preparation, execution, and result comparison:
+
+```sh
+imp eval list
+imp eval validate one-file-fix
+imp eval run one-file-fix --prepare-only
+imp eval run one-file-fix --compare-pi --provider openai-codex --model gpt-5.6-sol --repeat 3
+imp eval run one-file-fix --agent imp --provider openai-codex --model gpt-5.6-sol
+imp eval run one-file-fix --agent pi --provider openai-codex --model gpt-5.6-sol
+imp eval compare evals/results/<baseline> evals/results/<candidate>
+```
+
+The default suite is the small local corpus under `evals/coding-agent/tasks`. Pass `--suite evals/dirac-comparison/tasks` for these larger external tasks:
+
+```sh
+imp eval validate datadict --suite evals/dirac-comparison/tasks
+imp eval run datadict --suite evals/dirac-comparison/tasks --prepare-only
+```
+
+`--compare-pi` is the normal A/B path. It runs imp and vanilla Pi on fresh isolated copies of the same task with the same provider, model, thinking level, verifier, and changed-path expectations. `--repeat N` alternates execution order to reduce warm-cache and provider-order bias, then writes an aggregate report under `evals/results/comparisons/`.
+
+`--agent pi` runs vanilla Pi with only its built-in `read`, `bash`, `edit`, and `write` tools; extensions, skills, and prompt templates are disabled. Pi authentication still comes from its normal config or environment, and provider errors are treated as candidate failures even when Pi exits with code zero.
+
+`imp eval run` refuses unpinned remote commits and placeholder verifiers, resets the task checkout to the pinned commit, runs imp with structured JSON output, captures the final diff, executes the verifier, and writes `result.json` plus supporting artifacts under `evals/results/`. Generated results and checkouts are ignored by Git.
+
+Task specs may also define optional `fixture`, `expectations`, `setup`, `max_turns`, `timeout_seconds`, and `verifier_timeout_seconds` fields. Fixture tasks use committed local directories instead of network repositories. Expectations can require or forbid changes, constrain changed paths, and cap the number of changed files. Setup commands run inside the isolated checkout before the candidate run.
+
 ## Task catalog
 
 Initial upstream task set:
@@ -55,6 +84,10 @@ evals/dirac-comparison/import-reference.py --agent dirac
 ```
 
 This caches raw patches under `reference/dirac/`, writes per-patch metadata under `reference/metadata/dirac/`, and updates `reference/manifest.json` with changed files, line counts, and patch `index` blob IDs. The reference diffs are comparison evidence, not proof of the upstream starting commit by themselves.
+
+## Legacy shell wrapper
+
+`run-one.sh` remains available for compatibility with older local runs. New automation should prefer `imp eval` because it validates specs and emits the stable native result schema.
 
 ## Running one task
 

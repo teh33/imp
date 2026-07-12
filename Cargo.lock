@@ -1765,6 +1765,7 @@ dependencies = [
  "clap",
  "futures",
  "futures-util",
+ "glob",
  "imp-core",
  "imp-llm",
  "imp-lua",

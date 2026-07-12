@@ -1,0 +1,15 @@
+{
+  "id": "one-file-fix",
+  "fixture": "../fixtures/one-file-fix",
+  "prompt": "Fix slugify so it trims the input and collapses every run of whitespace to one hyphen. Keep the change scoped to catalog.py and run the focused tests.",
+  "verifier": "python3 -m unittest -v test_catalog.py",
+  "max_turns": 20,
+  "timeout_seconds": 300,
+  "verifier_timeout_seconds": 30,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": ["catalog.py"],
+    "required_changed_paths": ["catalog.py"],
+    "max_files_changed": 1
+  }
+}

@@ -1,14 +1,35 @@
 {
   "id": "DynamicCache",
-  "source": "github.com/dirac-run/dirac evals/README.md master",
   "repo": "https://github.com/huggingface/transformers.git",
   "commit": "5135e5efa7203cd23aac0866de12dfeef038422d",
   "prompt": "Find the DynamicCache class in src/transformers/cache_utils.py and add a new boolean property is_stale that defaults to False. Then, locate the forward pass of the Attention modules for the following models in the src/transformers/models/ directory: llama4, mistral4, qwen3, gemma4, deepseek_v3, cohere2, olmo3, ministral3.\n\nUpdate their attention logic: if past_key_value is an instance of DynamicCache and past_key_value.is_stale is True, bypass the internal cache update block and raise a UserWarning with a descriptive message. Do not break any existing tensor slicing or formatting. Ensure ruff check passes after your edits.",
-  "imp_command": "/Users/asher/imp/target/debug/imp --provider $PROVIDER --model $MODEL --mode json --max-turns 80 --print @prompt.md",
-  "verifier": ".venv/bin/ruff check <modified-files>",
+  "verifier": ".venv/bin/ruff check <modified-files> && git grep -q 'self.is_stale = False' -- src/transformers/cache_utils.py && test \"$(git grep -l 'is_stale' -- 'src/transformers/models/**/*.py' | wc -l | tr -d ' ')\" -ge 8",
   "dirac_reference": {
     "patch": "evals/dirac-comparison/reference/dirac/dirac_refactor_DynamicCache",
     "metadata": "evals/dirac-comparison/reference/metadata/dirac/dirac_refactor_DynamicCache.json",
     "source_url": "https://raw.githubusercontent.com/dirac-run/dirac/master/evals/dirac/dirac_refactor_DynamicCache"
+  },
+  "setup": "test -x .venv/bin/python || uv venv .venv --python 3.12; uv pip install --python .venv/bin/python ruff==0.15.12",
+  "max_turns": 60,
+  "timeout_seconds": 2400,
+  "verifier_timeout_seconds": 300,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": [
+      "src/transformers/cache_utils.py",
+      "src/transformers/models/**/*.py"
+    ],
+    "required_changed_paths": [
+      "src/transformers/cache_utils.py",
+      "src/transformers/models/cohere2/modular_cohere2.py",
+      "src/transformers/models/deepseek_v3/modular_deepseek_v3.py",
+      "src/transformers/models/gemma4/modular_gemma4.py",
+      "src/transformers/models/llama4/modeling_llama4.py",
+      "src/transformers/models/ministral3/modular_ministral3.py",
+      "src/transformers/models/mistral4/modular_mistral4.py",
+      "src/transformers/models/olmo3/modular_olmo3.py",
+      "src/transformers/models/qwen3/modular_qwen3.py"
+    ],
+    "max_files_changed": 20
   }
 }

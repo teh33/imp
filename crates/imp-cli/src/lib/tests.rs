@@ -900,3 +900,46 @@ fn cli_parses_workspace_commands() {
         }) if id == "eval-agent"
     ));
 }
+
+#[test]
+fn cli_parses_eval_commands() {
+    let validate = Cli::try_parse_from(["imp", "eval", "validate", "one-file-fix"])
+        .expect("parse eval validate");
+    assert!(matches!(
+        validate.command,
+        Some(Commands::Eval {
+            command: eval_cli::EvalCommand::Validate(_)
+        })
+    ));
+
+    let run = Cli::try_parse_from(["imp", "eval", "run", "one-file-fix", "--prepare-only"])
+        .expect("parse eval run");
+    assert!(matches!(
+        run.command,
+        Some(Commands::Eval {
+            command: eval_cli::EvalCommand::Run(_)
+        })
+    ));
+}
+
+#[test]
+fn print_tool_call_serializes_error_only_when_present() {
+    let success = PrintToolCall {
+        tool: "read".into(),
+        status: "ok".into(),
+        error: None,
+    };
+    let failed = PrintToolCall {
+        tool: "edit".into(),
+        status: "error".into(),
+        error: Some("old_text not found".into()),
+    };
+    assert!(serde_json::to_value(success)
+        .unwrap()
+        .get("error")
+        .is_none());
+    assert_eq!(
+        serde_json::to_value(failed).unwrap()["error"],
+        "old_text not found"
+    );
+}

@@ -1,0 +1,16 @@
+{
+  "id": "preserve-dirty-files",
+  "fixture": "../fixtures/dirty-files",
+  "setup": "printf 'user scratch: do not overwrite\\n' >> notes.txt",
+  "prompt": "Change greeting to use 'Hi' instead of 'Hello'. Preserve the existing unrelated change in notes.txt exactly and do not modify tests. Run the focused tests.",
+  "verifier": "python3 -m unittest -v test_greeting.py",
+  "max_turns": 20,
+  "timeout_seconds": 300,
+  "verifier_timeout_seconds": 30,
+  "expectations": {
+    "require_changes": true,
+    "allowed_changed_paths": ["greeting.py", "notes.txt"],
+    "required_changed_paths": ["greeting.py", "notes.txt"],
+    "max_files_changed": 2
+  }
+}

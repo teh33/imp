@@ -1,0 +1,13 @@
+{
+  "id": "no-op",
+  "fixture": "../fixtures/no-op",
+  "prompt": "Inspect Counter.increment and its tests. If the requested default and explicit increment behavior is already correct, do not edit files. Run the focused tests and report that no change was needed.",
+  "verifier": "python3 -m unittest -v counter.py",
+  "max_turns": 15,
+  "timeout_seconds": 240,
+  "verifier_timeout_seconds": 30,
+  "expectations": {
+    "require_changes": false,
+    "max_files_changed": 0
+  }
+}
