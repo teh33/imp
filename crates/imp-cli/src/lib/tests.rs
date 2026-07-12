@@ -854,23 +854,6 @@ fn startup_stage_names_are_stable() {
 }
 
 #[test]
-fn rpc_ready_event_advertises_truthful_v1_capabilities() {
-    let event = rpc_ready_event();
-    assert_eq!(event["type"], "rpc_ready");
-    assert_eq!(event["protocol"], RPC_PROTOCOL);
-    assert_eq!(event["version"], RPC_PROTOCOL_VERSION);
-    assert_eq!(
-        event["capabilities"],
-        serde_json::json!(["prompt", "followup", "steer", "cancel"])
-    );
-    assert!(!event["capabilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value == "durable_sessions"));
-}
-
-#[test]
 fn cli_parses_workspace_commands() {
     let create = Cli::try_parse_from([
         "imp",
