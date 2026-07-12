@@ -2632,9 +2632,13 @@ nodes:
   lifecycle: active
   assessment:
     level: production
-    rationale: Implemented and exercised through native tool implementations and focused tool/TUI renderer tests; remaining work is edge hardening or product proof.
+    rationale: The managed ProcessManager drains stdout and stderr independently, publishes bounded cursor events, and Bash foreground/background paths consume output without exposing raw child handles. Focused process and Bash tests cover output observation and terminal drain ordering.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  evidence:
+  - kind: code
+    path: crates/imp-core/src/process
   imported:
     source: docs/feature-checklist.md
     line: 286
@@ -2651,9 +2655,13 @@ nodes:
   lifecycle: active
   assessment:
     level: production
-    rationale: Implemented and exercised through native tool implementations and focused tool/TUI renderer tests; remaining work is edge hardening or product proof.
+    rationale: Managed commands run in owned Unix process groups. Cancellation and timeout kill the owned group, graceful stop escalates from SIGTERM to SIGKILL, manager drop cleans active groups, and lifecycle tests cover cleanup without targeting unrelated processes.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  evidence:
+  - kind: code
+    path: crates/imp-core/src/process/lifecycle_tests.rs
   imported:
     source: docs/feature-checklist.md
     line: 287
@@ -2670,9 +2678,13 @@ nodes:
   lifecycle: active
   assessment:
     level: production
-    rationale: Implemented and exercised through native tool implementations and focused tool/TUI renderer tests; remaining work is edge hardening or product proof.
+    rationale: Process output retention is explicitly bounded per process, reads are cursor-based and response-bounded, eviction is reported, secret values are redacted before retention, and terminal records are conservatively pruned while active records are preserved.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  evidence:
+  - kind: code
+    path: crates/imp-core/src/process/output.rs
   imported:
     source: docs/feature-checklist.md
     line: 288
@@ -2689,9 +2701,13 @@ nodes:
   lifecycle: active
   assessment:
     level: production
-    rationale: Implemented and exercised through native tool implementations and focused tool/TUI renderer tests; remaining work is edge hardening or product proof.
+    rationale: Process records and Bash result details preserve stable process identity, cwd, duration, exit classification, timeout and cancellation state, output cursors, and enforcement summaries through typed runtime models and focused tests.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  evidence:
+  - kind: code
+    path: crates/imp-core/src/process/model.rs
   imported:
     source: docs/feature-checklist.md
     line: 289
@@ -2708,9 +2724,15 @@ nodes:
   lifecycle: active
   assessment:
     level: strong
-    rationale: Usable through native tool implementations and focused tool/TUI renderer tests, but not yet demonstrated at the full checklist standard.
+    rationale: Bash still performs normal tool-mode, run-policy, reference-monitor, cwd, and secret checks before constructing the immutable ExecutionGrant consumed by ProcessManager. The runtime validates supported grant controls and refuses required isolation rather than silently weakening it.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  gaps:
+  - The host backend does not yet enforce filesystem roots, network isolation, or child-process denial at the OS boundary.
+  evidence:
+  - kind: code
+    path: crates/imp-core/src/process/grant.rs
   imported:
     source: docs/feature-checklist.md
     line: 290
@@ -2727,9 +2749,15 @@ nodes:
   lifecycle: active
   assessment:
     level: strong
-    rationale: Usable through native tool implementations and focused tool/TUI renderer tests, but not yet demonstrated at the full checklist standard.
+    rationale: Hanging commands have hard timeout and cancellation semantics, managed jobs support bounded polling, stdin, and graceful stop, and stdin can be explicitly closed. PTY requests fail with a typed unsupported-capability error rather than silently falling back to pipes.
     actor: imp
-    basis_revision: fd86012138c0954dd0300491d81feeaa45f26a7b
+    basis_revision: 65f7f08e774c9da63afb10e07dd24e049225ba93
+    basis_dirty: false
+  gaps:
+  - PTY-dependent interactive programs are intentionally unsupported by the shipped host backend.
+  evidence:
+  - kind: documentation
+    path: docs/design/process-runtime.md
   imported:
     source: docs/feature-checklist.md
     line: 291
