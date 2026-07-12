@@ -68,3 +68,49 @@ fn writable_subagents_get_stable_owned_workspace_requests() {
     );
     assert!(request.base_ref.is_none());
 }
+
+fn record_with_workspace(status: imp_subagent::Status) -> imp_subagent::Record {
+    imp_subagent::Record {
+        version: 1,
+        parent_id: "parent-1".into(),
+        child_id: "child-1".into(),
+        model: Some("child-model".into()),
+        cwd: PathBuf::from("/tmp/workspace"),
+        executable: PathBuf::from("imp"),
+        worker_executable: PathBuf::from("imp"),
+        child_args: Vec::new(),
+        environment: Vec::new(),
+        socket: PathBuf::from("/tmp/child.sock"),
+        artifacts: imp_subagent::ArtifactPaths {
+            state: PathBuf::from("state.json"),
+            transcript: PathBuf::from("transcript.jsonl"),
+            stderr: PathBuf::from("stderr.log"),
+            session: PathBuf::from("session.jsonl"),
+        },
+        status,
+        session_id: "session-1".into(),
+        turn_id: None,
+        summary: None,
+        diagnostics: Vec::new(),
+        timeout_seconds: None,
+        metadata: serde_json::json!({"managed_workspace_id": "subagent-child-1"}),
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    }
+}
+
+#[test]
+fn durable_record_resolves_managed_workspace_id() {
+    let record = record_with_workspace(imp_subagent::Status::Running);
+    assert_eq!(managed_workspace_id(&record), Some("subagent-child-1"));
+}
+
+#[test]
+fn terminal_workspace_diagnostic_includes_status_and_child_diagnostics() {
+    let mut record = record_with_workspace(imp_subagent::Status::Failed);
+    record.diagnostics = vec!["provider disconnected".into(), "retry exhausted".into()];
+    assert_eq!(
+        terminal_workspace_diagnostic(&record),
+        "subagent finished with status failed: provider disconnected; retry exhausted"
+    );
+}

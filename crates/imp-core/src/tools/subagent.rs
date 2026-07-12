@@ -99,12 +99,15 @@ impl Tool for SubagentTool {
                 )
                 .await
             }
-            "status" => self.status(child_id(params.child_run_id)?, &ctx),
-            "wait" => self.wait(
-                child_id(params.child_run_id)?,
-                params.timeout_seconds.unwrap_or(0),
-                &ctx,
-            ),
+            "status" => self.status(child_id(params.child_run_id)?, &ctx).await,
+            "wait" => {
+                self.wait(
+                    child_id(params.child_run_id)?,
+                    params.timeout_seconds.unwrap_or(0),
+                    &ctx,
+                )
+                .await
+            }
             "send" => self.send(
                 child_id(params.child_run_id)?,
                 params
@@ -112,7 +115,7 @@ impl Tool for SubagentTool {
                     .ok_or_else(|| Error::Tool("missing `message` parameter".into()))?,
                 &ctx,
             ),
-            "cancel" => self.cancel(child_id(params.child_run_id)?, &ctx),
+            "cancel" => self.cancel(child_id(params.child_run_id)?, &ctx).await,
             action => Ok(ToolOutput::error(format!(
                 "unsupported subagent action `{action}`"
             ))),
@@ -164,16 +167,17 @@ impl SubagentTool {
             false,
         ))
     }
-    fn status(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+    async fn status(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
         let record = self.executor.status(&ctx.cwd, &child)?;
+        let workspace = reconcile_terminal_workspace(&record, ctx).await?;
         Ok(output(
             "status",
             &record,
-            json!({"child_run_id": child, "record": record}),
+            json!({"child_run_id": child, "record": record, "workspace": workspace}),
             false,
         ))
     }
-    fn wait(
+    async fn wait(
         &self,
         child: SubagentRunId,
         timeout_seconds: u64,
@@ -181,10 +185,11 @@ impl SubagentTool {
     ) -> Result<ToolOutput> {
         let record = self.executor.wait(&ctx.cwd, &child, timeout_seconds)?;
         let outcome = self.executor.outcome(&record);
+        let workspace = reconcile_terminal_workspace(&record, ctx).await?;
         Ok(output(
             "wait",
             &record,
-            json!({"child_run_id": child, "record": record, "outcome": outcome}),
+            json!({"child_run_id": child, "record": record, "outcome": outcome, "workspace": workspace}),
             false,
         ))
     }
@@ -202,14 +207,55 @@ impl SubagentTool {
             false,
         ))
     }
-    fn cancel(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
+    async fn cancel(&self, child: SubagentRunId, ctx: &ToolContext) -> Result<ToolOutput> {
         let record = self.executor.cancel(&ctx.cwd, &child)?;
+        let workspace = reconcile_terminal_workspace(&record, ctx).await?;
         Ok(output(
             "cancel",
             &record,
-            json!({"child_run_id": child, "record": record}),
+            json!({"child_run_id": child, "record": record, "workspace": workspace}),
             false,
         ))
+    }
+}
+
+fn managed_workspace_id(record: &imp_subagent::Record) -> Option<&str> {
+    record.metadata["managed_workspace_id"].as_str()
+}
+
+async fn reconcile_terminal_workspace(
+    record: &imp_subagent::Record,
+    ctx: &ToolContext,
+) -> Result<Option<crate::managed_workspace::ManagedWorkspaceRecord>> {
+    let Some(id) = managed_workspace_id(record) else {
+        return Ok(None);
+    };
+    if !record.status.terminal() {
+        return Ok(None);
+    }
+    let service = crate::managed_workspace::ManagedWorkspaceService::global();
+    let workspace = if record.status == imp_subagent::Status::Success {
+        service.inspect(&ctx.cwd, id).await
+    } else {
+        service
+            .retain(&ctx.cwd, id, terminal_workspace_diagnostic(record))
+            .await
+    };
+    workspace.map(Some).map_err(|error| {
+        Error::Tool(format!(
+            "failed to reconcile subagent workspace `{id}`: {error}"
+        ))
+    })
+}
+
+fn terminal_workspace_diagnostic(record: &imp_subagent::Record) -> String {
+    let status = executor::status_name(&record.status);
+    match record.diagnostics.as_slice() {
+        [] => format!("subagent finished with status {status}"),
+        diagnostics => format!(
+            "subagent finished with status {status}: {}",
+            diagnostics.join("; ")
+        ),
     }
 }
 

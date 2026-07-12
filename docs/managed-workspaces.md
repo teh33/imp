@@ -103,3 +103,14 @@ possibly useful state.
 This phase assigns and tracks writable children. Terminal-result verification,
 host commits, automatic integration, and success cleanup remain explicit follow-up
 work; the runtime does not claim those behaviors yet.
+## Terminal child results
+
+When a writable child reaches a terminal state, `status`, `wait`, and `cancel`
+return its refreshed managed workspace record. Successful children leave the
+workspace active and expose its current cleanliness and changed paths for explicit
+review. Blocked, incomplete, failed, and cancelled children transition the
+workspace to retained with child diagnostics.
+
+A successful child is not automatically committed, marked ready, integrated, or
+cleaned. Those actions remain explicit until verification and host commit ownership
+are connected to the subagent contract.
