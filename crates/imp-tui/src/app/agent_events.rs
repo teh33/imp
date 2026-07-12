@@ -318,7 +318,6 @@ impl App {
 
     fn handle_runtime_ui_effects(&mut self, event: &AgentEvent, runtime_event: &RuntimeEvent) {
         match event {
-
             AgentEvent::AgentStart { .. } => self.agent_started_ui_effects(),
             AgentEvent::AgentEnd { status, .. } => self.agent_ended_ui_effects(status),
             AgentEvent::MessageDelta { delta } => self.message_delta_ui_effects(delta),
@@ -331,11 +330,14 @@ impl App {
             AgentEvent::ToolExecutionEnd {
                 tool_call_id,
                 result,
-
-
                 ..
             } => self.tool_ended_ui_effects(tool_call_id, result),
-            AgentEvent::Browser { .. } => {}
+            AgentEvent::Browser { event } => {
+                self.browser_state.apply(event);
+                self.status_items
+                    .insert("browser".to_string(), self.browser_state.status(event));
+                self.invalidate_chat_render_cache();
+            }
             AgentEvent::TurnEnd { index, message, .. } => {
                 self.persist_assistant_turn(*index, message.clone())
             }
@@ -344,7 +346,6 @@ impl App {
         }
         self.surface_runtime_transition(runtime_event);
     }
-
 
     fn agent_started_ui_effects(&mut self) {
         self.tool_focus = None;
@@ -383,14 +384,12 @@ impl App {
         self.maybe_notify_agent_completion();
     }
 
-
     fn message_delta_ui_effects(&mut self, delta: &imp_llm::StreamEvent) {
         match delta {
             imp_llm::StreamEvent::TextDelta { text } if !text.trim().is_empty() => {
                 if let Some(seconds) = self.finalize_llm_thought_segment() {
                     if let Some(last) = self.latest_streaming_message_mut() {
                         last.push_assistant_thought_duration(seconds);
-
                     }
                 }
             }
@@ -400,7 +399,6 @@ impl App {
             _ => {}
         }
     }
-
 
     fn tool_started_ui_effects(
         &mut self,
@@ -458,11 +456,10 @@ impl App {
             RuntimeEventKind::Warning { message } => self.push_warning_msg(message),
             RuntimeEventKind::Error { message } => {
                 self.last_agent_error = Some(format_error_for_display(message));
-                if let Some(message) = self
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .find(|message| message.role == MessageRole::Assistant && message.is_streaming)
+                if let Some(message) =
+                    self.messages.iter_mut().rev().find(|message| {
+                        message.role == MessageRole::Assistant && message.is_streaming
+                    })
                 {
                     message.is_streaming = false;
                 }

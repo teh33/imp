@@ -2,16 +2,125 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use clap::{Args, Subcommand, ValueEnum};
 use imp_core::config::Config;
 use imp_core::session::{SessionEntry, SessionManager};
 use imp_core::usage::{dedupe_usage_records, SessionUsageRecord};
 use imp_llm::Message;
 use serde::Serialize;
 
-use crate::{
-    BoundKind, StatsCommand, StatsExportArgs, StatsExportFormat, StatsFilterSummary, StatsFilters,
-    StatsReportArgs, StatsSummaryJson, StatsToolRow,
-};
+use crate::reporting::BoundKind;
+
+mod time;
+
+use time::{period_key, PeriodKind};
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum StatsCommand {
+    /// Show overall local imp stats
+    Summary(StatsReportArgs),
+    /// Show token and cost stats
+    Tokens(StatsReportArgs),
+    /// Show stats grouped by tool
+    Tools(StatsReportArgs),
+    /// Show file/code-change stats
+    Files(StatsReportArgs),
+    /// Show stats grouped by day
+    Daily(StatsReportArgs),
+    /// Show stats grouped by week
+    Weekly(StatsReportArgs),
+    /// Show stats grouped by project/session directory hint
+    Projects(StatsReportArgs),
+    /// Show stats grouped by session
+    Sessions(StatsReportArgs),
+    /// Show a fun local imp wrapped summary
+    Wrapped(StatsReportArgs),
+    /// Export local imp stats records in a machine-friendly format
+    Export(StatsExportArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum StatsExportFormat {
+    Json,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct StatsReportArgs {
+    /// Include records on or after this unix timestamp or YYYY-MM-DD date
+    #[arg(long)]
+    since: Option<String>,
+    /// Include records before this unix timestamp or date
+    #[arg(long)]
+    until: Option<String>,
+    /// Only include this session id or path fragment
+    #[arg(long)]
+    session: Option<String>,
+    /// Only include this tool name
+    #[arg(long)]
+    tool: Option<String>,
+    /// Emit JSON instead of a human table when supported
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct StatsExportArgs {
+    #[command(flatten)]
+    filters: StatsReportArgs,
+    /// Export format
+    #[arg(long, value_enum, default_value_t = StatsExportFormat::Json)]
+    format: StatsExportFormat,
+}
+
+#[derive(Debug, Clone)]
+struct StatsFilters {
+    since: Option<u64>,
+    until: Option<u64>,
+    session: Option<String>,
+    tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatsFilterSummary {
+    since: Option<u64>,
+    until: Option<u64>,
+    session: Option<String>,
+    tool: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatsSummaryJson {
+    report: &'static str,
+    generated_at: u64,
+    filters: StatsFilterSummary,
+    sessions: usize,
+    tool_calls: usize,
+    tool_errors: usize,
+    unique_tools: usize,
+    files_created: usize,
+    lines_added: usize,
+    lines_removed: usize,
+    lines_read: usize,
+    token_requests: usize,
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    total_tokens: u64,
+    total_cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatsToolRow {
+    tool: String,
+    calls: usize,
+    errors: usize,
+    files_created: usize,
+    lines_added: usize,
+    lines_removed: usize,
+    lines_read: usize,
+}
 
 pub fn run_stats_command(command: &StatsCommand) -> Result<(), Box<dyn std::error::Error>> {
     match command {
@@ -240,13 +349,6 @@ struct StatsDataset {
     filters: StatsFilters,
     tool_records: Vec<ToolStatsRecord>,
     usage_records: Vec<SessionUsageRecord>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum PeriodKind {
-    Day,
-    Week,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -713,52 +815,6 @@ fn usage_total_tokens(record: &SessionUsageRecord) -> u64 {
         + u64::from(record.usage.cache_read)
         + u64::from(record.usage.cache_write)
 }
-fn period_key(timestamp: u64, kind: PeriodKind) -> String {
-    let days = (timestamp / 86_400) as i64;
-    match kind {
-        PeriodKind::Day => format_utc_day(days),
-        PeriodKind::Week => format_utc_week(days),
-    }
-}
-fn format_utc_day(days_since_epoch: i64) -> String {
-    let (y, m, d) = civil_from_days(days_since_epoch);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-fn format_utc_week(days_since_epoch: i64) -> String {
-    let thursday = days_since_epoch + 3;
-    let (year, _, _) = civil_from_days(thursday);
-    let jan_4 = days_from_civil(year, 1, 4);
-    let week1_monday = jan_4 - ((jan_4 + 3).rem_euclid(7));
-    let monday = days_since_epoch - ((days_since_epoch + 3).rem_euclid(7));
-    let week = ((monday - week1_monday) / 7) + 1;
-    format!("{year:04}-W{week:02}")
-}
-fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if month <= 2 { 1 } else { 0 };
-    (year as i32, month as u32, day as u32)
-}
-fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
-    let mut y = i64::from(year);
-    let m = i64::from(month);
-    let d = i64::from(day);
-    y -= if m <= 2 { 1 } else { 0 };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = m + if m > 2 { -3 } else { 9 };
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 fn print_stats_summary_table(s: &StatsSummaryJson) {
     println!("Imp stats");
     println!("  sessions       {}", s.sessions);

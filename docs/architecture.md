@@ -12,8 +12,6 @@ imp is a Rust workspace organized around a local agent runtime. Provider traffic
 | `imp-llm` | Provider/model abstraction, streaming, auth helpers, model metadata, and pricing. |
 | `imp-lua` | Shipped Lua extension runtime for tools, slash commands, hooks, and capability policy. |
 | `imp-tui` | Terminal UI state, rendering, input, and runtime-signal handling. |
-| `imp-gui` | Experimental GUI consumer of shared runtime state; not a default workspace member. |
-| `mcp-shim` | Internal protocol shim crate. MCP server management in the public CLI is still a placeholder. |
 
 The repository root package is a source-install shim so `cargo install --path .` works from the workspace root.
 
@@ -77,21 +75,16 @@ The `subagent` tool calls the in-workspace `imp-subagent` crate through typed Ru
 - **One-shot/JSONL:** `imp-cli` runs prompts and emits human or structured output.
 - **RPC:** `imp --mode rpc` accepts prompt, steer, follow-up, and cancel commands over JSONL.
 - **ACP:** `imp acp` implements session creation/load/resume and scaffold prompt handling, but does not yet run live model turns.
-- **GUI:** `imp-gui` consumes `imp_core::runtime` models experimentally and is not presented as a shipped primary interface.
 
 ## Extensions
 
 `imp-lua` is the supported extension runtime. Lua extensions can register tools, slash commands, hooks, and UI requests through host-owned APIs and capability policy.
-
-TypeScript/Pi extension code remains compatibility/experimental code and is not loaded by the normal builder path. It should not be presented as a shipped extension system.
 
 ## Planned or partial surfaces
 
 These surfaces must remain labeled partial until their production wiring is verified:
 
 - live ACP agent turns and permission bridging;
-- MCP server management;
 - automatic worktree-auto creation and user-facing closeout commands;
 - broader hosted/team synchronization;
-- GUI distribution and support;
-- non-Lua extension runtimes.
+- future extension runtimes beyond Lua.

@@ -114,15 +114,11 @@ fn test_assemble(
         skills,
         facts,
         project_memory_status: None,
-        soul: None,
         task,
         role,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     })
 }
@@ -134,15 +130,11 @@ fn test_assemble_with_mode(tools: &ToolRegistry, mode: AgentMode) -> AssembledPr
         skills: &[],
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &mode,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     })
 }
@@ -390,15 +382,11 @@ fn system_prompt_does_not_add_mode_aware_workflow_skill_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Planner,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -420,15 +408,11 @@ fn system_prompt_orchestrator_does_not_add_workflow_skill_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Orchestrator,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -457,15 +441,11 @@ fn system_prompt_worker_does_not_add_workflow_basics_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Worker,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -487,15 +467,11 @@ fn system_prompt_omits_workflow_trigger_without_workflow_skill() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Planner,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -516,15 +492,11 @@ fn system_prompt_reviewer_mode_omits_workflow_trigger() {
         skills: &skills,
         facts: &[],
         project_memory_status: None,
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Reviewer,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -581,15 +553,11 @@ fn system_prompt_project_memory_status_included() {
         project_memory_status: Some(
             "Project memory status:\nWarnings:\n- STALE: \"Lockfile drift\"\n\nWorking on:\n- [12] Refresh auth flow",
         ),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(result.text.contains("Project memory status:"));
@@ -606,15 +574,11 @@ fn system_prompt_project_memory_status_empty_string_is_skipped() {
         skills: &[],
         facts: &[],
         project_memory_status: Some(""),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
     assert!(!result.text.contains("Project memory status:"));
@@ -635,15 +599,11 @@ fn system_prompt_project_memory_status_included_separately_from_facts() {
         skills: &[],
         facts: &facts,
         project_memory_status: Some(status),
-        soul: None,
         task: None,
         role: None,
         mode: &AgentMode::Full,
-        memory: None,
-        user_profile: None,
         cwd: None,
         repo_context: None,
-        learning_enabled: false,
         guardrail_profile: None,
     });
 
@@ -1010,136 +970,4 @@ fn system_prompt_display_impl() {
     let result = test_assemble(&reg, &[], &[], &[], None, None);
     let displayed = format!("{result}");
     assert_eq!(displayed, result.text);
-}
-
-// -- Layer 6: Agent Memory --
-
-#[test]
-fn system_prompt_memory_included() {
-    let reg = make_registry();
-    let mem = "══════════════════\nMEMORY [50% — 100/200]\n══════════════════\nUser runs macOS";
-    let result = assemble(&AssembleParams {
-        tools: &reg,
-        agents_md: &[],
-        skills: &[],
-        facts: &[],
-        project_memory_status: None,
-        soul: None,
-        task: None,
-        role: None,
-        mode: &AgentMode::Full,
-        memory: Some(mem),
-        user_profile: None,
-        cwd: None,
-        repo_context: None,
-        learning_enabled: false,
-        guardrail_profile: None,
-    });
-    assert!(result.text.contains("MEMORY"));
-    assert!(result.text.contains("User runs macOS"));
-}
-
-#[test]
-fn system_prompt_user_profile_included() {
-    let reg = make_registry();
-    let user =
-        "══════════════════\nUSER PROFILE [30% — 42/140]\n══════════════════\nPrefers concise";
-    let result = assemble(&AssembleParams {
-        tools: &reg,
-        agents_md: &[],
-        skills: &[],
-        facts: &[],
-        project_memory_status: None,
-        soul: None,
-        task: None,
-        role: None,
-        mode: &AgentMode::Full,
-        memory: None,
-        user_profile: Some(user),
-        cwd: None,
-        repo_context: None,
-        learning_enabled: false,
-        guardrail_profile: None,
-    });
-    assert!(result.text.contains("USER PROFILE"));
-    assert!(result.text.contains("Prefers concise"));
-}
-
-#[test]
-fn system_prompt_empty_memory_skipped() {
-    let reg = make_registry();
-    let result = assemble(&AssembleParams {
-        tools: &reg,
-        agents_md: &[],
-        skills: &[],
-        facts: &[],
-        project_memory_status: None,
-        soul: None,
-        task: None,
-        role: None,
-        mode: &AgentMode::Full,
-        memory: Some(""),
-        user_profile: Some(""),
-        cwd: None,
-        repo_context: None,
-        learning_enabled: false,
-        guardrail_profile: None,
-    });
-    assert!(!result.text.contains("MEMORY"));
-    assert!(!result.text.contains("USER PROFILE"));
-}
-
-#[test]
-fn system_prompt_memory_after_all_other_layers() {
-    let reg = make_registry();
-    let agents = vec![make_agents_md("Project context.")];
-    let skills = vec![make_skill("rust", "Rust", "/skills/rust/SKILL.md")];
-    let facts = vec![Fact {
-        text: "Uses SQLite".into(),
-        verified_ago: "1h".into(),
-    }];
-    let task = TaskContext {
-        title: "Fix bug".into(),
-        description: "Broken".into(),
-        design: None,
-        acceptance: None,
-        verify: None,
-        verify_timeout_secs: None,
-        fail_first: false,
-        notes: None,
-        attempts: vec![],
-        dependencies: vec![],
-        decisions: vec![],
-        context_paths: vec![],
-        constraints: vec![],
-    };
-    let mem = "══════\nMEMORY [50%]\n══════\nSome fact";
-    let result = assemble(&AssembleParams {
-        tools: &reg,
-        agents_md: &agents,
-        skills: &skills,
-        facts: &facts,
-        project_memory_status: None,
-        soul: None,
-        task: Some(&task),
-        role: None,
-        mode: &AgentMode::Full,
-        memory: Some(mem),
-        user_profile: None,
-        cwd: None,
-        repo_context: None,
-        learning_enabled: false,
-        guardrail_profile: None,
-    });
-
-    let identity_pos = result.text.find("You are imp").unwrap();
-    let context_pos = result.text.find("# Project Instructions").unwrap();
-    let facts_pos = result.text.find("Project facts").unwrap();
-    let task_pos = result.text.find("## Task").unwrap();
-    let memory_pos = result.text.find("MEMORY").unwrap();
-
-    assert!(identity_pos < context_pos);
-    assert!(context_pos < facts_pos);
-    assert!(facts_pos < task_pos);
-    assert!(task_pos < memory_pos, "memory should come after task");
 }

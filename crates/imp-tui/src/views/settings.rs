@@ -18,6 +18,13 @@ use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 use crate::theme::Theme;
 
+mod layout;
+mod options;
+#[cfg(test)]
+pub(crate) use layout::selected_settings_row;
+use layout::{scrolled_screen_y, settings_scroll_offset, total_settings_rows};
+use options::{animation_label, next_thinking, prev_thinking, theme_options, thinking_label};
+
 /// Which field in the settings panel is focused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
@@ -1228,38 +1235,6 @@ impl SettingsState {
     }
 }
 
-fn theme_options(current: Option<&str>) -> Vec<String> {
-    let mut options = vec!["default".to_string(), "light".to_string()];
-    if let Some(current) = current.filter(|value| !value.trim().is_empty()) {
-        if !options.iter().any(|option| option == current) {
-            options.push(current.to_string());
-        }
-    }
-    options
-}
-
-fn next_thinking(level: ThinkingLevel) -> ThinkingLevel {
-    match level {
-        ThinkingLevel::Off => ThinkingLevel::Low,
-        ThinkingLevel::Minimal => ThinkingLevel::Low,
-        ThinkingLevel::Low => ThinkingLevel::Medium,
-        ThinkingLevel::Medium => ThinkingLevel::High,
-        ThinkingLevel::High => ThinkingLevel::XHigh,
-        ThinkingLevel::XHigh => ThinkingLevel::Off,
-    }
-}
-
-fn prev_thinking(level: ThinkingLevel) -> ThinkingLevel {
-    match level {
-        ThinkingLevel::Off => ThinkingLevel::XHigh,
-        ThinkingLevel::Minimal => ThinkingLevel::Off,
-        ThinkingLevel::Low => ThinkingLevel::Off,
-        ThinkingLevel::Medium => ThinkingLevel::Low,
-        ThinkingLevel::High => ThinkingLevel::Medium,
-        ThinkingLevel::XHigh => ThinkingLevel::High,
-    }
-}
-
 fn is_browser_health_input(field: SettingsField) -> bool {
     matches!(
         field,
@@ -1274,103 +1249,6 @@ fn is_browser_health_input(field: SettingsField) -> bool {
     )
 }
 
-fn thinking_label(level: ThinkingLevel) -> &'static str {
-    match level {
-        ThinkingLevel::Off => "Off",
-        ThinkingLevel::Minimal => "Minimal",
-        ThinkingLevel::Low => "Low",
-        ThinkingLevel::Medium => "Medium",
-        ThinkingLevel::High => "High",
-        ThinkingLevel::XHigh => "XHigh",
-    }
-}
-
-fn animation_label(level: AnimationLevel) -> &'static str {
-    match level {
-        AnimationLevel::None => "none",
-        AnimationLevel::Spinner => "spinner",
-        AnimationLevel::Minimal => "minimal",
-    }
-}
-
-enum SettingsRow {
-    Header,
-    Tabs,
-    Field(SettingsField),
-    EmptyMessage,
-    Save,
-}
-
-fn visit_settings_rows(state: &SettingsState, mut visit: impl FnMut(SettingsRow, u16)) {
-    let mut row: u16 = 0;
-    visit(SettingsRow::Header, row);
-    row += 2;
-    visit(SettingsRow::Tabs, row);
-    row += 2;
-
-    let fields = state.visible_fields();
-    if fields.is_empty() {
-        visit(SettingsRow::EmptyMessage, row);
-        row += 1;
-    } else {
-        for field in fields {
-            visit(SettingsRow::Field(*field), row);
-            row += 1;
-        }
-    }
-
-    row += 1;
-    visit(SettingsRow::Save, row);
-}
-
-fn total_settings_rows(state: &SettingsState) -> u16 {
-    let mut total = 0;
-    visit_settings_rows(state, |_, row| {
-        total = row.saturating_add(1);
-    });
-    total
-}
-
-fn selected_settings_row(state: &SettingsState) -> u16 {
-    let selected = state.current_field();
-    let mut selected_row = 0;
-    visit_settings_rows(state, |entry, row| match entry {
-        SettingsRow::Field(field) if field == selected => selected_row = row,
-        SettingsRow::Save if selected == SettingsField::Save => selected_row = row,
-        _ => {}
-    });
-    selected_row
-}
-
-fn settings_scroll_offset(state: &SettingsState, visible_rows: u16) -> u16 {
-    if visible_rows == 0 {
-        return 0;
-    }
-
-    let total_rows = total_settings_rows(state);
-    if total_rows <= visible_rows {
-        return 0;
-    }
-
-    let selected_row = selected_settings_row(state);
-    let desired = selected_row.saturating_sub(visible_rows.saturating_sub(1));
-    desired.min(total_rows.saturating_sub(visible_rows))
-}
-
-fn scrolled_screen_y(inner: Rect, logical_row: u16, scroll_offset: u16) -> Option<u16> {
-    if logical_row < scroll_offset {
-        return None;
-    }
-
-    let visible_row = logical_row - scroll_offset;
-    if visible_row >= inner.height {
-        return None;
-    }
-
-    Some(inner.y + visible_row)
-}
-
-/// Settings overlay widget.
 pub struct SettingsView<'a> {
     state: &'a SettingsState,
     theme: &'a Theme,

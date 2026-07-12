@@ -501,15 +501,12 @@ Active:
 Preview/planned:
 
 - executable workflow runner for build-step orchestration
-- MCP planned
 - `.imp/agents` planned
 - ACP editor adapter scaffold remains internal/out-of-scope for 0.3.0 unless separately verified
 - hosted sync/team collaboration planned
 - workflow API planned
 
-Compatibility/legacy:
-
-- TypeScript/Pi extension compatibility is experimental and not a shipped extension surface
+Shipped extension support is Lua.
 
 ## Technical docs
 

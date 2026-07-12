@@ -136,4 +136,4 @@ Headless or unavailable UI contexts fail closed: requests return an unavailable/
 
 ## Stability
 
-Lua is the current shipped extension path. TypeScript extension support exists in repository code paths but should not be documented as the stable shipped extension system.
+Lua is the current shipped extension path.

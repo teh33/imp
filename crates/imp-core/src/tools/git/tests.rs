@@ -81,15 +81,15 @@ fn extract_text(result: &ToolOutput) -> String {
 }
 
 #[test]
-fn schema_exposes_readonly_worktree_inspection_and_uses_snake_case_fields() {
+fn schema_exposes_worktree_actions_and_uses_snake_case_fields() {
     let schema = GitTool.parameters();
     let properties = schema["properties"].as_object().unwrap();
     let actions = properties["action"]["enum"].as_array().unwrap();
 
     assert!(actions.iter().any(|value| value == "worktree_list"));
-    assert!(!actions.iter().any(|value| value == "worktree_add"));
-    assert!(!actions.iter().any(|value| value == "worktree_remove"));
-    assert!(!properties.contains_key("worktree_path"));
+    assert!(actions.iter().any(|value| value == "worktree_add"));
+    assert!(actions.iter().any(|value| value == "worktree_remove"));
+    assert!(properties.contains_key("worktree_path"));
     assert!(properties.contains_key("all_changes"));
     assert!(!properties.contains_key("all"));
     assert!(properties.contains_key("allow_empty"));
@@ -314,6 +314,43 @@ async fn git_restore_reverts_file_and_creates_checkpoint() {
     );
     assert_eq!(checkpoint_state.checkpoints().len(), 1);
     assert!(result.details["checkpoint_id"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn git_worktree_actions_manage_worktrees() {
+    let dir = setup_repo();
+    let tool = GitTool;
+    let worktree_path = dir.path().join("../git-tool-worktree");
+    let add = tool
+        .execute(
+            "c-worktree-add",
+            json!({
+                "action": "worktree_add",
+                "worktree_path": worktree_path.display().to_string(),
+                "branch": "feature/git-worktree"
+            }),
+            test_ctx(dir.path(), AgentMode::Worker),
+        )
+        .await
+        .unwrap();
+    assert!(!add.is_error, "{}", extract_text(&add));
+    assert!(worktree_path.exists());
+    let remove = tool
+        .execute(
+            "c-worktree-remove",
+            json!({
+                "action": "worktree_remove",
+                "worktree_path": worktree_path.display().to_string(),
+                "branch": "feature/git-worktree",
+                "delete_branch": true,
+                "force": true
+            }),
+            test_ctx(dir.path(), AgentMode::Worker),
+        )
+        .await
+        .unwrap();
+    assert!(!remove.is_error, "{}", extract_text(&remove));
+    assert!(!worktree_path.exists());
 }
 
 #[tokio::test]

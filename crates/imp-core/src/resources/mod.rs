@@ -39,68 +39,6 @@ impl PromptTemplate {
     }
 }
 
-/// Discovered soul document.
-#[derive(Debug, Clone)]
-pub struct SoulDoc {
-    pub path: PathBuf,
-    pub content: String,
-}
-
-/// Discover the nearest project soul document by walking up from cwd.
-pub fn discover_project_soul(cwd: &Path) -> Option<SoulDoc> {
-    let mut dir = Some(cwd);
-    while let Some(d) = dir {
-        let path = storage::project_soul_path(d);
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            return Some(SoulDoc { path, content });
-        }
-        dir = d.parent();
-    }
-    None
-}
-
-/// Suggest where a new project soul should be created.
-///
-/// Prefers the nearest ancestor that looks like a project root. Falls back to `cwd/.imp/soul.md`.
-pub fn suggested_project_soul_path(cwd: &Path) -> PathBuf {
-    let mut dir = Some(cwd);
-    while let Some(d) = dir {
-        let looks_like_project_root = d.join(".imp").exists()
-            || d.join(".git").exists()
-            || d.join("Cargo.toml").exists()
-            || d.join("package.json").exists()
-            || d.join("pyproject.toml").exists()
-            || d.join("go.mod").exists()
-            || d.join("AGENTS.md").exists()
-            || d.join("CLAUDE.md").exists();
-        if looks_like_project_root {
-            return storage::project_soul_path(d);
-        }
-        dir = d.parent();
-    }
-
-    cwd.join(".imp").join("soul.md")
-}
-
-/// Discover the active soul document.
-///
-/// Precedence:
-/// 1. nearest project `.imp/soul.md` while walking up from cwd
-/// 2. global `<user_config_dir>/soul.md`
-pub fn discover_soul(cwd: &Path, user_config_dir: &Path) -> Option<SoulDoc> {
-    if let Some(project) = discover_project_soul(cwd) {
-        return Some(project);
-    }
-
-    let global = user_config_dir.join("soul.md");
-    std::fs::read_to_string(&global)
-        .ok()
-        .map(|content| SoulDoc {
-            path: global,
-            content,
-        })
-}
-
 fn global_agents_candidates(user_config_dir: &Path) -> [PathBuf; 3] {
     [
         user_config_dir.join("agents.md"),
@@ -286,6 +224,3 @@ pub fn render_skill_invocation(name: &str, content: &str, args: &str) -> String 
 
     format!("Use the `{name}` skill.\n\n{body}")
 }
-
-#[cfg(test)]
-mod tests;

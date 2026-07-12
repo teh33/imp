@@ -7,187 +7,26 @@ use imp_llm::{
     Usage,
 };
 
+use crate::agent::context_recovery::{
+    apply_provider_context_baseline, auto_compaction_should_run, auto_compaction_tail_tokens,
+    effective_display_window, format_context_estimate_details, mask_all_observations_for_recovery,
+    recoverable_context_failure, recoverable_context_failure_message,
+    recoverable_stream_failure_message, sanitized_request_estimate, update_observed_input_limit,
+    MAX_CONTEXT_RECOVERY_ATTEMPTS, MAX_STREAM_RECOVERY_ATTEMPTS,
+};
 use crate::agent::loop_state::enforce_verification_closeout;
 use crate::agent::{
     Agent, AgentCommand, AgentEvent, LoopDecision, RecoveryCheckpointKind, RunFinalStatus,
     StopReason as AgentStopReason, TimingEvent, TimingStage, TurnPhase, TurnState,
 };
-use crate::config::AutoCompactionMode;
 use crate::error::Result;
 use crate::hooks::HookEvent;
+use crate::storage;
 use crate::ui::NotifyLevel;
-use crate::workflow::{
-    capture_worktree_diff_artifacts, write_worktree_metadata, VerificationGateRunner,
-    WorktreeRunMetadata,
-};
-use crate::{storage, trace::TraceWriter};
 
 use super::{
     build_assistant_message, clone_model, push_stream_text_block, push_stream_thinking_block,
 };
-
-const STREAM_RECOVERY_FOLLOW_UP: &str = "The provider stream failed before completing the previous assistant message. Continue from the last completed conversation state. Do not repeat already completed tool side effects; if you need to retry, first inspect current state and proceed safely.";
-const MAX_STREAM_RECOVERY_ATTEMPTS: u32 = 2;
-const MAX_CONTEXT_RECOVERY_ATTEMPTS: u32 = 1;
-
-fn recoverable_stream_failure_message(error: &str) -> Option<String> {
-    if error.contains("Provider stream failed after partial output")
-        || error.contains("Provider stream failed before output")
-        || error.contains("missing terminal completion event")
-    {
-        Some(format!(
-            "{STREAM_RECOVERY_FOLLOW_UP}\n\nProvider error: {error}"
-        ))
-    } else {
-        None
-    }
-}
-
-fn effective_display_window(
-    estimate: &crate::context::RequestContextEstimate,
-    observed_input_limit: Option<u32>,
-) -> u32 {
-    observed_input_limit
-        .map(|limit| estimate.display_window.min(limit.max(1)))
-        .unwrap_or(estimate.display_window)
-}
-
-fn format_context_estimate_details(
-    estimate: &crate::context::RequestContextEstimate,
-    observed_input_limit: Option<u32>,
-) -> String {
-    let effective = observed_input_limit.unwrap_or(estimate.input_limit);
-    let display = effective_display_window(estimate, observed_input_limit);
-    format!(
-        "estimate: input {} / effective limit {} (model limit {}, display {}, system {}, tools {}, messages {}, planned output {}, observed ceiling {})",
-        estimate.input_tokens,
-        effective,
-        estimate.input_limit,
-        display,
-        estimate.system_tokens,
-        estimate.tool_definition_tokens,
-        estimate.message_tokens,
-        estimate.output_tokens,
-        observed_input_limit
-            .map(|limit| limit.to_string())
-            .unwrap_or_else(|| "none".to_string())
-    )
-}
-
-fn recoverable_context_failure_message(error: &str) -> bool {
-    crate::error_display::format_error_for_display(error).starts_with("Context full:")
-}
-
-fn recoverable_context_failure(error: &imp_llm::Error) -> bool {
-    matches!(error, imp_llm::Error::ContextTooLong { .. })
-        || matches!(error, imp_llm::Error::Provider(message) if recoverable_context_failure_message(message))
-}
-
-fn auto_compaction_should_run(
-    mode: AutoCompactionMode,
-    usage: &crate::context::ContextUsage,
-    trigger_ratio: f64,
-) -> bool {
-    if usage.limit == 0 {
-        return false;
-    }
-    let trigger_ratio = if trigger_ratio.is_finite() {
-        trigger_ratio.clamp(0.0, 1.0)
-    } else {
-        0.90
-    };
-    match mode {
-        AutoCompactionMode::Disabled => false,
-        AutoCompactionMode::NearThreshold => usage.ratio >= trigger_ratio,
-        AutoCompactionMode::Aggressive => usage.ratio >= trigger_ratio.min(0.75),
-    }
-}
-
-fn auto_compaction_tail_tokens(usage: &crate::context::ContextUsage, target_ratio: f64) -> u32 {
-    if usage.limit == 0 {
-        return crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS;
-    }
-    let target_ratio = if target_ratio.is_finite() {
-        target_ratio.clamp(0.05, 0.95)
-    } else {
-        0.70
-    };
-    let target = (usage.limit as f64 * target_ratio).floor() as u32;
-    target
-        .max(16_000)
-        .min(crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS)
-}
-
-fn observed_input_limit_after_overflow(estimate: &crate::context::RequestContextEstimate) -> u32 {
-    // If the provider rejects a request below our configured model limit, treat
-    // that provider response as authoritative for this run and leave headroom
-    // below the failed local estimate. This prevents imp from repeatedly
-    // waiting until the same too-high local token count before trimming again.
-    ((estimate.input_tokens as f64) * 0.80).floor().max(1.0) as u32
-}
-
-fn update_observed_input_limit(
-    observed_input_limit: &mut Option<u32>,
-    estimate: &crate::context::RequestContextEstimate,
-) -> u32 {
-    let observed = observed_input_limit_after_overflow(estimate);
-    let effective = observed_input_limit
-        .map(|existing| existing.min(observed))
-        .unwrap_or(observed);
-    *observed_input_limit = Some(effective);
-    effective
-}
-
-fn apply_provider_context_baseline(
-    estimate: &mut crate::context::RequestContextEstimate,
-    provider_context_baseline_tokens: Option<u32>,
-) {
-    if let Some(baseline) = provider_context_baseline_tokens {
-        estimate.input_tokens = estimate.input_tokens.max(baseline);
-    }
-}
-
-fn sanitized_request_estimate(
-    messages: &[Message],
-    model: &imp_llm::Model,
-    options: &RequestOptions,
-    observed_input_limit: Option<u32>,
-    provider_context_baseline_tokens: Option<u32>,
-) -> (Vec<Message>, crate::context::RequestContextEstimate) {
-    let mut context_messages = messages.to_vec();
-    crate::session::sanitize_messages(&mut context_messages);
-    let mut estimate = crate::context::estimate_request_context(&context_messages, model, options);
-    apply_provider_context_baseline(&mut estimate, provider_context_baseline_tokens);
-    if let Some(limit) = observed_input_limit {
-        let effective_limit = limit.max(1);
-        estimate.input_limit = estimate.input_limit.min(effective_limit);
-        estimate.display_window = estimate.display_window.min(effective_limit);
-    }
-    (context_messages, estimate)
-}
-
-fn mask_all_observations_for_recovery(
-    messages: &mut [Message],
-    model: &imp_llm::Model,
-    options: &RequestOptions,
-    observed_input_limit: Option<u32>,
-    provider_context_baseline_tokens: Option<u32>,
-) -> Option<(u32, u32)> {
-    let before = sanitized_request_estimate(
-        messages,
-        model,
-        options,
-        observed_input_limit,
-        provider_context_baseline_tokens,
-    )
-    .1
-    .input_tokens;
-    crate::context::mask_observations(messages, 0);
-    let after = sanitized_request_estimate(messages, model, options, observed_input_limit, None)
-        .1
-        .input_tokens;
-    (after < before).then_some((before, after))
-}
 
 impl Agent {
     pub(super) async fn reconcile_recovery_before_turn(
@@ -218,65 +57,6 @@ impl Agent {
         }
 
         Some(reconciliation)
-    }
-
-    async fn run_verification_gates(&mut self, artifacts: &storage::RunArtifacts) {
-        let runner = VerificationGateRunner::new(&self.cwd, artifacts.root().join("verification"));
-        let mut completed = Vec::new();
-        for index in 0..self.verification_gates.len() {
-            if matches!(
-                self.verification_gates[index].status,
-                crate::workflow::VerificationGateStatus::Passed
-                    | crate::workflow::VerificationGateStatus::Failed
-                    | crate::workflow::VerificationGateStatus::Blocked
-                    | crate::workflow::VerificationGateStatus::Skipped
-            ) {
-                continue;
-            }
-            self.emit(AgentEvent::VerificationStarted {
-                gate: self.verification_gates[index].clone(),
-            })
-            .await;
-            let _ = runner.run(&mut self.verification_gates[index]).await;
-            completed.push(self.verification_gates[index].clone());
-        }
-        for gate in completed {
-            self.emit(AgentEvent::VerificationCompleted {
-                closeout_effect: gate.closeout_effect(),
-                gate,
-            })
-            .await;
-        }
-    }
-
-    async fn capture_worktree_run_artifacts(
-        &self,
-        artifacts: &storage::RunArtifacts,
-    ) -> Option<WorktreeRunMetadata> {
-        let mut metadata = self.worktree_run_metadata.clone()?;
-        self.write_trace_event(&AgentEvent::WorktreeCreated {
-            metadata: metadata.clone(),
-        });
-        let worktree_artifact_dir = artifacts.root().join("worktree");
-        match capture_worktree_diff_artifacts(&mut metadata, &worktree_artifact_dir).await {
-            Ok(_) => {
-                let _ = write_worktree_metadata(
-                    &worktree_artifact_dir.join("worktree-metadata.json"),
-                    &metadata,
-                )
-                .await;
-                self.write_trace_event(&AgentEvent::WorktreeDiffCaptured {
-                    metadata: metadata.clone(),
-                });
-                Some(metadata)
-            }
-            Err(err) => {
-                self.write_trace_event(&AgentEvent::Warning {
-                    message: format!("failed to capture worktree diff artifacts: {err}"),
-                });
-                None
-            }
-        }
     }
 
     async fn record_partial_assistant_turn(
@@ -328,11 +108,7 @@ impl Agent {
         let run_id = format!("run_{}", uuid::Uuid::new_v4().simple());
         let run_artifacts = storage::project_run_artifacts(&self.cwd, &run_id).ok();
         if let Some(artifacts) = &run_artifacts {
-            if let Ok(writer) = TraceWriter::create(artifacts.trace_path()) {
-                if let Ok(mut active_trace_writer) = self.trace_writer.lock() {
-                    *active_trace_writer = Some(writer);
-                }
-            }
+            self.start_trace_writer(artifacts);
             self.write_workflow_contract_snapshot(artifacts);
         }
         trace_run("artifacts", phase_started);

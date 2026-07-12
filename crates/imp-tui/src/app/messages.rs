@@ -216,7 +216,6 @@ impl App {
         self.messages.iter_mut().rev().find(|msg| msg.is_streaming)
     }
 
-
     pub(super) fn find_tool_call_mut(
         &mut self,
         tool_call_id: &str,
@@ -237,7 +236,6 @@ impl App {
         self.invalidate_chat_render_cache();
         true
     }
-
 
     pub(super) fn queued_message_preview(&self, terminal_width: u16) -> Option<String> {
         let text = self.message_queue.first()?.text();

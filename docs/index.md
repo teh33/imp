@@ -33,4 +33,4 @@ These pages document imp's current shipped or intentionally exposed behavior. St
 
 ## Scope
 
-The docs site intentionally excludes superseded implementation plans, one-off audits, release scratchpads, and completed migration proposals. Git history remains the archive for those records. Experimental TypeScript/Pi extension compatibility is not a shipped extension surface; Lua is the supported extension runtime.
+The docs site intentionally excludes superseded implementation plans, one-off audits, release scratchpads, and completed migration proposals. Git history remains the archive for those records. Lua is the supported extension runtime.

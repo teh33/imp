@@ -3,9 +3,8 @@ use std::fmt;
 use crate::config::AgentMode;
 use crate::context::estimate_tokens;
 use crate::guardrails::{self, GuardrailProfile};
-use crate::resources::{AgentsMd, Skill, SoulDoc};
+use crate::resources::{AgentsMd, Skill};
 use crate::roles::Role;
-use crate::soul::{soul_identity_text, DEFAULT_IDENTITY};
 use crate::tools::ToolRegistry;
 
 /// A project fact from durable project context.
@@ -69,16 +68,11 @@ pub struct AssembleParams<'a> {
     pub skills: &'a [Skill],
     pub facts: &'a [Fact],
     pub project_memory_status: Option<&'a str>,
-    pub soul: Option<&'a SoulDoc>,
     pub task: Option<&'a TaskContext>,
     pub role: Option<&'a Role>,
     pub mode: &'a AgentMode,
-    pub memory: Option<&'a str>,
-    pub user_profile: Option<&'a str>,
     pub cwd: Option<&'a std::path::Path>,
     pub repo_context: Option<&'a crate::repo_intelligence::RepoContextSummary>,
-    /// Whether to include learning instructions in the system prompt.
-    pub learning_enabled: bool,
     /// Resolved guardrail profile (None = guardrails disabled).
     pub guardrail_profile: Option<GuardrailProfile>,
 }
@@ -102,13 +96,7 @@ fn assemble_inner(p: &AssembleParams<'_>) -> AssembledPrompt {
     let mut parts = Vec::new();
 
     // Layer 1: Identity + tool descriptions
-    parts.push(identity_layer(
-        p.tools,
-        p.role,
-        p.mode,
-        p.learning_enabled,
-        p.soul,
-    ));
+    parts.push(identity_layer(p.tools, p.role, p.mode));
 
     // Layer 1.25: Execution policy (currently folded into identity operating rules)
     let execution_policy = execution_policy_layer();
@@ -157,18 +145,6 @@ fn assemble_inner(p: &AssembleParams<'_>) -> AssembledPrompt {
         parts.push(headless_execution_layer(task));
     }
 
-    // Layer 6: Agent memory
-    if let Some(mem) = p.memory {
-        if !mem.is_empty() {
-            parts.push(mem.to_string());
-        }
-    }
-    if let Some(user) = p.user_profile {
-        if !user.is_empty() {
-            parts.push(user.to_string());
-        }
-    }
-
     let text = parts.join("\n\n");
     let estimated_tokens = estimate_tokens(&text);
 
@@ -178,19 +154,9 @@ fn assemble_inner(p: &AssembleParams<'_>) -> AssembledPrompt {
     }
 }
 
-fn identity_layer(
-    tools: &ToolRegistry,
-    role: Option<&Role>,
-    mode: &AgentMode,
-    learning_enabled: bool,
-    soul: Option<&SoulDoc>,
-) -> String {
+fn identity_layer(tools: &ToolRegistry, role: Option<&Role>, mode: &AgentMode) -> String {
     let mut s = String::new();
-    if let Some(soul) = soul {
-        s.push_str(&soul_identity_text(&soul.content));
-    } else {
-        s.push_str(DEFAULT_IDENTITY);
-    }
+    s.push_str("You are imp, a professional coding agent.");
     s.push_str("\n\nAvailable tools:\n");
 
     let mut defs = match role {
@@ -203,12 +169,6 @@ fn identity_layer(
 
     for def in &defs {
         s.push_str(&format!("- {}: {}\n", def.name, def.description));
-    }
-
-    if let Some(soul) = soul {
-        s.push_str("\n\nSoul:\n");
-        s.push_str(&soul.content);
-        s.push('\n');
     }
 
     s.push_str("\nTool routing:\n");
@@ -276,13 +236,6 @@ fn identity_layer(
     if let Some(instructions) = mode.instructions() {
         s.push('\n');
         s.push_str(instructions);
-        s.push('\n');
-    }
-
-    // Append learning instructions when enabled
-    if learning_enabled {
-        s.push('\n');
-        s.push_str(crate::learning::LEARNING_INSTRUCTIONS);
         s.push('\n');
     }
 

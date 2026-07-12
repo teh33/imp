@@ -177,7 +177,6 @@ The following production paths still launch processes directly and are not migra
 this phase:
 
 - `crates/imp-lua/src/bridge.rs` — Lua tool subprocess execution;
-- `crates/imp-core/src/typescript_extensions/bun_runner.rs` — TypeScript/Bun hosts;
 - `crates/imp-core/src/tools/prototype.rs` — prototype execution and runtime probes;
 - `crates/imp-core/src/workflow/worktree_run.rs` — workflow Git children;
 - `crates/imp-core/src/tools/git.rs` — Git subprocesses;

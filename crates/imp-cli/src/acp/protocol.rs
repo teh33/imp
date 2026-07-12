@@ -155,8 +155,8 @@ pub(crate) struct SessionCapabilities {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SessionNewParams {
     pub cwd: String,
-    #[serde(default)]
-    pub mcp_servers: Vec<Value>,
+    #[serde(default, rename = "mcpServers")]
+    pub unsupported_mcp_servers: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -164,8 +164,8 @@ pub(crate) struct SessionNewParams {
 pub(crate) struct SessionLoadParams {
     pub session_id: String,
     pub cwd: String,
-    #[serde(default)]
-    pub mcp_servers: Vec<Value>,
+    #[serde(default, rename = "mcpServers")]
+    pub unsupported_mcp_servers: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

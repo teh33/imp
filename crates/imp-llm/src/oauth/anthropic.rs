@@ -20,7 +20,8 @@ const CALLBACK_HOST: &str = "127.0.0.1";
 const CALLBACK_PORT: u16 = 53692;
 const CALLBACK_PATH: &str = "/callback";
 const REDIRECT_URI: &str = "http://localhost:53692/callback";
-const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const SCOPES: &str =
+    "org:create_api_key user:profile user:inference user:sessions:claude_code user:file_upload";
 
 const SUCCESS_HTML: &str = "\
 <html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\

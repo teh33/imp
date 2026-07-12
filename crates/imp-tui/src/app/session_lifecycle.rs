@@ -14,6 +14,8 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use tempfile::TempDir;
 
+mod terminal_title;
+
 /// Helper: build an App with defaults and an in-memory session.
 fn make_app() -> App {
     let config = Config::default();
@@ -167,112 +169,6 @@ fn model_picker_includes_current_alias_even_without_auth() {
 
     assert_eq!(current_model, "kimi-k2.6");
     assert!(models.iter().any(|model| model.id == "kimi-k2.6"));
-}
-
-#[test]
-fn terminal_title_uses_manual_session_name_when_present() {
-    let mut app = make_app();
-    app.session.set_name("my chat");
-    assert_eq!(app.terminal_title(), "imp — my chat");
-}
-
-#[test]
-fn terminal_title_falls_back_to_summarized_first_prompt() {
-    let mut app = make_app();
-    app.session
-        .append(SessionEntry::Message {
-            id: "m1".into(),
-            parent_id: None,
-            message: Message::user(
-                "can we adjust the information that is displayed in the top bar",
-            ),
-        })
-        .unwrap();
-    assert_eq!(app.terminal_title(), "imp — adjust top bar");
-}
-
-#[test]
-fn terminal_title_uses_nine_dot_spinner_while_streaming() {
-    let mut app = make_app();
-    app.session.set_name("my chat");
-    app.is_streaming = true;
-    app.tick = 0;
-    assert_eq!(app.terminal_title(), "⠋ — my chat");
-    app.tick = 16;
-    assert_eq!(app.terminal_title(), "⠼ — my chat");
-}
-
-#[test]
-fn terminal_title_uses_question_mark_while_waiting_for_answer() {
-    let mut app = make_app();
-    app.session.set_name("my chat");
-    app.is_streaming = true;
-    app.ask_state = Some(crate::views::ask_bar::AskState::new(
-        "Which option?".into(),
-        String::new(),
-        Vec::new(),
-        false,
-    ));
-
-    assert_eq!(app.terminal_title(), "? — my chat");
-}
-
-#[tokio::test]
-async fn terminal_title_spins_while_agent_start_is_pending() {
-    let mut app = make_app();
-    app.session.set_name("my chat");
-    app.agent_start_task = Some(tokio::spawn(async {}));
-    app.tick = 4;
-    assert_eq!(app.terminal_title(), "⠙ — my chat");
-}
-
-#[test]
-fn terminal_title_uses_static_working_glyph_when_animations_are_off() {
-    let mut app = make_app();
-    app.config.ui.animations = imp_core::config::AnimationLevel::None;
-    app.session.set_name("my chat");
-    app.is_streaming = true;
-    app.tick = 36;
-    assert_eq!(app.terminal_title(), "• — my chat");
-}
-
-#[test]
-fn terminal_title_uses_loop_icon_when_loop_is_active() {
-    let mut app = make_app();
-    app.session.set_name("my chat");
-    app.loop_state = Some(LoopState {
-        message: "keep going".into(),
-        completed_turns: 1,
-        budget: Some(3),
-    });
-    app.is_streaming = true;
-
-    app.tick = 0;
-    assert_eq!(app.terminal_title(), "↻ — my chat");
-    app.tick = 8;
-    assert_eq!(app.terminal_title(), "↻ — my chat");
-}
-
-#[test]
-fn terminal_title_uses_static_loop_glyph_when_animations_are_off() {
-    let mut app = make_app();
-    app.config.ui.animations = imp_core::config::AnimationLevel::None;
-    app.session.set_name("my chat");
-    app.loop_state = Some(LoopState {
-        message: "keep going".into(),
-        completed_turns: 1,
-        budget: Some(3),
-    });
-    app.is_streaming = true;
-    app.tick = 8;
-
-    assert_eq!(app.terminal_title(), "↻ — my chat");
-}
-
-#[test]
-fn terminal_title_defaults_to_chat_when_empty() {
-    let app = make_app();
-    assert_eq!(app.terminal_title(), "imp — chat");
 }
 
 // ── 1. App::new creates with config + session ───────────────
@@ -1650,18 +1546,6 @@ fn tool_updates_target_streaming_assistant_not_latest_message() {
     assert_eq!(system.role, MessageRole::System);
     assert_eq!(system.content, "transient note");
 }
-#[test]
-fn tui_integration_slash_memory_shows_stores() {
-    let mut app = make_app();
-
-    app.execute_command("memory");
-
-    assert_eq!(app.messages.len(), 1);
-    assert_eq!(app.messages[0].role, MessageRole::System);
-    assert!(app.messages[0].content.contains("Memory ("));
-    assert!(app.messages[0].content.contains("User profile ("));
-}
-
 #[tokio::test]
 async fn natural_prompt_sends_without_workflow_takeover_question() {
     let mut app = make_app();
@@ -1673,62 +1557,6 @@ async fn natural_prompt_sends_without_workflow_takeover_question() {
         Some("please plan this feature")
     );
     assert!(app.editor.content().is_empty());
-}
-
-#[test]
-fn tui_integration_slash_memory_add_and_show() {
-    let tmp = TempDir::new().unwrap();
-    // Point global config dir to temp so we don't touch real memory.
-    // Config::user_config_dir uses HOME/.imp, not XDG_CONFIG_HOME.
-    let previous_home = std::env::var_os("HOME");
-    let previous_userprofile = std::env::var_os("USERPROFILE");
-    std::env::set_var("HOME", tmp.path());
-    std::env::remove_var("USERPROFILE");
-
-    let mut app = make_app();
-
-    app.execute_command("memory add Test entry from slash command");
-    assert!(app.messages.last().unwrap().content.contains("Added"));
-
-    // Show should list the entry
-    app.execute_command("memory");
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("Test entry from slash command"));
-
-    // Clean up env vars
-    if let Some(previous_home) = previous_home {
-        std::env::set_var("HOME", previous_home);
-    } else {
-        std::env::remove_var("HOME");
-    }
-    if let Some(previous_userprofile) = previous_userprofile {
-        std::env::set_var("USERPROFILE", previous_userprofile);
-    } else {
-        std::env::remove_var("USERPROFILE");
-    }
-}
-
-#[test]
-fn tui_integration_slash_memory_help() {
-    let mut app = make_app();
-
-    app.execute_command("memory help");
-
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("/memory add"));
-    assert!(content.contains("/memory remove"));
-    assert!(content.contains("/memory clear"));
-}
-
-#[test]
-fn tui_integration_slash_memory_unknown_subcommand() {
-    let mut app = make_app();
-
-    app.execute_command("memory frobnicate");
-
-    let content = &app.messages.last().unwrap().content;
-    assert!(content.contains("Unknown memory subcommand"));
-    assert!(content.contains("frobnicate"));
 }
 
 #[test]

@@ -1,19 +1,25 @@
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
+
+mod exec;
+mod output;
+mod worktree;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::process::Command;
 
-use super::{resolve_path, truncate_head, Tool, ToolContext, ToolOutput};
+use super::{resolve_path, Tool, ToolContext, ToolOutput};
 use crate::config::AgentMode;
 use crate::error::Result;
+use exec::{run_git, run_git_owned, run_git_owned_with_env, run_git_with_env};
+use output::{
+    display_or_unknown, git_failure, not_git_repo_message, stdout_lossy, stdout_trimmed,
+    truncate_for_display,
+};
+use worktree::{
+    current_secondary_worktree, worktree_add_action, worktree_list_action, worktree_remove_action,
+};
 
 const DEFAULT_LOG_LIMIT: u32 = 10;
-const DISPLAY_MAX_LINES: usize = 400;
-const DISPLAY_MAX_BYTES: usize = 32 * 1024;
-const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct GitTool;
 
@@ -51,7 +57,9 @@ impl Tool for GitTool {
                         "stage",
                         "commit",
                         "restore",
-                        "worktree_list"
+                        "worktree_list",
+                        "worktree_add",
+                        "worktree_remove"
                     ],
                     "description": "Git action"
                 },
@@ -110,6 +118,26 @@ impl Tool for GitTool {
                     "type": "string",
                     "description": "Restore source ref"
                 },
+                "worktree_path": {
+                    "type": "string",
+                    "description": "Worktree path for worktree_add/worktree_remove"
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch name for worktree_add or explicit branch deletion"
+                },
+                "start_point": {
+                    "type": "string",
+                    "description": "Starting ref for worktree_add"
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Force worktree_remove or branch deletion"
+                },
+                "delete_branch": {
+                    "type": "boolean",
+                    "description": "Also delete branch during worktree_remove"
+                }
             },
             "required": ["action"]
         })
@@ -164,6 +192,8 @@ impl Tool for GitTool {
             "stage" => stage_action(&cwd, &repo_root, &params).await,
             "commit" => commit_action(&cwd, &repo_root, &params).await,
             "restore" => restore_action(&cwd, &repo_root, &params, &ctx).await,
+            "worktree_add" => worktree_add_action(&cwd, &repo_root, &params).await,
+            "worktree_remove" => worktree_remove_action(&cwd, &repo_root, &params).await,
             _ => Ok(ToolOutput::error(format!(
                 "Unsupported git action `{action}`"
             ))),
@@ -176,7 +206,9 @@ fn action_class(action: &str) -> Option<GitActionClass> {
         "status" | "diff" | "log" | "merge_base" | "worktree_list" => {
             Some(GitActionClass::ReadOnly)
         }
-        "stage" | "commit" | "restore" => Some(GitActionClass::Mutating),
+        "stage" | "commit" | "restore" | "worktree_add" | "worktree_remove" => {
+            Some(GitActionClass::Mutating)
+        }
         _ => None,
     }
 }
@@ -323,7 +355,10 @@ async fn status_action(cwd: &Path, repo_root: &Path) -> Result<ToolOutput> {
     })
 }
 
-fn non_empty_param<'a>(params: &'a serde_json::Value, field_name: &str) -> Option<&'a str> {
+pub(super) fn non_empty_param<'a>(
+    params: &'a serde_json::Value,
+    field_name: &str,
+) -> Option<&'a str> {
     params
         .get(field_name)?
         .as_str()
@@ -331,7 +366,10 @@ fn non_empty_param<'a>(params: &'a serde_json::Value, field_name: &str) -> Optio
         .filter(|s| !s.is_empty())
 }
 
-fn validate_ref(value: &str, field_name: &str) -> std::result::Result<(), crate::error::Error> {
+pub(super) fn validate_ref(
+    value: &str,
+    field_name: &str,
+) -> std::result::Result<(), crate::error::Error> {
     if value.starts_with('-') || value.chars().any(|c| c == '\0' || c.is_control()) {
         return Err(crate::error::Error::Tool(format!(
             "{field_name} must be a safe git ref"
@@ -340,183 +378,16 @@ fn validate_ref(value: &str, field_name: &str) -> std::result::Result<(), crate:
     Ok(())
 }
 
-async fn worktree_list_action(cwd: &Path, repo_root: &Path) -> Result<ToolOutput> {
-    let output = run_git(cwd, ["worktree", "list", "--porcelain"]).await?;
-    if !output.status.success() {
-        return Ok(git_failure("git worktree list failed", &output));
+pub(super) fn validate_path_string(
+    value: &str,
+    field_name: &str,
+) -> std::result::Result<(), crate::error::Error> {
+    if value.chars().any(|c| c == '\0' || c.is_control()) {
+        return Err(crate::error::Error::Tool(format!(
+            "{field_name} must be a safe path string"
+        )));
     }
-
-    let entries = parse_worktree_list(&stdout_lossy(&output));
-    let current_secondary = current_secondary_worktree(cwd).await?;
-    let mut text = String::new();
-    text.push_str(&format!("repo: {}\n", repo_root.display()));
-    match &current_secondary {
-        Some(info) => {
-            text.push_str(&format!(
-                "current worktree: secondary ({}) at {}\n",
-                info.branch,
-                info.worktree_path.display()
-            ));
-            text.push_str(&format!("main worktree: {}\n", info.main_path.display()));
-        }
-        None => text.push_str("current worktree: main\n"),
-    }
-    if entries.is_empty() {
-        text.push_str("registered worktrees: none\n");
-    } else {
-        text.push_str("registered worktrees:\n");
-        for entry in &entries {
-            let branch = entry.branch.as_deref().unwrap_or("(detached)");
-            let mut flags = Vec::new();
-            if entry.is_bare {
-                flags.push("bare");
-            }
-            if entry.is_detached {
-                flags.push("detached");
-            }
-            if flags.is_empty() {
-                text.push_str(&format!("- {} [{}]\n", entry.path, branch));
-            } else {
-                text.push_str(&format!(
-                    "- {} [{}] ({})\n",
-                    entry.path,
-                    branch,
-                    flags.join(", ")
-                ));
-            }
-        }
-    }
-
-    Ok(ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text { text }],
-        details: json!({
-            "action": "worktree_list",
-            "repo_root": repo_root.display().to_string(),
-            "current_secondary_worktree": current_secondary.as_ref().map(|info| json!({
-                "main_path": info.main_path.display().to_string(),
-                "worktree_path": info.worktree_path.display().to_string(),
-                "branch": info.branch,
-            })),
-            "worktrees": entries.iter().map(|entry| json!({
-                "path": entry.path,
-                "branch": entry.branch,
-                "is_bare": entry.is_bare,
-                "is_detached": entry.is_detached,
-            })).collect::<Vec<_>>(),
-        }),
-        is_error: false,
-    })
-}
-
-async fn current_secondary_worktree(cwd: &Path) -> Result<Option<CurrentSecondaryWorktree>> {
-    let output = run_git(cwd, ["worktree", "list", "--porcelain"]).await?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let entries = parse_worktree_list(&stdout_lossy(&output));
-    let current = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let Some(current_entry) = entries
-        .iter()
-        .find(|entry| same_path(Path::new(&entry.path), &current))
-    else {
-        return Ok(None);
-    };
-    let Some(main_entry) = entries.first() else {
-        return Ok(None);
-    };
-    if current_entry.path == main_entry.path {
-        return Ok(None);
-    }
-
-    Ok(Some(CurrentSecondaryWorktree {
-        main_path: PathBuf::from(&main_entry.path),
-        worktree_path: PathBuf::from(&current_entry.path),
-        branch: current_entry
-            .branch
-            .clone()
-            .unwrap_or_else(|| "(detached)".to_string()),
-    }))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CurrentSecondaryWorktree {
-    main_path: PathBuf,
-    worktree_path: PathBuf,
-    branch: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedWorktreeEntry {
-    path: String,
-    branch: Option<String>,
-    is_bare: bool,
-    is_detached: bool,
-}
-
-fn parse_worktree_list(output: &str) -> Vec<ParsedWorktreeEntry> {
-    let mut entries = Vec::new();
-    let mut current_path: Option<String> = None;
-    let mut current_branch: Option<String> = None;
-    let mut is_bare = false;
-    let mut is_detached = false;
-
-    let push_current = |entries: &mut Vec<ParsedWorktreeEntry>,
-                        current_path: &mut Option<String>,
-                        current_branch: &mut Option<String>,
-                        is_bare: &mut bool,
-                        is_detached: &mut bool| {
-        if let Some(path) = current_path.take() {
-            entries.push(ParsedWorktreeEntry {
-                path,
-                branch: current_branch.take(),
-                is_bare: *is_bare,
-                is_detached: *is_detached,
-            });
-        }
-        *is_bare = false;
-        *is_detached = false;
-    };
-
-    for line in output.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            push_current(
-                &mut entries,
-                &mut current_path,
-                &mut current_branch,
-                &mut is_bare,
-                &mut is_detached,
-            );
-            current_path = Some(path.to_string());
-        } else if let Some(branch_ref) = line.strip_prefix("branch ") {
-            current_branch = Some(
-                branch_ref
-                    .strip_prefix("refs/heads/")
-                    .unwrap_or(branch_ref)
-                    .to_string(),
-            );
-        } else if line == "bare" {
-            is_bare = true;
-        } else if line == "detached" {
-            is_detached = true;
-        }
-    }
-
-    push_current(
-        &mut entries,
-        &mut current_path,
-        &mut current_branch,
-        &mut is_bare,
-        &mut is_detached,
-    );
-    entries
-}
-
-fn same_path(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
+    Ok(())
 }
 
 async fn diff_action(
@@ -1061,151 +932,6 @@ async fn head_sha_short(cwd: &Path) -> Option<String> {
     } else {
         Some(head)
     }
-}
-
-async fn run_git<I, S>(cwd: &Path, args: I) -> std::io::Result<std::process::Output>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut command = Command::new("git");
-    command
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    run_git_command(command).await
-}
-
-async fn run_git_owned(cwd: &Path, args: Vec<String>) -> std::io::Result<std::process::Output> {
-    run_git(cwd, args).await
-}
-
-async fn run_git_with_env<I, S>(
-    cwd: &Path,
-    args: I,
-    temp_index: Option<(&str, &Path)>,
-) -> std::io::Result<std::process::Output>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let mut command = Command::new("git");
-    command
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    if let Some((index, work_tree)) = temp_index {
-        command
-            .env("GIT_INDEX_FILE", index)
-            .env("GIT_WORK_TREE", work_tree);
-    }
-    run_git_command(command).await
-}
-
-async fn run_git_command(mut command: Command) -> std::io::Result<std::process::Output> {
-    match tokio::time::timeout(GIT_COMMAND_TIMEOUT, command.output()).await {
-        Ok(result) => result,
-        Err(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!(
-                "git command timed out after {}s",
-                GIT_COMMAND_TIMEOUT.as_secs()
-            ),
-        )),
-    }
-}
-
-async fn run_git_owned_with_env(
-    cwd: &Path,
-    args: Vec<String>,
-    temp_index: Option<(&str, &Path)>,
-) -> std::io::Result<std::process::Output> {
-    run_git_with_env(cwd, args, temp_index).await
-}
-
-fn stdout_lossy(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stdout).replace('\r', "")
-}
-
-fn stderr_lossy(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stderr).replace('\r', "")
-}
-
-fn stdout_trimmed(output: &std::process::Output) -> String {
-    stdout_lossy(output).trim().to_string()
-}
-
-fn stderr_trimmed(output: &std::process::Output) -> String {
-    stderr_lossy(output).trim().to_string()
-}
-
-fn not_git_repo_message(cwd: &Path, output: &std::process::Output) -> String {
-    let stderr = stderr_trimmed(output);
-    if stderr.is_empty() {
-        format!("Not inside a git repository: {}", cwd.display())
-    } else {
-        format!("Not inside a git repository: {}\n{}", cwd.display(), stderr)
-    }
-}
-
-fn git_failure(prefix: &str, output: &std::process::Output) -> ToolOutput {
-    let stdout = stdout_trimmed(output);
-    let stderr = stderr_trimmed(output);
-    let combined = match (stdout.is_empty(), stderr.is_empty()) {
-        (true, true) => prefix.to_string(),
-        (false, true) => format!("{prefix}: {stdout}"),
-        (true, false) => format!("{prefix}: {stderr}"),
-        (false, false) => format!("{prefix}: {stdout}\n{stderr}"),
-    };
-    ToolOutput {
-        content: vec![imp_llm::ContentBlock::Text { text: combined }],
-        details: json!({
-            "success": false,
-            "exit_code": output.status.code(),
-            "stdout": stdout,
-            "stderr": stderr,
-        }),
-        is_error: true,
-    }
-}
-
-fn display_or_unknown(s: &str) -> &str {
-    if s.trim().is_empty() {
-        "unknown"
-    } else {
-        s
-    }
-}
-
-fn truncate_for_display(text: &str) -> (String, String, Option<PathBuf>) {
-    let truncated = truncate_head(text, DISPLAY_MAX_LINES, DISPLAY_MAX_BYTES);
-    let content = truncated.content.trim_end().to_string();
-    let note = if truncated.truncated {
-        let base = format!(
-            "[output truncated: showing {}/{} lines, {}/{} bytes]",
-            truncated.output_lines,
-            truncated.total_lines,
-            truncated.output_bytes,
-            truncated.total_bytes,
-        );
-        match &truncated.temp_file {
-            Some(path) => format!("{base} full output: {}", path.display()),
-            None => base,
-        }
-    } else {
-        String::new()
-    };
-    (content, note, truncated.temp_file)
 }
 
 #[cfg(test)]

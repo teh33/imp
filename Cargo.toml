@@ -30,7 +30,6 @@ default-members = [
     "crates/imp-lua",
     "crates/imp-tui",
     "crates/imp-cli",
-    "crates/mcp-shim",
 ]
 members = [
     "crates/imp-bin",
@@ -42,8 +41,6 @@ members = [
     "crates/imp-lua",
     "crates/imp-tui",
     "crates/imp-cli",
-    "crates/imp-gui",
-    "crates/mcp-shim",
 ]
 
 [workspace.package]
@@ -77,8 +74,6 @@ walkdir = "2"
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.28"
-eframe = "0.31"
-egui = "0.31"
 mlua = { version = "0.10", features = ["lua54", "vendored", "async", "send"] }
 ignore = "0.4"
 rayon = "1"
@@ -116,6 +111,5 @@ imp-process = { version = "0.3.0", path = "crates/imp-process" }
 imp-subagent = { version = "0.3.0", path = "crates/imp-subagent" }
 imp-lua = { version = "0.3.0", path = "crates/imp-lua" }
 imp-tui = { version = "0.3.0", path = "crates/imp-tui" }
-imp-gui = { version = "0.3.0", path = "crates/imp-gui" }
 imp-bin = { version = "0.3.0", path = "crates/imp-bin" }
 imp-cli = { version = "0.3.0", path = "crates/imp-cli" }

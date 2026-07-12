@@ -73,20 +73,8 @@ pub fn global_auth_path() -> PathBuf {
     global_root().join("auth.json")
 }
 
-pub fn global_soul_path() -> PathBuf {
-    global_root().join("soul.md")
-}
-
 pub fn global_agents_path() -> PathBuf {
     global_root().join("agents.md")
-}
-
-pub fn global_memory_path() -> PathBuf {
-    global_root().join("memory.md")
-}
-
-pub fn global_user_path() -> PathBuf {
-    global_root().join("user.md")
 }
 
 pub fn global_sessions_dir() -> PathBuf {
@@ -141,10 +129,6 @@ pub fn global_imports_dir() -> PathBuf {
 
 pub fn project_config_path(project_dir: &Path) -> PathBuf {
     project_root(project_dir).join("config.toml")
-}
-
-pub fn project_soul_path(project_dir: &Path) -> PathBuf {
-    project_root(project_dir).join("soul.md")
 }
 
 pub fn project_agents_path(project_dir: &Path) -> PathBuf {
@@ -393,27 +377,6 @@ pub fn reconcile_legacy_into_global_root() -> io::Result<Vec<PathBuf>> {
         legacy_config_roots()
             .into_iter()
             .map(|root| root.join("auth.json"))
-            .collect(),
-    )?);
-    migrated.extend(reconcile_file_candidates(
-        global_soul_path(),
-        legacy_config_roots()
-            .into_iter()
-            .map(|root| root.join("soul.md"))
-            .collect(),
-    )?);
-    migrated.extend(reconcile_file_candidates(
-        global_memory_path(),
-        legacy_config_roots()
-            .into_iter()
-            .map(|root| root.join("memory.md"))
-            .collect(),
-    )?);
-    migrated.extend(reconcile_file_candidates(
-        global_user_path(),
-        legacy_config_roots()
-            .into_iter()
-            .map(|root| root.join("user.md"))
             .collect(),
     )?);
     migrated.extend(reconcile_file_candidates(

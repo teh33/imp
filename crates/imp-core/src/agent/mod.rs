@@ -23,6 +23,7 @@ use crate::workflow::WorkflowContract;
 use crate::workflow_review::TurnWorkflowReview;
 
 mod autonomy;
+mod context_recovery;
 mod events;
 mod loop_policy;
 mod loop_state;
@@ -31,6 +32,7 @@ pub mod task_state;
 mod workflow_integration;
 pub(super) use workflow_integration::orchestration_follow_up_text;
 mod recovery;
+mod run_artifacts;
 mod run_loop;
 mod tool_execution;
 

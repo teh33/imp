@@ -22,7 +22,7 @@ The canonical default registration point is `register_native_tools_with_task_sta
 
 The `browser` tool is also registered when browser support is enabled in configuration and a compatible Lightpanda runtime is available.
 
-Lua extensions may add tools at runtime. Experimental modules such as `memory`, `prototype`, and TypeScript/Pi compatibility code exist in the repository but are not part of the default native registry.
+Lua extensions may add tools at runtime. The `prototype` module remains experimental and is not part of the default native registry.
 
 ## Mutability and concurrency
 
