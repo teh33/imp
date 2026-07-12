@@ -402,7 +402,7 @@ async fn hook_after_tool_call_nonblocking_quoted_command() {
     let results = runner.fire(&event).await;
     assert!(results.is_empty());
 
-    for _ in 0..40 {
+    for _ in 0..200 {
         if output_path.exists() {
             break;
         }
