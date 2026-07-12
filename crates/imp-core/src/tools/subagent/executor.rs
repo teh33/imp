@@ -27,10 +27,12 @@ impl ImpSubagentExecutor {
         &self,
         input: &SubagentInput,
         ctx: &ToolContext,
+        child_cwd: &Path,
+        workspace: Option<&crate::managed_workspace::ManagedWorkspaceRecord>,
     ) -> Result<imp_subagent::Record> {
         let mut child_args = self.child_args.clone();
         child_args.extend(contract_args(input, ctx));
-        let metadata = json!({"role":input.role,"objective":input.objective,"allowed_paths":input.resource_limits.allowed_paths,"writable_paths":input.resource_limits.writable_paths,"output_contract":input.output_contract,"merge_policy":input.merge_policy,"unsupported_resource_limits":unsupported_limits(input)});
+        let metadata = json!({"role":input.role,"objective":input.objective,"allowed_paths":input.resource_limits.allowed_paths,"writable_paths":input.resource_limits.writable_paths,"output_contract":input.output_contract,"merge_policy":input.merge_policy,"unsupported_resource_limits":unsupported_limits(input),"managed_workspace_id":workspace.map(|record| record.id.as_str()),"managed_workspace_path":workspace.map(|record| &record.worktree_path)});
         imp_subagent::Executor::new(&ctx.cwd)
             .launch(imp_subagent::LaunchRequest {
                 parent_id: input.parent_run_id.as_str().into(),
@@ -39,7 +41,7 @@ impl ImpSubagentExecutor {
                     .model
                     .clone()
                     .ok_or_else(|| Error::Tool("subagent model was not resolved".into()))?,
-                cwd: ctx.cwd.clone(),
+                cwd: child_cwd.to_path_buf(),
                 prompt: child_prompt(input),
                 executable: self.executable.clone(),
                 worker_executable: self.executable.clone(),

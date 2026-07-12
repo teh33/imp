@@ -88,14 +88,17 @@ impl Tool for SubagentTool {
         let params: SubagentParams = serde_json::from_value(params)
             .map_err(|error| Error::Tool(format!("invalid subagent params: {error}")))?;
         match params.action.as_str() {
-            "launch" => self.launch(
-                self.resolve_model(
-                    params
-                        .input
-                        .ok_or_else(|| Error::Tool("missing `input` parameter".into()))?,
-                )?,
-                &ctx,
-            ),
+            "launch" => {
+                self.launch(
+                    self.resolve_model(
+                        params
+                            .input
+                            .ok_or_else(|| Error::Tool("missing `input` parameter".into()))?,
+                    )?,
+                    &ctx,
+                )
+                .await
+            }
             "status" => self.status(child_id(params.child_run_id)?, &ctx),
             "wait" => self.wait(
                 child_id(params.child_run_id)?,
@@ -118,13 +121,46 @@ impl Tool for SubagentTool {
 }
 
 impl SubagentTool {
-    fn launch(&self, input: SubagentInput, ctx: &ToolContext) -> Result<ToolOutput> {
+    async fn launch(&self, input: SubagentInput, ctx: &ToolContext) -> Result<ToolOutput> {
         validate_launch_input(&input, ctx)?;
-        let record = self.executor.launch(&input, ctx)?;
+        let workspace = match workspace_request(&input) {
+            None => None,
+            Some(request) => Some(
+                crate::managed_workspace::ManagedWorkspaceService::global()
+                    .create(&ctx.cwd, request)
+                    .await
+                    .map_err(|error| {
+                        Error::Tool(format!("subagent workspace creation failed: {error}"))
+                    })?,
+            ),
+        };
+        let child_cwd = workspace
+            .as_ref()
+            .map(|record| record.worktree_path.as_path())
+            .unwrap_or(&ctx.cwd);
+        let record = match self
+            .executor
+            .launch(&input, ctx, child_cwd, workspace.as_ref())
+        {
+            Ok(record) => record,
+            Err(error) => {
+                if let Some(workspace) = &workspace {
+                    crate::managed_workspace::ManagedWorkspaceService::global()
+                        .retain(&ctx.cwd, workspace.id.as_str(), error.to_string())
+                        .await
+                        .map_err(|retain_error| {
+                            Error::Tool(format!(
+                                "{error}; failed to retain subagent workspace: {retain_error}"
+                            ))
+                        })?;
+                }
+                return Err(error);
+            }
+        };
         Ok(output(
             "launch",
             &record,
-            json!({"input": input, "record": record}),
+            json!({"input": input, "record": record, "workspace": workspace}),
             false,
         ))
     }
@@ -175,6 +211,22 @@ impl SubagentTool {
             false,
         ))
     }
+}
+
+fn workspace_request(
+    input: &SubagentInput,
+) -> Option<crate::managed_workspace::CreateManagedWorkspace> {
+    (!input.resource_limits.writable_paths.is_empty()).then(|| {
+        crate::managed_workspace::CreateManagedWorkspace {
+            id: Some(format!(
+                "subagent-{}",
+                input.child_run_id.as_str().replace('_', "-")
+            )),
+            run_id: input.child_run_id.as_str().to_string(),
+            task: Some(input.objective.clone()),
+            base_ref: None,
+        }
+    })
 }
 
 fn validate_launch_input(input: &SubagentInput, ctx: &ToolContext) -> Result<()> {

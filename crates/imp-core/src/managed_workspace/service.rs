@@ -157,6 +157,22 @@ impl ManagedWorkspaceService {
         })
     }
 
+    pub async fn retain(
+        &self,
+        cwd: &Path,
+        id: &str,
+        diagnostic: String,
+    ) -> ManagedWorkspaceResult<ManagedWorkspaceRecord> {
+        let repo_root = git::main_worktree(cwd).await?;
+        let id =
+            ManagedWorkspaceId::parse(id.to_string()).map_err(ManagedWorkspaceError::Invalid)?;
+        self.update_record(&repo_root, &id, |record| {
+            record.state = ManagedWorkspaceState::Retained;
+            record.updated_at = Utc::now().to_rfc3339();
+            record.diagnostic = Some(diagnostic.clone());
+        })
+    }
+
     pub async fn discard(
         &self,
         cwd: &Path,

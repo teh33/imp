@@ -84,4 +84,22 @@ Missing registered worktrees are marked orphaned. Doctor does not remove, adopt,
 
 ## Current boundary
 
-Managed workspaces solve ownership, isolation, inventory, overlap visibility, deterministic integration, and conservative cleanup. They do not yet decide which agent should receive a workspace or automatically launch agents inside one. That scheduling layer must use stable run ids, this host-owned lifecycle, and an execution sandbox or command policy when it must prevent direct Git metadata mutation through arbitrary shell commands.
+Managed workspaces solve ownership, isolation, inventory, overlap visibility,
+deterministic integration, and conservative cleanup. Writable bounded subagents
+are assigned managed workspaces, but automated verification and integration remain
+outside the launch lifecycle. An execution sandbox or command policy is still
+required when imp must prevent direct Git metadata mutation through arbitrary
+shell commands.
+
+## Subagent assignment
+
+A `subagent` launch with no writable paths remains workspace-free. A launch with
+one or more writable paths receives an imp-owned managed workspace automatically.
+The child process runs inside that worktree, while its durable parent/child record
+stores the workspace id and path. If startup fails, imp retains the workspace and
+diagnostic for `workspace inspect` or `workspace discard` instead of deleting
+possibly useful state.
+
+This phase assigns and tracks writable children. Terminal-result verification,
+host commits, automatic integration, and success cleanup remain explicit follow-up
+work; the runtime does not claim those behaviors yet.
