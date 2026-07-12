@@ -281,7 +281,7 @@ followup
 cancel
 ```
 
-Output includes agent, tool, stream, runtime event, and runtime state payloads. `--runtime-json` emits the shared runtime event/state shape alongside legacy JSON fields.
+Output begins with a versioned `rpc_ready` capability handshake, then includes agent, tool, stream, runtime event, and runtime state payloads. `--runtime-json` emits the shared runtime event/state shape alongside legacy JSON fields.
 
 ```bash
 imp --mode rpc --runtime-json

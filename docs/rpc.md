@@ -15,6 +15,17 @@ imp --mode rpc --runtime-json
 
 `--runtime-json` emits the shared runtime event/state shape alongside legacy JSON fields.
 
+After configuration and protocol initialization, stdout emits a readiness barrier:
+
+```json
+{"type":"rpc_ready","protocol":"imp-rpc","version":1,"capabilities":["prompt","followup","steer","cancel"]}
+```
+
+Hosts must wait for `rpc_ready`, require protocol version `1`, and verify every
+capability they depend on before sending commands. Unknown capabilities are
+forward-compatible. Version `1` does not promise durable command delivery,
+acknowledgments, replay, or restart of an in-flight run.
+
 ## Input commands
 
 Each input line is a JSON object with a `type` field.
@@ -49,7 +60,7 @@ With `--runtime-json`, output includes normalized runtime event/state payloads. 
 
 ## Host integration notes
 
-- Read stdout line-by-line.
+- Read stdout line-by-line and wait for `rpc_ready` before sending commands.
 - Write one JSON command per stdin line.
 - Do not assume a single prompt produces a single output message.
 - Handle cancellation and queued follow-ups explicitly.

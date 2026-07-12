@@ -2390,6 +2390,19 @@ impl UserInterface for RpcUi {
     }
 }
 
+const RPC_PROTOCOL: &str = "imp-rpc";
+const RPC_PROTOCOL_VERSION: u64 = 1;
+const RPC_CAPABILITIES: &[&str] = &["prompt", "followup", "steer", "cancel"];
+
+fn rpc_ready_event() -> Value {
+    json!({
+        "type": "rpc_ready",
+        "protocol": RPC_PROTOCOL,
+        "version": RPC_PROTOCOL_VERSION,
+        "capabilities": RPC_CAPABILITIES,
+    })
+}
+
 async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut startup_timer = StartupTimer::new(cli.verbose);
     emit_startup_timing(&mut startup_timer, StartupStage::ProcessStart);
@@ -2402,12 +2415,7 @@ async fn run_rpc_mode(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let stdout_tx = spawn_json_lines_stdout_writer();
     stdout_tx
-        .send(json!({
-            "type": "rpc_ready",
-            "protocol": "imp-rpc",
-            "version": 1,
-            "capabilities": ["durable_sessions", "prompt", "followup", "steer", "cancel"],
-        }))
+        .send(rpc_ready_event())
         .await
         .map_err(|error| io::Error::new(io::ErrorKind::BrokenPipe, error.to_string()))?;
     let rpc_ui = Arc::new(RpcUi::new(stdout_tx.clone()));

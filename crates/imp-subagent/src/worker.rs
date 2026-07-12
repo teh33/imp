@@ -180,12 +180,11 @@ fn wait_rpc_ready(child: &mut ManagedChild, events: &Receiver<Value>) -> Result<
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
         match events.recv_timeout(Duration::from_millis(20)) {
-            Ok(event)
-                if event["type"] == "rpc_ready"
-                    && event["protocol"] == "imp-rpc"
-                    && event["version"] == 1 =>
-            {
-                return Ok(())
+            Ok(event) if rpc_ready_compatible(&event) => return Ok(()),
+            Ok(event) if event["type"] == "rpc_ready" => {
+                return Err(Error::Protocol(format!(
+                    "incompatible child RPC readiness: {event}"
+                )))
             }
             Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -207,6 +206,42 @@ fn wait_rpc_ready(child: &mut ManagedChild, events: &Receiver<Value>) -> Result<
     }
 }
 
+fn rpc_ready_compatible(event: &Value) -> bool {
+    const REQUIRED: &[&str] = &["prompt", "followup", "cancel"];
+    let Some(capabilities) = event["capabilities"].as_array() else {
+        return false;
+    };
+    event["type"] == "rpc_ready"
+        && event["protocol"] == "imp-rpc"
+        && event["version"] == 1
+        && REQUIRED.iter().all(|required| {
+            capabilities
+                .iter()
+                .any(|capability| capability.as_str() == Some(required))
+        })
+}
+
 fn process_error(error: imp_process::Error) -> Error {
     Error::Process(error.to_string())
+}
+#[cfg(test)]
+mod tests {
+    use super::rpc_ready_compatible;
+
+    #[test]
+    fn readiness_requires_protocol_version_and_used_capabilities() {
+        let valid = serde_json::json!({
+            "type": "rpc_ready",
+            "protocol": "imp-rpc",
+            "version": 1,
+            "capabilities": ["prompt", "followup", "cancel", "future"]
+        });
+        assert!(rpc_ready_compatible(&valid));
+        for invalid in [
+            serde_json::json!({"type":"rpc_ready","protocol":"imp-rpc","version":2,"capabilities":["prompt","followup","cancel"]}),
+            serde_json::json!({"type":"rpc_ready","protocol":"imp-rpc","version":1,"capabilities":["prompt","cancel"]}),
+        ] {
+            assert!(!rpc_ready_compatible(&invalid));
+        }
+    }
 }
