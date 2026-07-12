@@ -521,6 +521,39 @@ fn config_policy_handles_outside_workspace_writes() {
 }
 
 #[test]
+fn config_policy_allows_native_writes_to_registered_worktrees() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let worktree = temp.path().join("worktree");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    std::fs::write(repo.join("README.md"), "test\n").unwrap();
+    git(&repo, &["add", "README.md"]);
+    git(&repo, &["commit", "-qm", "initial"]);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "feature/policy-test",
+            worktree.to_str().unwrap(),
+        ],
+    );
+
+    let mut context = test_context("write", ToolActionKind::Write);
+    context.cwd = Some(repo);
+    context.resource_scope = ResourceScope::File {
+        path: worktree.join("new/file.rs"),
+    };
+    assert!(ReferenceMonitor
+        .check_tool_action(&context, &RunPolicy::new())
+        .is_allowed());
+}
+
+#[test]
 fn config_policy_preserves_existing_run_policy_precedence() {
     let monitor = ReferenceMonitor;
     let mut safe = test_context("bash", ToolActionKind::Execute);
@@ -535,6 +568,15 @@ fn config_policy_preserves_existing_run_policy_precedence() {
         monitor.check_tool_action(&safe, &RunPolicy::new().deny_tool("bash")),
         "run_policy_tool_denied",
     );
+}
+
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    assert!(std::process::Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .status()
+        .unwrap()
+        .success());
 }
 
 fn test_context(name: &str, kind: ToolActionKind) -> ToolPolicyContext {
