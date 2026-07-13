@@ -141,6 +141,37 @@ fn unrelated_successful_command_does_not_resolve_verification() {
 }
 
 #[test]
+fn successful_command_resolves_unknown_command_failure() {
+    let mut state = SessionTaskState::new("Fix bug");
+    state.record_tool_result(
+        &ToolResultMessage {
+            tool_call_id: "failed".into(),
+            tool_name: "bash".into(),
+            content: Vec::new(),
+            is_error: true,
+            details: serde_json::json!({"exit_code": 1}),
+            timestamp: 1,
+        },
+        Path::new("/repo"),
+    );
+    assert_eq!(state.failures, ["command failed: <unknown command>"]);
+
+    state.record_tool_result(
+        &ToolResultMessage {
+            tool_call_id: "passed".into(),
+            tool_name: "bash".into(),
+            content: Vec::new(),
+            is_error: false,
+            details: serde_json::json!({"command": "true", "exit_code": 0}),
+            timestamp: 2,
+        },
+        Path::new("/repo"),
+    );
+
+    assert!(state.failures.is_empty());
+}
+
+#[test]
 fn successful_check_resolves_prior_command_failure() {
     let mut state = SessionTaskState::new("Fix bug");
     state.record_tool_result(

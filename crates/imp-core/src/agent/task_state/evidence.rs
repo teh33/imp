@@ -51,6 +51,7 @@ impl SessionTaskState {
         if passed {
             self.failures.retain(|existing| {
                 existing != &failure
+                    && existing != "command failed: <unknown command>"
                     && !(command_looks_like_check(&command)
                         && failed_command(existing).is_some_and(command_looks_like_check))
             });
