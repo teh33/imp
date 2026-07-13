@@ -2,6 +2,8 @@ use super::*;
 use crate::animation::AnimationState;
 use crate::views::status::StatusInfo;
 use crossterm::event::MouseEventKind;
+use imp_core::compaction::checkpoint::{CheckpointStore, CompactionCheckpoint, CHECKPOINT_VERSION};
+use imp_core::compaction::state::{ContinuationState, CONTINUATION_STATE_VERSION};
 use imp_core::compaction::COMPACTION_SUMMARY_PREFIX;
 use imp_core::config::Config;
 use imp_core::workflow::VerificationGate;
@@ -60,6 +62,23 @@ fn render_status_to_string(info: &StatusInfo, width: u16) -> String {
                 .unwrap_or(' ')
         })
         .collect()
+}
+
+#[test]
+fn session_persistence_error_is_visible() {
+    let mut app = make_app();
+    app.report_session_persist_error(
+        "assistant turn",
+        imp_core::Error::Config("disk unavailable".into()),
+    );
+
+    assert!(app
+        .last_agent_error
+        .as_deref()
+        .is_some_and(|message| message.contains("disk unavailable")));
+    assert!(app.messages.iter().any(|message| {
+        message.role == MessageRole::Error && message.content.contains("disk unavailable")
+    }));
 }
 
 #[tokio::test]
@@ -865,73 +884,126 @@ fn cached_git_label_refreshes_after_ttl() {
     assert_ne!(first, refreshed);
 }
 
-#[test]
-fn tui_integration_slash_compact_noops_with_short_history() {
-    let mut app = make_app();
+fn append_large_read_exchange(app: &mut App, index: usize, output: &str) {
+    let call_id = format!("call-{index}");
+    let path = format!("crates/example_{index}.rs");
+    app.session
+        .append(SessionEntry::Message {
+            id: format!("u{index}"),
+            parent_id: None,
+            message: Message::user(format!("inspect important file {path}")),
+        })
+        .unwrap();
+    app.session
+        .append(SessionEntry::Message {
+            id: format!("a{index}"),
+            parent_id: None,
+            message: Message::Assistant(AssistantMessage {
+                content: vec![ContentBlock::ToolCall {
+                    id: call_id.clone(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path": path}),
+                }],
+                usage: None,
+                stop_reason: StopReason::ToolUse,
+                timestamp: 0,
+            }),
+        })
+        .unwrap();
+    app.session
+        .append(SessionEntry::Message {
+            id: format!("t{index}"),
+            parent_id: None,
+            message: Message::ToolResult(imp_llm::ToolResultMessage {
+                tool_call_id: call_id,
+                tool_name: "read".into(),
+                content: vec![ContentBlock::Text {
+                    text: output.to_string(),
+                }],
+                is_error: false,
+                details: serde_json::Value::Null,
+                timestamp: 0,
+            }),
+        })
+        .unwrap();
+}
 
-    app.execute_command("compact");
-
-    assert_eq!(app.messages.len(), 1);
-    assert_eq!(app.messages[0].role, MessageRole::System);
-    assert_eq!(
-        app.messages[0].content,
-        "Not enough history to compact yet."
-    );
+fn publish_test_checkpoint(app: &App) {
+    let active = app.session.get_active_message_entries();
+    let covered_entry_ids = active
+        .iter()
+        .take(active.len().saturating_sub(1))
+        .map(|entry| match &entry.source {
+            imp_core::session::ActiveMessageSource::Compaction { entry_id, .. }
+            | imp_core::session::ActiveMessageSource::Message { entry_id } => entry_id.clone(),
+        })
+        .collect();
+    let checkpoint = CompactionCheckpoint {
+        version: CHECKPOINT_VERSION,
+        id: "checkpoint-1".into(),
+        previous_checkpoint_id: None,
+        covered_entry_ids,
+        source_fingerprint: "test-source".into(),
+        continuation: ContinuationState {
+            version: CONTINUATION_STATE_VERSION,
+            facts: Vec::new(),
+        },
+        summary: "Inspected crates/example_0.rs through crates/example_5.rs.".into(),
+        model_id: "gpt-5.6-luna".into(),
+        provider_id: "openai".into(),
+        thinking: "xhigh".into(),
+        source_tokens: 128_000,
+    };
+    CheckpointStore::for_session(app.session.path().unwrap())
+        .publish(&checkpoint)
+        .unwrap();
 }
 
 #[test]
-fn tui_integration_slash_compact_drops_huge_recent_tool_output() {
-    let mut app = make_app();
+fn tui_integration_slash_compact_without_checkpoint_preserves_context() {
+    let temp = TempDir::new().unwrap();
+    let mut app = make_persistent_app(&temp);
+    let before = serde_json::to_string(&app.session.get_active_messages()).unwrap();
+
+    app.execute_command("compact");
+
+    assert_eq!(
+        serde_json::to_string(&app.session.get_active_messages()).unwrap(),
+        before
+    );
+    assert!(app.messages.iter().any(|message| {
+        message.role == MessageRole::Error
+            && message
+                .content
+                .contains("No validated compaction checkpoint is ready")
+    }));
+}
+
+#[test]
+fn tui_integration_slash_compact_activates_checkpoint_and_drops_covered_output() {
+    let temp = TempDir::new().unwrap();
+    let mut app = make_persistent_app(&temp);
     let huge_output = "x".repeat(80_000);
 
-    for i in 0..6 {
-        let call_id = format!("call-{i}");
-        app.session
-            .append(SessionEntry::Message {
-                id: format!("u{i}"),
-                parent_id: None,
-                message: Message::user(format!("inspect important file crates/example_{i}.rs")),
-            })
-            .unwrap();
-        app.session
-            .append(SessionEntry::Message {
-                id: format!("a{i}"),
-                parent_id: None,
-                message: Message::Assistant(AssistantMessage {
-                    content: vec![ContentBlock::ToolCall {
-                        id: call_id.clone(),
-                        name: "read".into(),
-                        arguments: serde_json::json!({"path": format!("crates/example_{i}.rs")}),
-                    }],
-                    usage: None,
-                    stop_reason: StopReason::ToolUse,
-                    timestamp: 0,
-                }),
-            })
-            .unwrap();
-        app.session
-            .append(SessionEntry::Message {
-                id: format!("t{i}"),
-                parent_id: None,
-                message: Message::ToolResult(imp_llm::ToolResultMessage {
-                    tool_call_id: call_id,
-                    tool_name: "read".into(),
-                    content: vec![ContentBlock::Text {
-                        text: huge_output.clone(),
-                    }],
-                    is_error: false,
-                    details: serde_json::Value::Null,
-                    timestamp: 0,
-                }),
-            })
-            .unwrap();
+    for index in 0..6 {
+        append_large_read_exchange(&mut app, index, &huge_output);
     }
+    app.session
+        .append(SessionEntry::Message {
+            id: "tail".into(),
+            parent_id: None,
+            message: Message::user("preserve this recent tail verbatim"),
+        })
+        .unwrap();
+
+    publish_test_checkpoint(&app);
 
     app.finish_manual_compaction(String::new());
 
     let active_json = serde_json::to_string(&app.session.get_active_messages()).unwrap();
     assert!(active_json.contains("CONTEXT COMPACTION"));
     assert!(active_json.contains("crates/example_5.rs"));
+    assert!(active_json.contains("preserve this recent tail verbatim"));
     assert!(!active_json.contains(&huge_output));
     assert!(active_json.len() < 20_000);
 }
@@ -1212,6 +1284,9 @@ fn agent_task_completion_clears_handle_when_no_replacement_is_active() {
         command_tx,
         cancel_token: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
+    app.agent_task_state = Some(Arc::new(std::sync::Mutex::new(
+        imp_core::agent::task_state::SessionTaskState::new("test"),
+    )));
     app.agent_task = None;
 
     app.handle_runtime_signal(RuntimeSignal::AgentTaskCompleted);
@@ -1219,6 +1294,10 @@ fn agent_task_completion_clears_handle_when_no_replacement_is_active() {
     assert!(
         app.agent_handle.is_none(),
         "completed task should release handle when no replacement exists"
+    );
+    assert!(
+        app.agent_task_state.is_none(),
+        "completed task should release shared task state after checkpoint snapshot"
     );
 }
 

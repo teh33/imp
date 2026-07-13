@@ -145,6 +145,8 @@ pub(super) fn job_output(
             "job_id": output.process_id,
             "state": state,
             "exit": exit,
+            "exit_code": exit.as_ref().and_then(|value| value.code),
+            "managed_job": true,
             "unread_output_evicted": output.unread_output_evicted,
             "truncated": output.response_truncated,
         }),

@@ -137,6 +137,55 @@ fn v2_checkpoint_activation_survives_session_reload() {
 }
 
 #[test]
+fn repeated_checkpoint_activation_survives_restart_each_cycle() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("repo");
+    let sessions = temp.path().join("sessions");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let mut session = SessionManager::new(&cwd, &sessions).unwrap();
+    let path = session.path().unwrap().to_path_buf();
+
+    for cycle in 1..=3 {
+        let old_id = format!("cycle-{cycle}-old");
+        let tail_id = format!("cycle-{cycle}-tail");
+        append_user(
+            &mut session,
+            &old_id,
+            &format!("{} old context ", cycle).repeat(2_000),
+        );
+        append_user(&mut session, &tail_id, &format!("tail {cycle}"));
+        let active_entries = session.get_active_message_entries();
+        let covered_ids = active_entries
+            .iter()
+            .take(active_entries.len().saturating_sub(1))
+            .map(|entry| match &entry.source {
+                ActiveMessageSource::Compaction { entry_id, .. }
+                | ActiveMessageSource::Message { entry_id } => entry_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        let covered = covered_ids.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut next = checkpoint(&covered, &format!("summary {cycle}"));
+        next.continuation.facts[0].text = format!("constraint through cycle {cycle}");
+        activate_checkpoint(&mut session, &next).unwrap();
+
+        session = SessionManager::open(&path).unwrap();
+        let active = serde_json::to_string(&session.get_active_messages()).unwrap();
+        assert!(active.contains(&format!("summary {cycle}")), "{active}");
+        assert!(active.contains(&format!("tail {cycle}")), "{active}");
+        assert!(
+            active.contains(&format!("constraint through cycle {cycle}")),
+            "{active}"
+        );
+    }
+
+    let raw = serde_json::to_string(&session.get_messages()).unwrap();
+    for cycle in 1..=3 {
+        assert!(raw.contains(&format!("{cycle} old context")), "{raw}");
+        assert!(raw.contains(&format!("tail {cycle}")), "{raw}");
+    }
+}
+
+#[test]
 fn repeated_checkpoint_activation_uses_stable_active_entry_ids() {
     let mut session = SessionManager::in_memory();
     append_user(&mut session, "one", &"old context ".repeat(2_000));

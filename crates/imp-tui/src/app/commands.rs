@@ -191,6 +191,7 @@ impl App {
             command_tx: result.command_tx,
             cancel_token: result.cancel_token,
         });
+        self.agent_task_state = Some(result.task_state);
         self.agent_task = Some(result.task);
         self.agent_event_task = Some(result.event_task);
     }
@@ -198,6 +199,7 @@ impl App {
     pub(super) fn fail_agent_start(&mut self, error: String) {
         self.agent_start_task = None;
         self.status_items.remove("startup");
+        self.agent_task_state = None;
         self.is_streaming = false;
         self.streaming_anchor_user_index = None;
         if self
@@ -321,11 +323,14 @@ impl App {
             timestamp: imp_llm::now(),
         });
         self.invalidate_chat_render_cache();
-        let _ = self.session.append(SessionEntry::Message {
+        if let Err(error) = self.session.append(SessionEntry::Message {
             id: uuid::Uuid::new_v4().to_string(),
             parent_id: None,
             message: imp_llm::Message::user(&text),
-        });
+        }) {
+            self.report_session_persist_error("steering message", error);
+            return;
+        }
         if let Some(ref handle) = self.agent_handle {
             let _ = handle.command_tx.try_send(AgentCommand::Steer(text));
         }

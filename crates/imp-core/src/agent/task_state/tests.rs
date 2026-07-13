@@ -141,6 +141,31 @@ fn unrelated_successful_command_does_not_resolve_verification() {
 }
 
 #[test]
+fn managed_job_lifecycle_does_not_create_task_evidence() {
+    let mut state = SessionTaskState::new("Fix bug");
+    state.record_tool_result(
+        &ToolResultMessage {
+            tool_call_id: "job".into(),
+            tool_name: "bash".into(),
+            content: Vec::new(),
+            is_error: false,
+            details: serde_json::json!({
+                "job_id": "job-1",
+                "managed_job": true,
+                "state": "running",
+                "exit": null
+            }),
+            timestamp: 1,
+        },
+        Path::new("/repo"),
+    );
+
+    assert!(state.checks.is_empty());
+    assert!(state.failures.is_empty());
+    assert!(!state.verification_required);
+}
+
+#[test]
 fn successful_command_resolves_unknown_command_failure() {
     let mut state = SessionTaskState::new("Fix bug");
     state.record_tool_result(

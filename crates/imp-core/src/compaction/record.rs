@@ -27,10 +27,16 @@ pub struct CompactionRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactCoverage {
+    pub fact_id: String,
+    pub summary_excerpt: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionDocument {
     pub version: u32,
     pub summary: String,
-    pub acknowledged_fact_ids: Vec<String>,
+    pub fact_coverage: Vec<FactCoverage>,
 }
 
 pub fn validate_document(
@@ -50,10 +56,11 @@ pub fn validate_document(
         .required_fact_ids()
         .into_iter()
         .filter(|id| {
-            !document
-                .acknowledged_fact_ids
-                .iter()
-                .any(|acknowledged| acknowledged == id)
+            !document.fact_coverage.iter().any(|coverage| {
+                coverage.fact_id == *id
+                    && !coverage.summary_excerpt.trim().is_empty()
+                    && document.summary.contains(coverage.summary_excerpt.trim())
+            })
         })
         .collect::<Vec<_>>();
     if missing.is_empty() {
@@ -63,5 +70,48 @@ pub fn validate_document(
             "compaction document omitted required facts: {}",
             missing.join(", ")
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compaction::state::{ContinuationState, FactKind, StateFact};
+
+    fn required_state() -> ContinuationState {
+        ContinuationState {
+            version: 1,
+            facts: vec![StateFact {
+                id: "fact-1".into(),
+                kind: FactKind::Constraint,
+                text: "preserve the constraint".into(),
+                source_entry_id: "entry-1".into(),
+                required: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn validation_requires_fact_excerpt_present_in_summary() {
+        let state = required_state();
+        let missing = CompactionDocument {
+            version: COMPACTION_RECORD_VERSION,
+            summary: "A useful summary".into(),
+            fact_coverage: vec![FactCoverage {
+                fact_id: "fact-1".into(),
+                summary_excerpt: "not in summary".into(),
+            }],
+        };
+        assert!(validate_document(&state, &missing).is_err());
+
+        let covered = CompactionDocument {
+            version: COMPACTION_RECORD_VERSION,
+            summary: "A useful summary preserves the constraint.".into(),
+            fact_coverage: vec![FactCoverage {
+                fact_id: "fact-1".into(),
+                summary_excerpt: "preserves the constraint".into(),
+            }],
+        };
+        assert!(validate_document(&state, &covered).is_ok());
     }
 }

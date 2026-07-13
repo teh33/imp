@@ -402,6 +402,7 @@ pub struct App {
     // Agent
     pub agent_handle: Option<AgentHandle>,
     agent_event_task: Option<tokio::task::JoinHandle<()>>,
+    agent_task_state: Option<Arc<std::sync::Mutex<imp_core::agent::task_state::SessionTaskState>>>,
     agent_task: Option<tokio::task::JoinHandle<Result<(), ImpCoreError>>>,
     agent_start_task: Option<tokio::task::JoinHandle<()>>,
     compaction_task: Option<tokio::task::JoinHandle<Result<String, String>>>,
@@ -580,6 +581,7 @@ impl App {
             workflow_mode: WorkflowMode::Normal,
             agent_handle: None,
             agent_event_task: None,
+            agent_task_state: None,
             agent_task: None,
             agent_start_task: None,
             compaction_task: None,

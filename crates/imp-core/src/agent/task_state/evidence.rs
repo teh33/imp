@@ -36,6 +36,9 @@ impl SessionTaskState {
     }
 
     fn record_bash(&mut self, result: &ToolResultMessage) {
+        if result.details["managed_job"].as_bool() == Some(true) {
+            return;
+        }
         let command = result.details["command"]
             .as_str()
             .unwrap_or("<unknown command>")

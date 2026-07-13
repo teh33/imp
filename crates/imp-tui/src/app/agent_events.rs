@@ -432,24 +432,35 @@ impl App {
         }
     }
 
+    pub(super) fn report_session_persist_error(&mut self, operation: &str, error: imp_core::Error) {
+        let message = format!("Failed to persist {operation}: {error}");
+        self.last_agent_error = Some(message.clone());
+        self.push_error_msg(&message);
+    }
+
     fn tool_ended_ui_effects(&mut self, tool_call_id: &str, result: &imp_llm::ToolResultMessage) {
         self.turn_tracker
             .record_tool_end(tool_call_id, result.is_error);
         self.begin_llm_thought_segment();
-        let _ = self.session.append_tool_result_message(result.clone());
+        if let Err(error) = self.session.append_tool_result_message(result.clone()) {
+            self.report_session_persist_error("tool result", error);
+        }
     }
 
     fn persist_assistant_turn(&mut self, index: u32, message: imp_llm::AssistantMessage) {
-        if let Some(model_meta) = self.current_model_meta_for_persistence() {
-            let _ = self
-                .session
-                .append_assistant_turn_with_model_meta(&model_meta, index, message);
+        let persisted = if let Some(model_meta) = self.current_model_meta_for_persistence() {
+            self.session
+                .append_assistant_turn_with_model_meta(&model_meta, index, message)
+                .map(|_| ())
         } else {
-            let _ = self.session.append(SessionEntry::Message {
+            self.session.append(SessionEntry::Message {
                 id: uuid::Uuid::new_v4().to_string(),
                 parent_id: None,
                 message: imp_llm::Message::Assistant(message),
-            });
+            })
+        };
+        if let Err(error) = persisted {
+            self.report_session_persist_error("assistant turn", error);
         }
     }
 

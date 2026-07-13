@@ -80,6 +80,12 @@ impl App {
             "compaction-checkpoint".into(),
             format!("Checkpointing with {model_id}…"),
         );
+        let authoritative_state = self
+            .agent_task_state
+            .as_ref()
+            .and_then(|state| state.lock().ok())
+            .filter(|state| state.should_project())
+            .map(|state| state.projection());
         self.checkpoint_task = Some(tokio::spawn(async move {
             let api_key = resolve_provider_api_key(&mut auth_store, &provider_name)
                 .await
@@ -94,7 +100,7 @@ impl App {
                 },
                 api_key,
                 config,
-                authoritative_state: None,
+                authoritative_state,
             })
             .await
             .map_err(|error| error.to_string())

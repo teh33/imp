@@ -96,7 +96,10 @@ fn checkpoint_prompt(
         "schema": {
             "version": 2,
             "summary": "string",
-            "acknowledged_fact_ids": continuation.required_fact_ids(),
+            "fact_coverage": [{
+                "fact_id": "required fact ID",
+                "summary_excerpt": "exact non-empty substring from summary representing that fact"
+            }],
         },
         "previous_checkpoint": previous,
         "authoritative_continuation_state": continuation,
@@ -210,7 +213,10 @@ mod tests {
             let document = serde_json::json!({
                 "version": 2,
                 "summary": "validated Luna checkpoint",
-                "acknowledged_fact_ids": ["entry:source-1"],
+                "fact_coverage": [{
+                    "fact_id": "entry:source-1",
+                    "summary_excerpt": "validated Luna checkpoint"
+                }],
             });
             Box::pin(stream::iter([Ok(StreamEvent::TextDelta {
                 text: document.to_string(),

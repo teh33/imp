@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use imp_core::agent::task_state::SessionTaskState;
 use imp_core::agent::AgentCommand;
 use imp_core::builder::AgentBuilder;
 use imp_core::config::Config;
@@ -36,6 +37,7 @@ pub(super) struct AgentStartRequest {
 pub(super) struct AgentStartResult {
     pub(super) command_tx: tokio::sync::mpsc::Sender<AgentCommand>,
     pub(super) cancel_token: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) task_state: Arc<std::sync::Mutex<SessionTaskState>>,
     pub(super) task: tokio::task::JoinHandle<Result<(), ImpCoreError>>,
     pub(super) event_task: tokio::task::JoinHandle<()>,
 }
@@ -187,6 +189,7 @@ pub(super) fn start_agent_from_request(
 
     let phase_started = Instant::now();
     let prompt = prompt.to_string();
+    let task_state = Arc::clone(&agent.task_state);
     let task = tokio::spawn(async move { agent.run(prompt).await });
     let command_tx = handle.command_tx.clone();
     let cancel_token = Arc::clone(&handle.cancel_token);
@@ -234,6 +237,7 @@ pub(super) fn start_agent_from_request(
     Ok(AgentStartResult {
         command_tx,
         cancel_token,
+        task_state,
         task,
         event_task,
     })

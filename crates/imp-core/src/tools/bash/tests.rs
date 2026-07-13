@@ -279,6 +279,8 @@ async fn managed_job_poll_returns_only_new_output() {
         terminal = polled.details["exit"].is_object();
     }
     assert!(terminal, "job did not exit: {combined:?}");
+    assert_eq!(started.details["managed_job"], true);
+    assert_eq!(started.details["exit_code"], Value::Null);
     assert_eq!(combined.matches("first").count(), 1, "{combined:?}");
     assert_eq!(combined.matches("second").count(), 1, "{combined:?}");
 }

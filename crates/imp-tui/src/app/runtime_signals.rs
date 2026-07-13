@@ -195,6 +195,7 @@ impl App {
                     self.agent_handle = None;
                     self.is_streaming = false;
                     self.schedule_checkpoint_if_due();
+                    self.agent_task_state = None;
                 }
             }
             RuntimeSignal::AgentTaskFailed(error) => {
@@ -209,6 +210,7 @@ impl App {
                     self.agent_handle = None;
                     self.is_streaming = false;
                     self.schedule_checkpoint_if_due();
+                    self.agent_task_state = None;
                 }
                 self.present_agent_failure(error);
             }
