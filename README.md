@@ -370,8 +370,10 @@ max_tokens = 2048
 model = "gpt-5.6-luna"
 thinking = "xhigh"
 checkpoint_interval_tokens = 128000
-# Fully replaces imp's built-in compaction system prompt when set.
-system_prompt = "Preserve all objectives, constraints, decisions, effects, verification evidence, obligations, blockers, and artifact references."
+# Optional: fully replaces imp's built-in compaction system prompt.
+# The built-in prompt already asks the model to produce a concise, source-backed
+# continuation summary with objectives, changes, verification, open work, and next actions.
+# system_prompt = "Write a concise continuation summary for the next coding agent while preserving every required fact ID and unresolved obligation."
 
 [browser]
 enabled = true

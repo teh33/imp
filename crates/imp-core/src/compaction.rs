@@ -7,6 +7,7 @@ use crate::session::{ActiveMessageSource, ActiveSessionMessage, SessionEntry, Se
 
 pub mod checkpoint;
 pub mod coordinator;
+pub mod prompt;
 pub mod record;
 pub mod state;
 
