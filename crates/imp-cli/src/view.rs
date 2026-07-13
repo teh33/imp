@@ -132,6 +132,10 @@ fn print_tree_nodes(nodes: &[imp_core::session::TreeNode], depth: usize) {
                     truncate_chars_with_suffix(summary, 60, "…")
                 )
             }
+            SessionEntry::CompactionV2 { record, .. } => format!(
+                "compaction-v2 {}",
+                truncate_chars_with_suffix(&record.summary, 60, "…")
+            ),
             SessionEntry::Label { label, .. } => format!("label {label}"),
             SessionEntry::Custom { custom_type, .. } => format!("custom {custom_type}"),
         };
@@ -201,6 +205,10 @@ fn summarize_session_entry(entry: &SessionEntry) -> String {
                 truncate_chars_with_suffix(summary, 100, "…")
             )
         }
+        SessionEntry::CompactionV2 { record, .. } => format!(
+            "compaction-v2 {}",
+            truncate_chars_with_suffix(&record.summary, 100, "…")
+        ),
         SessionEntry::Label { label, .. } => format!("label {label}"),
         SessionEntry::Custom { custom_type, .. } => format!("custom {custom_type}"),
     }

@@ -23,8 +23,66 @@ fn config_default_values() {
         config.context.auto_compaction.mode,
         AutoCompactionMode::NearThreshold
     );
+    assert_eq!(config.context.summarizer.model, "gpt-5.6-luna");
+    assert_eq!(config.context.summarizer.thinking, ThinkingLevel::XHigh);
+    assert_eq!(
+        config.context.summarizer.checkpoint_interval_tokens,
+        128_000
+    );
+    assert_eq!(config.context.summarizer.target_summary_tokens, 8_000);
+    assert!(config.context.summarizer.system_prompt.is_none());
     assert_eq!(config.guardrails, GuardrailConfig::default());
     assert_eq!(config.policy.browser_input, PolicyAction::Ask);
+}
+
+#[test]
+fn config_loads_compaction_settings() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        r#"
+[context]
+observation_mask_threshold = 0.6
+mask_window = 10
+
+[context.summarizer]
+model = "gpt-5.6-luna"
+thinking = "xhigh"
+checkpoint_interval_tokens = 131072
+system_prompt = "Preserve every durable obligation."
+"#,
+    )
+    .unwrap();
+
+    let config = Config::load(&config_path).unwrap();
+    let summarizer = config.context.summarizer;
+    assert_eq!(summarizer.model, "gpt-5.6-luna");
+    assert_eq!(summarizer.thinking, ThinkingLevel::XHigh);
+    assert_eq!(summarizer.checkpoint_interval_tokens, 131_072);
+    assert_eq!(
+        summarizer.system_prompt.as_deref(),
+        Some("Preserve every durable obligation.")
+    );
+}
+
+#[test]
+fn config_accepts_legacy_summarizer_prompt_key() {
+    let config: Config = toml::from_str(
+        r#"
+[context]
+observation_mask_threshold = 0.6
+mask_window = 10
+
+[context.summarizer]
+prompt = "Legacy prompt"
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        config.context.summarizer.system_prompt.as_deref(),
+        Some("Legacy prompt")
+    );
 }
 
 #[test]

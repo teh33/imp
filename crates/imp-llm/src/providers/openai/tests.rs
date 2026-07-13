@@ -369,7 +369,7 @@ fn openai_reasoning_effort_levels() {
     );
     assert_eq!(
         reasoning_effort(ThinkingLevel::XHigh).as_deref(),
-        Some("high")
+        Some("xhigh")
     );
 }
 

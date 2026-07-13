@@ -588,9 +588,17 @@ pub struct SummarizerConfig {
     #[serde(default = "default_summarizer_target_summary_tokens")]
     pub target_summary_tokens: u32,
 
-    /// Fully replaces imp's built-in summarization prompt when set.
-    #[serde(default)]
-    pub prompt: Option<String>,
+    /// Thinking level for compaction model calls.
+    #[serde(default = "default_summarizer_thinking")]
+    pub thinking: ThinkingLevel,
+
+    /// Generate a background checkpoint after this many uncovered input tokens.
+    #[serde(default = "default_summarizer_checkpoint_interval_tokens")]
+    pub checkpoint_interval_tokens: u32,
+
+    /// Fully replaces imp's built-in compaction system prompt when set.
+    #[serde(default, alias = "prompt")]
+    pub system_prompt: Option<String>,
 }
 
 fn default_auto_compaction_trigger_ratio() -> f64 {
@@ -602,7 +610,7 @@ fn default_auto_compaction_target_ratio() -> f64 {
 }
 
 fn default_summarizer_model() -> String {
-    "default".to_string()
+    "gpt-5.6-luna".to_string()
 }
 
 fn default_summarizer_reserve_tokens() -> u32 {
@@ -610,7 +618,15 @@ fn default_summarizer_reserve_tokens() -> u32 {
 }
 
 fn default_summarizer_target_summary_tokens() -> u32 {
-    40_000
+    8_000
+}
+
+fn default_summarizer_thinking() -> ThinkingLevel {
+    ThinkingLevel::XHigh
+}
+
+fn default_summarizer_checkpoint_interval_tokens() -> u32 {
+    128_000
 }
 
 impl Default for AutoCompactionConfig {
@@ -629,7 +645,9 @@ impl Default for SummarizerConfig {
             model: default_summarizer_model(),
             reserve_tokens: default_summarizer_reserve_tokens(),
             target_summary_tokens: default_summarizer_target_summary_tokens(),
-            prompt: None,
+            thinking: default_summarizer_thinking(),
+            checkpoint_interval_tokens: default_summarizer_checkpoint_interval_tokens(),
+            system_prompt: None,
         }
     }
 }

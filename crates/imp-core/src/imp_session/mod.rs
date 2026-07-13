@@ -41,6 +41,8 @@ use imp_llm::{Model, ThinkingLevel};
 
 use crate::agent::{Agent, AgentCommand, AgentEvent, AgentHandle};
 use crate::builder::AgentBuilder;
+use crate::compaction::checkpoint::{checkpoint_source, CheckpointStore};
+use crate::compaction::coordinator::{generate_checkpoint, CheckpointRequest};
 use crate::config::{AgentMode, Config};
 use crate::error::{Error, Result};
 use crate::policy::RunPolicy;
@@ -256,6 +258,8 @@ pub struct ImpSession {
     completed_run_result: Option<Result<()>>,
     pending_persistence_errors: VecDeque<String>,
     pending_follow_ups: VecDeque<String>,
+    checkpoint_task: Option<JoinHandle<Result<()>>>,
+    pending_checkpoint_warnings: VecDeque<String>,
     /// Context prefill messages, injected once before the first prompt.
     context_prefill: Vec<imp_llm::Message>,
     context_prefill_injected: bool,
@@ -459,6 +463,8 @@ impl ImpSession {
             completed_run_result: None,
             pending_persistence_errors: VecDeque::new(),
             pending_follow_ups: VecDeque::new(),
+            checkpoint_task: None,
+            pending_checkpoint_warnings: VecDeque::new(),
         })
     }
 
@@ -488,6 +494,25 @@ impl ImpSession {
             parent_id: None,
             message: imp_llm::Message::user(text),
         });
+
+        if !matches!(
+            self.config.context.auto_compaction.mode,
+            crate::config::AutoCompactionMode::Disabled
+        ) {
+            let trigger = self.config.context.auto_compaction.trigger_ratio;
+            let usage =
+                crate::context::context_usage(&self.session_mgr.get_active_messages(), &self.model);
+            if let Err(error) = crate::compaction::activate_checkpoint_for_usage(
+                &mut self.session_mgr,
+                usage.used,
+                usage.limit,
+                trigger,
+            ) {
+                self.pending_checkpoint_warnings.push_back(format!(
+                    "automatic compaction was not activated: {error}; continuing with unchanged context"
+                ));
+            }
+        }
 
         // Load prior messages from session history into agent
         let mut agent = self
@@ -624,26 +649,40 @@ impl ImpSession {
     /// Returns `None` when the agent has finished and all events have
     /// been consumed.
     pub async fn recv_event(&mut self) -> Option<AgentEvent> {
+        self.collect_checkpoint_task(false).await;
+        if let Some(message) = self.pending_checkpoint_warnings.pop_front() {
+            return Some(AgentEvent::Warning { message });
+        }
         if let Some(error) = self.take_persistence_error() {
             return Some(AgentEvent::Error { error });
         }
 
         if self.agent_task.is_none() && self.completed_run_result.is_some() {
+            self.collect_checkpoint_task(false).await;
+            if let Some(message) = self.pending_checkpoint_warnings.pop_front() {
+                return Some(AgentEvent::Warning { message });
+            }
             return None;
         }
 
         let event = self.handle.event_rx.recv().await?;
+        let is_turn_end = matches!(event, AgentEvent::TurnEnd { .. });
+        let is_agent_end = matches!(event, AgentEvent::AgentEnd { .. });
         let events = self.persist_event_entries(&event);
-        if matches!(event, AgentEvent::TurnEnd { .. }) {
+        if is_turn_end {
             self.persist_next_follow_up();
         }
 
-        if matches!(event, AgentEvent::AgentEnd { .. }) {
+        if is_agent_end {
             if let Some(task) = self.agent_task.take() {
                 match task.await {
                     Ok((agent, result)) => {
                         self.agent = Some(agent);
                         self.completed_run_result = Some(result);
+                        if let Err(error) = self.start_checkpoint_if_due().await {
+                            self.pending_checkpoint_warnings
+                                .push_back(format!("compaction checkpoint skipped: {error}"));
+                        }
                     }
                     Err(join_error) => {
                         self.push_persistence_error(
@@ -656,6 +695,101 @@ impl ImpSession {
         }
 
         Some(event)
+    }
+
+    async fn start_checkpoint_if_due(&mut self) -> Result<()> {
+        if self.checkpoint_task.is_some() {
+            return Ok(());
+        }
+        let Some(session_path) = self.session_mgr.path() else {
+            return Ok(());
+        };
+        let store = CheckpointStore::for_session(session_path);
+        let active = self.session_mgr.get_active_message_entries();
+        let mut previous = store.load()?;
+        let source = match checkpoint_source(&active, previous.as_ref()) {
+            Ok(source) => source,
+            Err(_) => {
+                previous = None;
+                checkpoint_source(&active, None)?
+            }
+        };
+        let summarizer = self.config.context.summarizer.clone();
+        if !source.is_due(summarizer.checkpoint_interval_tokens) {
+            return Ok(());
+        }
+
+        let model_hint = match summarizer.model.trim() {
+            "default" => self.model.meta.id.as_str(),
+            hint => hint,
+        };
+        let connection = resolve_runtime_connection(
+            RuntimeConnectionIntent {
+                model_hint: Some(model_hint),
+                config_model: None,
+                provider_override: None,
+                api_key_override_present: false,
+            },
+            &self.auth_store,
+            &self.model_registry,
+        )
+        .map_err(Error::Config)?;
+        let meta = self
+            .model_registry
+            .resolve_meta(&connection.model_id, Some(&connection.provider_name))
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "Unknown compaction model/provider route: {} via {}",
+                    connection.model_id, connection.provider_name
+                ))
+            })?;
+        let provider = create_provider(&connection.provider_name).ok_or_else(|| {
+            Error::Config(format!(
+                "Unknown compaction provider: {}",
+                connection.provider_name
+            ))
+        })?;
+        let api_key = resolve_api_key(&mut self.auth_store, &connection.provider_name).await?;
+        let authoritative_state = self
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.task_state.lock().ok())
+            .filter(|state| state.should_project())
+            .map(|state| state.projection());
+        let request = CheckpointRequest {
+            active,
+            previous,
+            store,
+            model: Model {
+                meta,
+                provider: Arc::from(provider),
+            },
+            api_key,
+            config: summarizer,
+            authoritative_state,
+        };
+        self.checkpoint_task = Some(tokio::spawn(generate_checkpoint(request)));
+        Ok(())
+    }
+
+    async fn collect_checkpoint_task(&mut self, wait: bool) {
+        let should_collect = self
+            .checkpoint_task
+            .as_ref()
+            .is_some_and(|task| wait || task.is_finished());
+        if !should_collect {
+            return;
+        }
+        let Some(task) = self.checkpoint_task.take() else {
+            return;
+        };
+        let result = task
+            .await
+            .unwrap_or_else(|error| Err(Error::Config(format!("checkpoint task failed: {error}"))));
+        if let Err(error) = result {
+            self.pending_checkpoint_warnings
+                .push_back(format!("compaction checkpoint failed: {error}"));
+        }
     }
 
     fn persist_next_follow_up(&mut self) {

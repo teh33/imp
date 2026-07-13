@@ -476,6 +476,8 @@ async fn recv_event_returns_none_after_agent_end_even_if_sender_is_still_owned()
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -553,6 +555,8 @@ async fn abort_marks_wait_as_cancelled() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -600,6 +604,8 @@ async fn prompt_uses_session_history_without_duplicate_active_prompt() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -706,6 +712,8 @@ async fn prompt_uses_compacted_active_history_for_follow_up_turns() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -765,6 +773,8 @@ fn persist_event_entries_writes_assistant_and_canonical_usage() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -824,6 +834,8 @@ async fn steer_is_persisted_for_resume() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -861,6 +873,8 @@ fn follow_up_is_persisted_after_preceding_assistant_message() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::from(["next request".to_string()]),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -906,6 +920,8 @@ fn persist_event_entries_skips_usage_record_when_usage_missing() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };
@@ -977,6 +993,8 @@ fn persist_event_entries_writes_tool_results() {
         completed_run_result: None,
         pending_persistence_errors: VecDeque::new(),
         pending_follow_ups: VecDeque::new(),
+        checkpoint_task: None,
+        pending_checkpoint_warnings: VecDeque::new(),
         context_prefill: Vec::new(),
         context_prefill_injected: false,
     };

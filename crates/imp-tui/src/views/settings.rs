@@ -43,6 +43,9 @@ pub enum SettingsField {
     ChosenModels,
     Theme,
     ThinkingLevel,
+    CompactionModel,
+    CompactionThinking,
+    CompactionCheckpointInterval,
     MaxTokens,
     MaxTurns,
     ObservationMask,
@@ -118,6 +121,9 @@ const MODEL_FIELDS: &[SettingsField] = &[
     SettingsField::Model,
     SettingsField::ChosenModels,
     SettingsField::ThinkingLevel,
+    SettingsField::CompactionModel,
+    SettingsField::CompactionThinking,
+    SettingsField::CompactionCheckpointInterval,
     SettingsField::MaxTokens,
     SettingsField::ObservationMask,
 ];
@@ -184,6 +190,9 @@ const FIELDS: &[SettingsField] = &[
     SettingsField::ChosenModels,
     SettingsField::Theme,
     SettingsField::ThinkingLevel,
+    SettingsField::CompactionModel,
+    SettingsField::CompactionThinking,
+    SettingsField::CompactionCheckpointInterval,
     SettingsField::MaxTokens,
     SettingsField::MaxTurns,
     SettingsField::ObservationMask,
@@ -288,6 +297,9 @@ pub struct SettingsState {
     pub theme_name: String,
     pub theme_options: Vec<String>,
     pub thinking_level: ThinkingLevel,
+    pub compaction_model: String,
+    pub compaction_thinking: ThinkingLevel,
+    pub compaction_checkpoint_interval: u32,
     pub max_tokens: u32,
     pub max_turns: u32,
     pub observation_mask: f64,
@@ -404,6 +416,9 @@ impl SettingsState {
             theme_name: config.theme.clone().unwrap_or_else(|| "default".into()),
             theme_options: theme_options(config.theme.as_deref()),
             thinking_level: config.thinking.unwrap_or(ThinkingLevel::Medium),
+            compaction_model: config.context.summarizer.model.clone(),
+            compaction_thinking: config.context.summarizer.thinking,
+            compaction_checkpoint_interval: config.context.summarizer.checkpoint_interval_tokens,
             max_tokens: config.max_tokens.unwrap_or(4096),
             max_turns: config.max_turns.unwrap_or(100),
             observation_mask: config.context.observation_mask_threshold,
@@ -540,6 +555,25 @@ impl SettingsState {
             }
             SettingsField::ThinkingLevel => {
                 self.thinking_level = next_thinking(self.thinking_level);
+            }
+            SettingsField::CompactionModel => {
+                if let Some(idx) = self
+                    .model_options
+                    .iter()
+                    .position(|model| *model == self.compaction_model)
+                {
+                    self.compaction_model =
+                        self.model_options[(idx + 1) % self.model_options.len()].clone();
+                }
+            }
+            SettingsField::CompactionThinking => {
+                self.compaction_thinking = next_thinking(self.compaction_thinking);
+            }
+            SettingsField::CompactionCheckpointInterval => {
+                self.compaction_checkpoint_interval = self
+                    .compaction_checkpoint_interval
+                    .saturating_add(16_000)
+                    .min(1_000_000);
             }
             SettingsField::MaxTokens => {
                 self.max_tokens = self.max_tokens.saturating_add(256).min(128_000);
@@ -758,6 +792,25 @@ impl SettingsState {
             }
             SettingsField::ThinkingLevel => {
                 self.thinking_level = prev_thinking(self.thinking_level);
+            }
+            SettingsField::CompactionModel => {
+                if let Some(idx) = self
+                    .model_options
+                    .iter()
+                    .position(|model| *model == self.compaction_model)
+                {
+                    let previous = idx.checked_sub(1).unwrap_or(self.model_options.len() - 1);
+                    self.compaction_model = self.model_options[previous].clone();
+                }
+            }
+            SettingsField::CompactionThinking => {
+                self.compaction_thinking = prev_thinking(self.compaction_thinking);
+            }
+            SettingsField::CompactionCheckpointInterval => {
+                self.compaction_checkpoint_interval = self
+                    .compaction_checkpoint_interval
+                    .saturating_sub(16_000)
+                    .max(16_000);
             }
             SettingsField::MaxTokens => {
                 self.max_tokens = self.max_tokens.saturating_sub(256).max(1);
@@ -1159,6 +1212,9 @@ impl SettingsState {
             observation_mask_threshold: self.observation_mask,
             ..config.context.clone()
         };
+        config.context.summarizer.model = self.compaction_model.clone();
+        config.context.summarizer.thinking = self.compaction_thinking;
+        config.context.summarizer.checkpoint_interval_tokens = self.compaction_checkpoint_interval;
         config.ui = imp_core::config::UiConfig {
             sidebar_style: SidebarStyle::Inspector,
             tool_output: ToolOutputDisplay::Full,
@@ -1580,6 +1636,42 @@ fn render_settings_field(
             field_index(SettingsField::ThinkingLevel),
             "Thinking level",
             thinking_label(state.thinking_level),
+            "← →",
+        ),
+        SettingsField::CompactionModel => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Compaction model",
+            &state.compaction_model,
+            "← →",
+        ),
+        SettingsField::CompactionThinking => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Compaction thinking",
+            thinking_label(state.compaction_thinking),
+            "← →",
+        ),
+        SettingsField::CompactionCheckpointInterval => render_field(
+            state,
+            theme,
+            buf,
+            inner,
+            scroll_offset,
+            row,
+            field_index(field),
+            "Compaction checkpoint tokens",
+            &state.compaction_checkpoint_interval.to_string(),
             "← →",
         ),
         SettingsField::MaxTokens => {

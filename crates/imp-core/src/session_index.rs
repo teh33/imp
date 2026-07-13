@@ -88,6 +88,9 @@ impl SessionIndex {
                 SessionEntry::Compaction { summary, .. } => {
                     content_parts.push(summary.clone());
                 }
+                SessionEntry::CompactionV2 { record, .. } => {
+                    content_parts.push(record.summary.clone());
+                }
                 _ => {}
             }
         }

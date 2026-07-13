@@ -319,7 +319,9 @@ impl App {
     fn handle_runtime_ui_effects(&mut self, event: &AgentEvent, runtime_event: &RuntimeEvent) {
         match event {
             AgentEvent::AgentStart { .. } => self.agent_started_ui_effects(),
-            AgentEvent::AgentEnd { status, .. } => self.agent_ended_ui_effects(status),
+            AgentEvent::AgentEnd { status, .. } => {
+                self.agent_ended_ui_effects(status);
+            }
             AgentEvent::MessageDelta { delta } => self.message_delta_ui_effects(delta),
 
             AgentEvent::ToolExecutionStart {
@@ -339,7 +341,7 @@ impl App {
                 self.invalidate_chat_render_cache();
             }
             AgentEvent::TurnEnd { index, message, .. } => {
-                self.persist_assistant_turn(*index, message.clone())
+                self.persist_assistant_turn(*index, message.clone());
             }
 
             _ => {}

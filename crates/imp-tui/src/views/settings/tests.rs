@@ -20,6 +20,29 @@ fn applying_settings_forces_primary_inspector_display_model() {
 }
 
 #[test]
+fn compaction_settings_round_trip_into_config() {
+    let registry = ModelRegistry::with_builtins();
+    let models = registry.list().to_vec();
+    let auth_store = AuthStore::new(std::path::PathBuf::from("/tmp/auth.json"));
+    let mut config = Config::default();
+    let state = SettingsState {
+        compaction_model: "gpt-5.6-luna".into(),
+        compaction_thinking: ThinkingLevel::XHigh,
+        compaction_checkpoint_interval: 128_000,
+        ..SettingsState::new(&config, &models[0].id, &models, &auth_store)
+    };
+
+    state.apply_to_config(&mut config);
+
+    assert_eq!(config.context.summarizer.model, "gpt-5.6-luna");
+    assert_eq!(config.context.summarizer.thinking, ThinkingLevel::XHigh);
+    assert_eq!(
+        config.context.summarizer.checkpoint_interval_tokens,
+        128_000
+    );
+}
+
+#[test]
 fn save_field_scrolls_into_view_on_short_panels() {
     let registry = ModelRegistry::with_builtins();
     let models = registry.list().to_vec();

@@ -232,6 +232,28 @@ fn flatten_tree_into(
                     is_last_child: !has_more_siblings,
                 });
             }
+            imp_core::session::SessionEntry::CompactionV2 {
+                id,
+                parent_id,
+                record,
+            } => {
+                let full_text = record.summary.trim().to_string();
+                out.push(FlatTreeNode {
+                    id: id.clone(),
+                    parent_id: parent_id.clone(),
+                    depth,
+                    guides: guides.clone(),
+                    summary: format!("[compaction-v2: {}]", truncate(&record.summary, 40)),
+                    full_text,
+                    kind_label: "compaction",
+                    is_user: false,
+                    is_tool: false,
+                    is_compaction: true,
+                    has_children: !node.children.is_empty(),
+                    child_count: node.children.len(),
+                    is_last_child: !has_more_siblings,
+                });
+            }
             imp_core::session::SessionEntry::Compaction {
                 id,
                 parent_id,

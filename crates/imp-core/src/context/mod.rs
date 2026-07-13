@@ -341,11 +341,16 @@ pub fn estimate_request_context(
 
 /// Estimate total context usage for a message list.
 pub fn context_usage(messages: &[Message], model: &Model) -> ContextUsage {
+    context_usage_for_meta(messages, &model.meta)
+}
+
+/// Estimate context usage when only model metadata is available.
+pub fn context_usage_for_meta(messages: &[Message], meta: &ModelMeta) -> ContextUsage {
     let used: u32 = messages
         .iter()
-        .map(|m| estimate_message_tokens_for_model(m, &model.meta))
+        .map(|message| estimate_message_tokens_for_model(message, meta))
         .sum();
-    let budget = context_budget(model);
+    let budget = context_budget_for_meta(meta);
     let limit = budget.display_window;
     let ratio = budget.ratio_for_used(used);
     ContextUsage { used, limit, ratio }

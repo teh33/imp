@@ -365,6 +365,14 @@ thinking = "medium"
 max_turns = 100
 max_tokens = 2048
 
+[context.summarizer]
+# Model-assisted background checkpoints are prepared after 128k uncovered tokens.
+model = "gpt-5.6-luna"
+thinking = "xhigh"
+checkpoint_interval_tokens = 128000
+# Fully replaces imp's built-in compaction system prompt when set.
+system_prompt = "Preserve all objectives, constraints, decisions, effects, verification evidence, obligations, blockers, and artifact references."
+
 [browser]
 enabled = true
 # binary = "/path/to/lightpanda"

@@ -82,6 +82,22 @@ impl App {
             }
         }
 
+        let checkpoint_task_finished = self
+            .checkpoint_task
+            .as_ref()
+            .is_some_and(tokio::task::JoinHandle::is_finished);
+        if checkpoint_task_finished {
+            if let Some(task) = self.checkpoint_task.take() {
+                match task.await {
+                    Ok(Ok(())) => signals.push(RuntimeSignal::CheckpointTaskCompleted),
+                    Ok(Err(error)) => signals.push(RuntimeSignal::CheckpointTaskFailed(error)),
+                    Err(error) => signals.push(RuntimeSignal::CheckpointTaskFailed(format!(
+                        "Internal checkpoint task failure: {error}"
+                    ))),
+                }
+            }
+        }
+
         let lua_command_task_finished = self
             .lua_command_task
             .as_ref()
@@ -177,6 +193,8 @@ impl App {
                         task.abort();
                     }
                     self.agent_handle = None;
+                    self.is_streaming = false;
+                    self.schedule_checkpoint_if_due();
                 }
             }
             RuntimeSignal::AgentTaskFailed(error) => {
@@ -189,6 +207,8 @@ impl App {
                         task.abort();
                     }
                     self.agent_handle = None;
+                    self.is_streaming = false;
+                    self.schedule_checkpoint_if_due();
                 }
                 self.present_agent_failure(error);
             }
@@ -198,6 +218,13 @@ impl App {
             RuntimeSignal::CompactionTaskFailed(error) => {
                 self.finish_compaction_status_message("Compaction failed.");
                 self.push_error_msg(&format!("Compaction failed: {error}"));
+            }
+            RuntimeSignal::CheckpointTaskCompleted => {
+                self.status_items.remove("compaction-checkpoint");
+            }
+            RuntimeSignal::CheckpointTaskFailed(error) => {
+                self.status_items.remove("compaction-checkpoint");
+                self.push_warning_msg(&format!("Compaction checkpoint failed: {error}"));
             }
             RuntimeSignal::LuaCommandCompleted { command, result } => {
                 self.finish_lua_command_status_message(&format!("/{command} finished."));

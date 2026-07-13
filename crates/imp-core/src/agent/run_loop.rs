@@ -8,8 +8,8 @@ use imp_llm::{
 };
 
 use crate::agent::context_recovery::{
-    apply_provider_context_baseline, auto_compaction_should_run, auto_compaction_tail_tokens,
-    effective_display_window, format_context_estimate_details, mask_all_observations_for_recovery,
+    apply_provider_context_baseline, auto_compaction_should_run, effective_display_window,
+    format_context_estimate_details, mask_all_observations_for_recovery,
     recoverable_context_failure, recoverable_context_failure_message,
     recoverable_stream_failure_message, sanitized_request_estimate, update_observed_input_limit,
     MAX_CONTEXT_RECOVERY_ATTEMPTS, MAX_STREAM_RECOVERY_ATTEMPTS,
@@ -310,54 +310,10 @@ impl Agent {
                 &usage,
                 self.context_config.auto_compaction.trigger_ratio,
             ) {
-                let recent_tail_tokens = auto_compaction_tail_tokens(
-                    &usage,
-                    self.context_config.auto_compaction.target_ratio,
-                );
-                if let Some(compaction) = crate::compaction::compact_messages_for_auto_compaction(
-                    &context_messages,
-                    &self.model,
-                    recent_tail_tokens,
-                ) {
-                    context_messages = compaction.messages;
-                    self.emit(AgentEvent::Warning {
-                        message: format!(
-                            "Auto-compacted older tool output and file dumps for this provider request ({} -> {} estimated tokens). Canonical session history was preserved; exact old output may need to be reread if it is no longer in the active provider context.",
-                            compaction.tokens_before,
-                            compaction.tokens_after
-                        ),
-                    })
-                    .await;
-                    crate::session::sanitize_messages(&mut context_messages);
-                    request_estimate = crate::context::estimate_request_context(
-                        &context_messages,
-                        &self.model,
-                        &options,
-                    );
-                    apply_provider_context_baseline(
-                        &mut request_estimate,
-                        self.provider_context_baseline_tokens,
-                    );
-                    if let Some(limit) = observed_input_limit {
-                        let effective_limit = limit.max(1);
-                        request_estimate.input_limit =
-                            request_estimate.input_limit.min(effective_limit);
-                        request_estimate.display_window =
-                            request_estimate.display_window.min(effective_limit);
-                    }
-                    self.emit(AgentEvent::ContextUsageUpdated {
-                        used: request_estimate.input_tokens,
-                        display_window: request_estimate.display_window,
-                        input_limit: request_estimate.input_limit,
-                        system_tokens: request_estimate.system_tokens,
-                        tool_definition_tokens: request_estimate.tool_definition_tokens,
-                        message_tokens: request_estimate.message_tokens,
-                        output_tokens: request_estimate.output_tokens,
-                        observed_input_limit,
-                    })
-                    .await;
-                    usage = request_estimate.as_usage();
-                }
+                self.emit(AgentEvent::Warning {
+                    message: "Automatic compaction threshold reached without an activated durable checkpoint; continuing with unchanged context while it still fits.".to_string(),
+                })
+                .await;
             }
 
             if usage.used >= usage.limit && usage.limit > 0 {

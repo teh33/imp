@@ -79,29 +79,9 @@ pub(super) fn auto_compaction_should_run(
     }
 }
 
-pub(super) fn auto_compaction_tail_tokens(
-    usage: &crate::context::ContextUsage,
-    target_ratio: f64,
-) -> u32 {
-    if usage.limit == 0 {
-        return crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS;
-    }
-    let target_ratio = if target_ratio.is_finite() {
-        target_ratio.clamp(0.05, 0.95)
-    } else {
-        0.70
-    };
-    let target = (usage.limit as f64 * target_ratio).floor() as u32;
-    target
-        .max(16_000)
-        .min(crate::compaction::AUTO_COMPACTION_RECENT_TAIL_TOKENS)
-}
-
 fn observed_input_limit_after_overflow(estimate: &crate::context::RequestContextEstimate) -> u32 {
-    // If the provider rejects a request below our configured model limit, treat
-    // that provider response as authoritative for this run and leave headroom
-    // below the failed local estimate. This prevents imp from repeatedly
-    // waiting until the same too-high local token count before trimming again.
+    // Treat a provider overflow as authoritative for this run and retain
+    // headroom below the failed local estimate.
     ((estimate.input_tokens as f64) * 0.80).floor().max(1.0) as u32
 }
 

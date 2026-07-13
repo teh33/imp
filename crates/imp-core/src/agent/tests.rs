@@ -3650,7 +3650,7 @@ async fn agent_auto_compacts_tool_heavy_context_before_provider_request() {
     assert!(events.iter().any(|event| matches!(
         event,
         AgentEvent::Warning { message }
-            if message.contains("Auto-compacted older tool output")
+            if message.contains("Automatic compaction threshold reached without an activated durable checkpoint")
     )));
 }
 
@@ -3674,7 +3674,7 @@ async fn auto_compaction_does_not_run_at_moderate_nominal_usage() {
     assert!(events.iter().all(|event| !matches!(
         event,
         AgentEvent::Warning { message }
-            if message.contains("Auto-compacted older tool output")
+            if message.contains("Automatic compaction threshold reached without an activated durable checkpoint")
     )));
 }
 
@@ -3700,7 +3700,7 @@ async fn observed_provider_ceiling_lowers_auto_compaction_threshold() {
     assert!(events.iter().any(|event| matches!(
         event,
         AgentEvent::Warning { message }
-            if message.contains("Auto-compacted older tool output")
+            if message.contains("Automatic compaction threshold reached without an activated durable checkpoint")
     )));
 }
 
@@ -3753,7 +3753,7 @@ async fn auto_compaction_preserves_latest_tool_call_result_pair() {
     assert!(events.iter().any(|event| matches!(
         event,
         AgentEvent::Warning { message }
-            if message.contains("Auto-compacted older tool output")
+            if message.contains("Automatic compaction threshold reached without an activated durable checkpoint")
     )));
     assert!(
         has_latest_call,

@@ -99,6 +99,32 @@ impl App {
         Some(tools)
     }
     pub(super) fn agent_start_request(&mut self) -> AgentStartRequest {
+        if !matches!(
+            self.config.context.auto_compaction.mode,
+            imp_core::config::AutoCompactionMode::Disabled
+        ) {
+            if let Some(meta) = self.model_registry.resolve_meta(&self.model_name, None) {
+                let trigger = self.config.context.auto_compaction.trigger_ratio;
+                let usage = imp_core::context::context_usage_for_meta(
+                    &self.session.get_active_messages(),
+                    &meta,
+                );
+                match imp_core::compaction::activate_checkpoint_for_usage(
+                    &mut self.session,
+                    usage.used,
+                    usage.limit,
+                    trigger,
+                ) {
+                    Ok(Some(result)) => {
+                        self.current_context_tokens = result.tokens_after;
+                    }
+                    Ok(None) => {}
+                    Err(error) => self.push_warning_msg(&format!(
+                        "Automatic compaction was not activated: {error}. Continuing with unchanged context."
+                    )),
+                }
+            }
+        }
         let (ui_tx, ui_rx) = tokio::sync::mpsc::channel(16);
         let tui_ui = crate::tui_interface::TuiInterface::new(ui_tx.clone());
         self.lua_command_ui = Some(tui_ui);

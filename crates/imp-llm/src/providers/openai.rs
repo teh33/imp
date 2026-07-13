@@ -231,7 +231,8 @@ fn reasoning_effort(level: ThinkingLevel) -> Option<String> {
         ThinkingLevel::Off => None,
         ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low".into()),
         ThinkingLevel::Medium => Some("medium".into()),
-        ThinkingLevel::High | ThinkingLevel::XHigh => Some("high".into()),
+        ThinkingLevel::High => Some("high".into()),
+        ThinkingLevel::XHigh => Some("xhigh".into()),
     }
 }
 

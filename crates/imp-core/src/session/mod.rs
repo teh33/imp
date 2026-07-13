@@ -8,6 +8,7 @@ use imp_llm::{
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentEvent, RecoveryCheckpoint};
+use crate::compaction::record::CompactionRecord;
 use crate::error::Result;
 use crate::usage::{
     canonical_usage_record_for_assistant_turn_with_model_meta, usage_record_entry,
@@ -37,6 +38,47 @@ pub struct SessionCheckpointRecord {
 
 const SESSION_META_VERSION: u32 = 1;
 
+fn latest_compaction_state(
+    branch: &[&SessionEntry],
+    compaction_id: &str,
+) -> Option<crate::compaction::state::ContinuationState> {
+    branch.iter().find_map(|entry| match entry {
+        SessionEntry::CompactionV2 { id, record, .. } if id == compaction_id => {
+            Some(record.continuation.clone())
+        }
+        _ => None,
+    })
+}
+
+fn active_raw_message(entry: &SessionEntry) -> Option<ActiveSessionMessage> {
+    let SessionEntry::Message { id, message, .. } = entry else {
+        return None;
+    };
+    Some(ActiveSessionMessage {
+        source: ActiveMessageSource::Message {
+            entry_id: id.clone(),
+        },
+        message: message.clone(),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveMessageSource {
+    Compaction {
+        entry_id: String,
+        continuation: Option<crate::compaction::state::ContinuationState>,
+    },
+    Message {
+        entry_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveSessionMessage {
+    pub source: ActiveMessageSource,
+    pub message: Message,
+}
+
 /// A single entry in the session JSONL file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -64,6 +106,12 @@ pub enum SessionEntry {
         #[serde(default)]
         tokens_after: u32,
     },
+    #[serde(rename = "compaction-v2")]
+    CompactionV2 {
+        id: String,
+        parent_id: Option<String>,
+        record: CompactionRecord,
+    },
     #[serde(rename = "custom")]
     Custom {
         id: String,
@@ -90,6 +138,7 @@ impl SessionEntry {
             | SessionEntry::SessionMeta { .. } => None,
             SessionEntry::Message { id, .. }
             | SessionEntry::Compaction { id, .. }
+            | SessionEntry::CompactionV2 { id, .. }
             | SessionEntry::Custom { id, .. } => Some(id),
         }
     }
@@ -102,6 +151,7 @@ impl SessionEntry {
             | SessionEntry::SessionMeta { .. } => None,
             SessionEntry::Message { parent_id, .. }
             | SessionEntry::Compaction { parent_id, .. }
+            | SessionEntry::CompactionV2 { parent_id, .. }
             | SessionEntry::Custom { parent_id, .. } => parent_id.as_deref(),
         }
     }
@@ -462,6 +512,7 @@ impl SessionManager {
         match &mut entry {
             SessionEntry::Message { parent_id, .. }
             | SessionEntry::Compaction { parent_id, .. }
+            | SessionEntry::CompactionV2 { parent_id, .. }
             | SessionEntry::Custom { parent_id, .. } => {
                 *parent_id = self.leaf_id.clone();
             }
@@ -816,10 +867,12 @@ impl SessionManager {
 
     /// Return the latest compaction entry on the active branch, if any.
     pub fn latest_compaction(&self) -> Option<&SessionEntry> {
-        self.get_branch()
-            .into_iter()
-            .rev()
-            .find(|entry| matches!(entry, SessionEntry::Compaction { .. }))
+        self.get_branch().into_iter().rev().find(|entry| {
+            matches!(
+                entry,
+                SessionEntry::Compaction { .. } | SessionEntry::CompactionV2 { .. }
+            )
+        })
     }
 
     /// Build the model-visible message history for the active branch.
@@ -835,33 +888,44 @@ impl SessionManager {
     /// Raw persisted entries remain intact on disk and are still available via
     /// `get_branch()` / `get_messages()`.
     pub fn get_active_messages(&self) -> Vec<Message> {
+        self.get_active_message_entries()
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect()
+    }
+
+    /// Build model-visible history while retaining each message's durable source.
+    pub fn get_active_message_entries(&self) -> Vec<ActiveSessionMessage> {
         let branch = self.get_branch();
-        let latest_compaction = branch.iter().enumerate().rev().find_map(|(idx, entry)| {
-            let SessionEntry::Compaction {
+        let latest_compaction = branch.iter().rev().find_map(|entry| match entry {
+            SessionEntry::Compaction {
+                id,
                 summary,
                 first_kept_id,
                 ..
-            } = entry
-            else {
-                return None;
-            };
-            Some((idx, summary.as_str(), first_kept_id.as_str()))
+            } => Some((id.as_str(), summary.as_str(), first_kept_id.as_str())),
+            SessionEntry::CompactionV2 { id, record, .. } => Some((
+                id.as_str(),
+                record.summary.as_str(),
+                record.first_kept_id.as_str(),
+            )),
+            _ => None,
         });
 
-        let Some((_compaction_idx, summary, first_kept_id)) = latest_compaction else {
-            return branch
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    SessionEntry::Message { message, .. } => Some(message.clone()),
-                    _ => None,
-                })
-                .collect();
+        let Some((compaction_id, summary, first_kept_id)) = latest_compaction else {
+            return branch.into_iter().filter_map(active_raw_message).collect();
         };
 
         let mut active = Vec::new();
         let summary_text = summary.trim();
         if !summary_text.is_empty() {
-            active.push(Message::user(summary_text.to_string()));
+            active.push(ActiveSessionMessage {
+                source: ActiveMessageSource::Compaction {
+                    entry_id: compaction_id.to_string(),
+                    continuation: latest_compaction_state(&branch, compaction_id),
+                },
+                message: Message::user(summary_text.to_string()),
+            });
         }
 
         if first_kept_id.is_empty() {
@@ -873,14 +937,12 @@ impl SessionManager {
             if entry.id() == Some(first_kept_id) {
                 keep = true;
             }
-            if !keep {
-                continue;
-            }
-            if let SessionEntry::Message { message, .. } = entry {
-                active.push(message.clone());
+            if keep {
+                if let Some(message) = active_raw_message(entry) {
+                    active.push(message);
+                }
             }
         }
-
         active
     }
 

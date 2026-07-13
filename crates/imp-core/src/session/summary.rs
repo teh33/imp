@@ -33,6 +33,12 @@ pub(super) fn derive_session_summary(entries: &[SessionEntry]) -> Option<String>
                     parts.push(trimmed);
                 }
             }
+            SessionEntry::CompactionV2 { record, .. } => {
+                let trimmed = cleanup_summary_text(&record.summary);
+                if !trimmed.is_empty() {
+                    parts.push(trimmed);
+                }
+            }
             SessionEntry::Message { message, .. } => {
                 if let Message::Assistant(_) = message {
                     if let Some(text) = extract_text(message) {
