@@ -124,7 +124,7 @@ impl SessionTaskState {
             || !self.steps.is_empty()
             || !self.constraints.is_empty()
             || !self.changed_paths.is_empty()
-            || !self.failures.is_empty()
+            || !self.unresolved_failures().is_empty()
             || !self.blockers.is_empty()
             || self.verification_required
     }
@@ -217,7 +217,7 @@ impl SessionTaskState {
         if self.verification_required {
             issues.push("verification is required after file changes".to_string());
         }
-        issues.extend(self.failures.iter().cloned());
+        issues.extend(self.unresolved_failures());
         issues.extend(
             self.blockers
                 .iter()

@@ -30,7 +30,8 @@ impl SessionTaskState {
             &self.changed_paths.iter().cloned().collect::<Vec<_>>(),
         );
         push_list(&mut lines, "Blockers", &self.blockers);
-        push_list(&mut lines, "Unresolved failures", &self.failures);
+        let unresolved_failures = self.unresolved_failures();
+        push_list(&mut lines, "Unresolved failures", &unresolved_failures);
         if self.verification_required {
             lines.push("Verification: required after file changes".into());
         } else if let Some(check) = self.checks.last() {
