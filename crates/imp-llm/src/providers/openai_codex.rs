@@ -75,7 +75,7 @@ fn strip_unsupported_codex_fields(request: &mut Value) {
     }
 }
 
-fn add_codex_request_fields(request: &mut Value, session_id: Option<&str>) {
+fn add_codex_request_fields(request: &mut Value) {
     strip_unsupported_codex_fields(request);
 
     let Some(object) = request.as_object_mut() else {
@@ -95,12 +95,6 @@ fn add_codex_request_fields(request: &mut Value, session_id: Option<&str>) {
             "verbosity": "medium",
         }),
     );
-    if let Some(session_id) = session_id.filter(|value| !value.is_empty()) {
-        object.insert(
-            "prompt_cache_key".into(),
-            Value::String(session_id.to_string()),
-        );
-    }
 }
 
 fn build_headers(
@@ -147,13 +141,12 @@ impl Provider for OpenAiCodexProvider {
             }
         };
 
-        let mut request = build_request_json(model, context.clone(), options);
-        // Keep prompt cache affinity, but do not attach the ChatGPT session
-        // header. imp sends the full active history every turn; the backend
-        // session header can make Codex accumulate hidden server-side context
-        // beyond the visible local request, while prompt_cache_key is only the
-        // cache namespace we want to preserve.
-        add_codex_request_fields(&mut request, context.thread_id.as_deref());
+        let mut request = build_request_json(model, context, options);
+        // Keep the stable prompt-profile cache key, but do not attach the
+        // ChatGPT session header. imp sends the full active history every turn;
+        // the backend session header can make Codex accumulate hidden
+        // server-side context beyond the visible local request.
+        add_codex_request_fields(&mut request);
         let headers = build_headers(&account_id, api_key, None);
         stream_response_json(
             self.client.clone(),
@@ -197,7 +190,7 @@ mod tests {
             "metadata": {"source": "test"},
         });
 
-        add_codex_request_fields(&mut request, None);
+        add_codex_request_fields(&mut request);
 
         let object = request.as_object().expect("request object");
         assert!(!object.contains_key("max_output_tokens"));
@@ -216,7 +209,7 @@ mod tests {
             "model": "gpt-5.4"
         });
 
-        add_codex_request_fields(&mut request, None);
+        add_codex_request_fields(&mut request);
 
         let object = request.as_object().expect("request object");
         assert!(!object.contains_key("max_output_tokens"));

@@ -8,7 +8,7 @@ use imp_llm::provider::{CacheOptions, Context, RequestOptions};
 use imp_llm::{ContentBlock, Model, StopReason, StreamEvent};
 
 use super::checkpoint::{
-    checkpoint_source, CheckpointStore, CompactionCheckpoint, CHECKPOINT_VERSION,
+    checkpoint_source_for_model, CheckpointStore, CompactionCheckpoint, CHECKPOINT_VERSION,
 };
 use super::prompt::DEFAULT_SYSTEM_PROMPT;
 use super::record::{validate_document, CompactionDocument};
@@ -28,7 +28,11 @@ pub struct CheckpointRequest {
 }
 
 pub async fn generate_checkpoint(request: CheckpointRequest) -> Result<()> {
-    let source = checkpoint_source(&request.active, request.previous.as_ref())?;
+    let source = checkpoint_source_for_model(
+        &request.active,
+        request.previous.as_ref(),
+        &request.model.meta,
+    )?;
     if !source.is_due(request.config.checkpoint_interval_tokens) {
         return Ok(());
     }

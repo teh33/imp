@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::state::ContinuationState;
-use crate::context::estimate_tokens;
+use crate::context::{estimate_message_tokens_for_model, estimate_tokens};
 use crate::error::{Error, Result};
 use crate::session::{ActiveMessageSource, ActiveSessionMessage};
 
@@ -30,15 +30,32 @@ pub fn checkpoint_source(
     active: &[ActiveSessionMessage],
     previous: Option<&CompactionCheckpoint>,
 ) -> Result<CheckpointSource> {
+    checkpoint_source_with_counter(active, previous, |entry| {
+        estimate_tokens(&serde_json::to_string(&entry.message).unwrap_or_default())
+    })
+}
+
+pub fn checkpoint_source_for_model(
+    active: &[ActiveSessionMessage],
+    previous: Option<&CompactionCheckpoint>,
+    meta: &imp_llm::ModelMeta,
+) -> Result<CheckpointSource> {
+    checkpoint_source_with_counter(active, previous, |entry| {
+        estimate_message_tokens_for_model(&entry.message, meta)
+    })
+}
+
+fn checkpoint_source_with_counter(
+    active: &[ActiveSessionMessage],
+    previous: Option<&CompactionCheckpoint>,
+    count: impl Fn(&ActiveSessionMessage) -> u32,
+) -> Result<CheckpointSource> {
     let entry_ids = active.iter().map(entry_id).collect::<Vec<_>>();
     let (uncovered_start, inherited_continuation) = match previous {
         Some(checkpoint) => (covered_prefix_len(&entry_ids, checkpoint)?, None),
         None => inherited_v2_state(active),
     };
-    let uncovered_tokens = active[uncovered_start..]
-        .iter()
-        .map(|entry| estimate_tokens(&serde_json::to_string(&entry.message).unwrap_or_default()))
-        .sum();
+    let uncovered_tokens = active[uncovered_start..].iter().map(count).sum();
     Ok(CheckpointSource {
         source_fingerprint: fingerprint(&entry_ids),
         entry_ids,
@@ -204,6 +221,7 @@ mod tests {
     use super::*;
     use crate::compaction::state::CONTINUATION_STATE_VERSION;
     use crate::session::{ActiveMessageSource, ActiveSessionMessage};
+    use imp_llm::model::{Capabilities, ModelMeta, ModelPricing};
     use imp_llm::Message;
 
     fn checkpoint(summary: &str) -> CompactionCheckpoint {
@@ -232,6 +250,45 @@ mod tests {
             },
             message: Message::user(text),
         }
+    }
+
+    fn model_meta(id: &str, provider: &str) -> ModelMeta {
+        ModelMeta {
+            id: id.into(),
+            provider: provider.into(),
+            name: id.into(),
+            context_window: 1_050_000,
+            max_output_tokens: 128_000,
+            pricing: ModelPricing::default(),
+            capabilities: Capabilities::default(),
+        }
+    }
+
+    #[test]
+    fn source_uses_selected_model_message_estimator() {
+        let entries = vec![active(
+            "one",
+            "fn main() { println!(\"cache: {}\", 42); } 日本語 🚀",
+        )];
+        let openai = model_meta("gpt-5.6-luna", "openai");
+
+        let source = checkpoint_source_for_model(&entries, None, &openai).unwrap();
+        let expected = estimate_message_tokens_for_model(&entries[0].message, &openai);
+        let legacy = checkpoint_source(&entries, None).unwrap();
+
+        assert_eq!(source.uncovered_tokens, expected);
+        assert_ne!(source.uncovered_tokens, legacy.uncovered_tokens);
+    }
+
+    #[test]
+    fn source_preserves_rough_fallback_for_non_openai_models() {
+        let entries = vec![active("one", "plain fallback text")];
+        let meta = model_meta("fixture", "fixture");
+
+        let source = checkpoint_source_for_model(&entries, None, &meta).unwrap();
+        let legacy = checkpoint_source(&entries, None).unwrap();
+
+        assert_eq!(source.uncovered_tokens, legacy.uncovered_tokens);
     }
 
     #[test]

@@ -29,6 +29,7 @@ fn openai_tool_defs_are_sorted_for_prompt_cache_stability() {
     let first_request = ApiRequest {
         model: "gpt-test".into(),
         input: vec![serde_json::json!({ "role": "user", "content": "hello" })],
+        prompt_cache_key: None,
         stream: true,
         instructions: Some("system".into()),
         tools: build_tool_defs(&[write.clone(), bash.clone(), read.clone()]),
@@ -39,6 +40,7 @@ fn openai_tool_defs_are_sorted_for_prompt_cache_stability() {
     let second_request = ApiRequest {
         model: "gpt-test".into(),
         input: vec![serde_json::json!({ "role": "user", "content": "hello" })],
+        prompt_cache_key: None,
         stream: true,
         instructions: Some("system".into()),
         tools: build_tool_defs(&[read, write, bash]),
@@ -51,6 +53,51 @@ fn openai_tool_defs_are_sorted_for_prompt_cache_stability() {
         serde_json::to_value(first_request).unwrap(),
         serde_json::to_value(second_request).unwrap()
     );
+}
+
+#[test]
+fn openai_prompt_cache_key_tracks_reusable_prompt_profile() {
+    let provider = OpenAiProvider::new();
+    let model = Model {
+        meta: provider.models()[0].clone(),
+        provider: Arc::new(provider),
+    };
+    let mut options = RequestOptions {
+        system_prompt: "stable instructions".into(),
+        ..RequestOptions::default()
+    };
+    let context = |session_id: &str, message: &str| Context {
+        messages: vec![Message::user(message)],
+        session_id: Some(session_id.into()),
+        thread_id: Some(format!("thread-{session_id}")),
+    };
+
+    let first = build_request_json(
+        &model,
+        context("one", "first dynamic message"),
+        options.clone(),
+    );
+    let second = build_request_json(
+        &model,
+        context("two", "second dynamic message"),
+        options.clone(),
+    );
+    assert_eq!(first["prompt_cache_key"], second["prompt_cache_key"]);
+    assert!(first["prompt_cache_key"]
+        .as_str()
+        .unwrap()
+        .starts_with("imp:prompt:v1:"));
+
+    options.system_prompt = "changed instructions".into();
+    let changed = build_request_json(&model, context("one", "first dynamic message"), options);
+    assert_ne!(first["prompt_cache_key"], changed["prompt_cache_key"]);
+
+    let request = build_request_json(
+        &model,
+        context("one", "first dynamic message"),
+        RequestOptions::default(),
+    );
+    assert!(request.get("prompt_cache_key").is_none());
 }
 
 #[test]
@@ -278,7 +325,7 @@ fn openai_parse_response_completed() {
     let mut state = StreamState::new();
     state.model = "gpt-4o".into();
 
-    let data = r#"{"type":"response.completed","response":{"model":"gpt-4o","status":"completed","usage":{"input_tokens":50,"output_tokens":25,"input_tokens_details":{"cached_tokens":10}}}}"#;
+    let data = r#"{"type":"response.completed","response":{"model":"gpt-4o","status":"completed","usage":{"input_tokens":50,"output_tokens":25,"input_tokens_details":{"cached_tokens":10,"cache_write_tokens":20}}}}"#;
     let event = parse_sse_event(data).unwrap().unwrap();
     let events = process_sse_event(event, &mut state);
 
@@ -289,6 +336,7 @@ fn openai_parse_response_completed() {
         assert_eq!(usage.input_tokens, 50);
         assert_eq!(usage.output_tokens, 25);
         assert_eq!(usage.cache_read_tokens, 10);
+        assert_eq!(usage.cache_write_tokens, 20);
     } else {
         panic!("expected MessageEnd");
     }

@@ -326,11 +326,17 @@ pub(crate) fn non_streaming_response_to_events(resp: ApiResponse) -> Vec<StreamE
         None => StopReason::EndTurn,
     };
 
+    let cache_read_tokens = resp.usage.cache_read_input_tokens;
+    let cache_write_tokens = resp.usage.cache_creation_input_tokens;
     let usage = Usage {
-        input_tokens: resp.usage.input_tokens,
+        input_tokens: resp
+            .usage
+            .input_tokens
+            .saturating_add(cache_read_tokens)
+            .saturating_add(cache_write_tokens),
         output_tokens: resp.usage.output_tokens,
-        cache_read_tokens: resp.usage.cache_read_input_tokens,
-        cache_write_tokens: resp.usage.cache_creation_input_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
     };
 
     events.push(StreamEvent::MessageEnd {
@@ -711,7 +717,10 @@ fn process_sse_event(event: SseEvent, state: &mut StreamState) -> Vec<StreamEven
                 out.push(StreamEvent::MessageStart { model });
             }
             if let Some(u) = message.usage {
-                state.usage.input_tokens = u.input_tokens;
+                state.usage.input_tokens = u
+                    .input_tokens
+                    .saturating_add(u.cache_read_input_tokens)
+                    .saturating_add(u.cache_creation_input_tokens);
                 state.usage.cache_read_tokens = u.cache_read_input_tokens;
                 state.usage.cache_write_tokens = u.cache_creation_input_tokens;
             }

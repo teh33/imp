@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use imp_core::compaction::checkpoint::{checkpoint_source, CheckpointStore};
+use imp_core::compaction::checkpoint::{checkpoint_source_for_model, CheckpointStore};
 use imp_core::compaction::coordinator::{generate_checkpoint, CheckpointRequest};
 use imp_llm::auth::AuthStore;
 use imp_llm::model::Model;
@@ -26,23 +26,7 @@ impl App {
                 return;
             }
         };
-        let source = match checkpoint_source(&active, previous.as_ref()) {
-            Ok(source) => source,
-            Err(_) => {
-                previous = None;
-                match checkpoint_source(&active, None) {
-                    Ok(source) => source,
-                    Err(error) => {
-                        self.push_warning_msg(&format!("Compaction checkpoint skipped: {error}"));
-                        return;
-                    }
-                }
-            }
-        };
         let config = self.config.context.summarizer.clone();
-        if !source.is_due(config.checkpoint_interval_tokens) {
-            return;
-        }
         let model_id = if config.model.trim() == "default" {
             self.model_name.as_str()
         } else {
@@ -71,6 +55,22 @@ impl App {
                 return;
             };
             meta = routed;
+        }
+        let source = match checkpoint_source_for_model(&active, previous.as_ref(), &meta) {
+            Ok(source) => source,
+            Err(_) => {
+                previous = None;
+                match checkpoint_source_for_model(&active, None, &meta) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        self.push_warning_msg(&format!("Compaction checkpoint skipped: {error}"));
+                        return;
+                    }
+                }
+            }
+        };
+        if !source.is_due(config.checkpoint_interval_tokens) {
+            return;
         }
         let Some(provider) = create_provider(&provider_name) else {
             self.push_warning_msg(&format!("Unknown compaction provider: {provider_name}"));

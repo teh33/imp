@@ -41,7 +41,7 @@ use imp_llm::{Model, ThinkingLevel};
 
 use crate::agent::{Agent, AgentCommand, AgentEvent, AgentHandle};
 use crate::builder::AgentBuilder;
-use crate::compaction::checkpoint::{checkpoint_source, CheckpointStore};
+use crate::compaction::checkpoint::{checkpoint_source_for_model, CheckpointStore};
 use crate::compaction::coordinator::{generate_checkpoint, CheckpointRequest};
 use crate::config::{AgentMode, Config};
 use crate::error::{Error, Result};
@@ -707,17 +707,7 @@ impl ImpSession {
         let store = CheckpointStore::for_session(session_path);
         let active = self.session_mgr.get_active_message_entries();
         let mut previous = store.load()?;
-        let source = match checkpoint_source(&active, previous.as_ref()) {
-            Ok(source) => source,
-            Err(_) => {
-                previous = None;
-                checkpoint_source(&active, None)?
-            }
-        };
         let summarizer = self.config.context.summarizer.clone();
-        if !source.is_due(summarizer.checkpoint_interval_tokens) {
-            return Ok(());
-        }
 
         let model_hint = match summarizer.model.trim() {
             "default" => self.model.meta.id.as_str(),
@@ -743,6 +733,16 @@ impl ImpSession {
                     connection.model_id, connection.provider_name
                 ))
             })?;
+        let source = match checkpoint_source_for_model(&active, previous.as_ref(), &meta) {
+            Ok(source) => source,
+            Err(_) => {
+                previous = None;
+                checkpoint_source_for_model(&active, None, &meta)?
+            }
+        };
+        if !source.is_due(summarizer.checkpoint_interval_tokens) {
+            return Ok(());
+        }
         let provider = create_provider(&connection.provider_name).ok_or_else(|| {
             Error::Config(format!(
                 "Unknown compaction provider: {}",

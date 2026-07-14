@@ -5,7 +5,7 @@ use crate::model::ModelPricing;
 /// Token usage from a single LLM request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Usage {
-    /// Tokens consumed by the input prompt.
+    /// Total tokens in the input prompt, including cache reads and writes.
     pub input_tokens: u32,
     /// Tokens generated in the output.
     pub output_tokens: u32,
@@ -50,7 +50,11 @@ impl Usage {
 
     /// Calculate dollar cost given a model's pricing.
     pub fn cost(&self, pricing: &ModelPricing) -> Cost {
-        let input = self.input_tokens as f64 * pricing.input_per_mtok / 1_000_000.0;
+        let cached = self
+            .cache_read_tokens
+            .saturating_add(self.cache_write_tokens);
+        let uncached_input = self.input_tokens.saturating_sub(cached);
+        let input = uncached_input as f64 * pricing.input_per_mtok / 1_000_000.0;
         let output = self.output_tokens as f64 * pricing.output_per_mtok / 1_000_000.0;
         let cache_read = self.cache_read_tokens as f64 * pricing.cache_read_per_mtok / 1_000_000.0;
         let cache_write =
@@ -140,16 +144,16 @@ mod tests {
         };
         let cost = usage.cost(&pricing);
 
-        // 1M input * $3/Mtok = $3.00
-        assert!((cost.input - 3.0).abs() < f64::EPSILON);
+        // 700k uncached input * $3/Mtok = $2.10
+        assert!((cost.input - 2.1).abs() < f64::EPSILON);
         // 500k output * $15/Mtok = $7.50
         assert!((cost.output - 7.5).abs() < f64::EPSILON);
         // 200k cache_read * $0.30/Mtok = $0.06
         assert!((cost.cache_read - 0.06).abs() < f64::EPSILON);
         // 100k cache_write * $3.75/Mtok = $0.375
         assert!((cost.cache_write - 0.375).abs() < f64::EPSILON);
-        // total = 3.0 + 7.5 + 0.06 + 0.375 = 10.935
-        assert!((cost.total - 10.935).abs() < 1e-10);
+        // total = 2.1 + 7.5 + 0.06 + 0.375 = 10.035
+        assert!((cost.total - 10.035).abs() < 1e-10);
     }
 
     #[test]

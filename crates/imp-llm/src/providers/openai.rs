@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use tokio_tungstenite::{connect_async, tungstenite::Message as WebSocketMessage};
 use tungstenite::client::IntoClientRequest;
@@ -32,6 +33,8 @@ const PERSISTENT_TRANSPORT_ENV: &str = "IMP_OPENAI_PERSISTENT_TRANSPORT";
 struct ApiRequest {
     model: String,
     input: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
@@ -131,6 +134,8 @@ struct SseUsage {
 struct SseInputTokenDetails {
     #[serde(default)]
     cached_tokens: u32,
+    #[serde(default)]
+    cache_write_tokens: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +253,8 @@ fn build_request(model: &Model, context: Context, options: RequestOptions) -> Ap
     };
 
     let tools = build_tool_defs(&options.tools);
+    let prompt_cache_key =
+        prompt_profile_cache_key(&model.meta.id, instructions.as_deref(), &tools);
     let input = convert_messages(&context.messages);
 
     // Only include reasoning for models with reasoning capability
@@ -271,6 +278,7 @@ fn build_request(model: &Model, context: Context, options: RequestOptions) -> Ap
     ApiRequest {
         model: model.meta.id.clone(),
         input,
+        prompt_cache_key,
         stream: true,
         instructions,
         tools,
@@ -278,6 +286,25 @@ fn build_request(model: &Model, context: Context, options: RequestOptions) -> Ap
         max_output_tokens,
         reasoning,
     }
+}
+
+fn prompt_profile_cache_key(
+    model_id: &str,
+    instructions: Option<&str>,
+    tools: &[ApiToolDef],
+) -> Option<String> {
+    if instructions.is_none() && tools.is_empty() {
+        return None;
+    }
+
+    let profile = serde_json::to_vec(&(model_id, instructions, tools))
+        .expect("OpenAI prompt profile is always JSON-serializable");
+    let digest = Sha256::digest(profile);
+    let hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Some(format!("imp:prompt:v1:{hex}"))
 }
 
 fn build_tool_defs(tools: &[ToolDefinition]) -> Vec<ApiToolDef> {
@@ -566,11 +593,13 @@ fn process_openai_stream_event(event: SseEvent, state: &mut StreamState) -> Vec<
             state.finished = true;
             if let Some(resp) = event.response {
                 if let Some(ref u) = resp.usage {
+                    let details = u.input_tokens_details.as_ref();
+                    let cache_read = details.map_or(0, |value| value.cached_tokens);
+                    let cache_write = details.map_or(0, |value| value.cache_write_tokens);
                     state.usage.input_tokens = u.input_tokens;
                     state.usage.output_tokens = u.output_tokens;
-                    if let Some(details) = &u.input_tokens_details {
-                        state.usage.cache_read_tokens = details.cached_tokens;
-                    }
+                    state.usage.cache_read_tokens = cache_read;
+                    state.usage.cache_write_tokens = cache_write;
                 }
 
                 state.stop_reason = match event.event_type.as_str() {

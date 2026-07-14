@@ -806,11 +806,11 @@ fn persist_event_entries_writes_assistant_and_canonical_usage() {
     assert!(record.request_id.starts_with("assistant:"));
     assert!(record.assistant_message_id.is_some());
     let cost = record.cost.as_ref().unwrap();
-    assert!((cost.input - 0.002).abs() < 1e-12);
+    assert!((cost.input - 0.0017).abs() < 1e-12);
     assert!((cost.output - 0.001).abs() < 1e-12);
     assert!((cost.cache_read - 0.00005).abs() < 1e-12);
     assert!((cost.cache_write - 0.00005).abs() < 1e-12);
-    assert!((cost.total - 0.0031).abs() < 1e-12);
+    assert!((cost.total - 0.0028).abs() < 1e-12);
 }
 
 #[tokio::test]

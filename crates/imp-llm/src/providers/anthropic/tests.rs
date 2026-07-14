@@ -533,7 +533,7 @@ fn parse_message_start_event() {
     assert!(
         matches!(&events[0], StreamEvent::MessageStart { model } if model == "claude-sonnet-4-20250514")
     );
-    assert_eq!(state.usage.input_tokens, 100);
+    assert_eq!(state.usage.input_tokens, 160);
     assert_eq!(state.usage.cache_read_tokens, 50);
     assert_eq!(state.usage.cache_write_tokens, 10);
 }
