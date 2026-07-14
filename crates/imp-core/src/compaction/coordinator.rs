@@ -1,10 +1,11 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
 use imp_llm::auth::ApiKey;
 use imp_llm::provider::{CacheOptions, Context, RequestOptions};
-use imp_llm::{ContentBlock, Model, StreamEvent};
+use imp_llm::{ContentBlock, Model, StopReason, StreamEvent};
 
 use super::checkpoint::{
     checkpoint_source, CheckpointStore, CompactionCheckpoint, CHECKPOINT_VERSION,
@@ -44,6 +45,7 @@ pub async fn generate_checkpoint(request: CheckpointRequest) -> Result<()> {
         &request.active[source.uncovered_start..],
         request.previous.as_ref(),
         &continuation,
+        request.config.target_summary_tokens,
     )?;
     let document = request_document(&request, prompt).await?;
     validate_document(&continuation, &document).map_err(Error::Config)?;
@@ -87,6 +89,7 @@ fn checkpoint_prompt(
     uncovered: &[ActiveSessionMessage],
     previous: Option<&CompactionCheckpoint>,
     continuation: &super::state::ContinuationState,
+    summary_target_tokens: u32,
 ) -> Result<String> {
     let messages = uncovered
         .iter()
@@ -101,6 +104,7 @@ fn checkpoint_prompt(
                 "summary_excerpt": "exact non-empty substring from summary representing that fact"
             }],
         },
+        "summary_target_tokens": summary_target_tokens,
         "previous_checkpoint": previous,
         "authoritative_continuation_state": continuation,
         "uncovered_messages": messages,
@@ -117,9 +121,10 @@ async fn request_document(
         session_id: None,
         thread_id: None,
     };
+    let generation_tokens = generation_token_limit(request)?;
     let options = RequestOptions {
         thinking_level: request.config.thinking,
-        max_tokens: Some(request.config.target_summary_tokens),
+        max_tokens: Some(generation_tokens),
         temperature: Some(0.2),
         system_prompt: request
             .config
@@ -133,30 +138,102 @@ async fn request_document(
     let model = clone_model(&request.model);
     let api_key = request.api_key.clone();
     let mut stream = model.provider.stream(&model, context, options, &api_key);
-    let content = tokio::time::timeout(Duration::from_secs(180), async move {
+    let content = collect_response(&mut stream).await?;
+    parse_document(&content, generation_tokens)
+}
+
+async fn collect_response(
+    stream: &mut Pin<Box<dyn futures_core::Stream<Item = imp_llm::Result<StreamEvent>> + Send>>,
+) -> Result<String> {
+    tokio::time::timeout(Duration::from_secs(180), async {
         let mut text = String::new();
+        let mut completed = false;
         while let Some(event) = stream.next().await {
             match event.map_err(Error::Llm)? {
                 StreamEvent::TextDelta { text: delta } => text.push_str(&delta),
-                StreamEvent::MessageEnd { message } if text.is_empty() => {
-                    text = message
-                        .content
-                        .iter()
-                        .filter_map(|block| match block {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("");
+                StreamEvent::MessageEnd { message } => {
+                    if text.is_empty() {
+                        text = message_text(&message.content);
+                    }
+                    validate_stop_reason(&message.stop_reason)?;
+                    completed = true;
+                }
+                StreamEvent::Error { error } => {
+                    return Err(Error::Config(format!(
+                        "compaction checkpoint model stream failed: {error}"
+                    )));
                 }
                 _ => {}
             }
         }
-        Ok::<_, Error>(text)
+        if !completed {
+            return Err(Error::Config(
+                "compaction checkpoint model stream ended before a completion event".to_string(),
+            ));
+        }
+        if text.trim().is_empty() {
+            return Err(Error::Config(
+                "compaction checkpoint model returned no JSON text".to_string(),
+            ));
+        }
+        Ok(text)
     })
     .await
-    .map_err(|_| Error::Config("compaction checkpoint model timed out".to_string()))??;
-    serde_json::from_str(content.trim()).map_err(Into::into)
+    .map_err(|_| Error::Config("compaction checkpoint model timed out".to_string()))?
+}
+
+fn message_text(content: &[ContentBlock]) -> String {
+    content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn validate_stop_reason(reason: &StopReason) -> Result<()> {
+    match reason {
+        StopReason::EndTurn => Ok(()),
+        StopReason::MaxTokens => Err(Error::Config(
+            "compaction checkpoint model exhausted its generation token allowance before producing a complete JSON document"
+                .to_string(),
+        )),
+        StopReason::Error(error) => Err(Error::Config(format!(
+            "compaction checkpoint model failed: {error}"
+        ))),
+        StopReason::ToolUse => Err(Error::Config(
+            "compaction checkpoint model unexpectedly requested a tool".to_string(),
+        )),
+    }
+}
+
+fn parse_document(content: &str, generation_tokens: u32) -> Result<CompactionDocument> {
+    serde_json::from_str(content.trim()).map_err(|error| {
+        let detail = if error.is_eof() {
+            format!(
+                "returned truncated JSON after {} bytes; generation allowance was {generation_tokens} tokens",
+                content.len()
+            )
+        } else {
+            format!("returned invalid JSON after {} bytes: {error}", content.len())
+        };
+        Error::Config(format!("compaction checkpoint model {detail}"))
+    })
+}
+
+fn generation_token_limit(request: &CheckpointRequest) -> Result<u32> {
+    let configured = request
+        .config
+        .reserve_tokens
+        .max(request.config.target_summary_tokens);
+    let limit = configured.min(request.model.meta.max_output_tokens);
+    if limit == 0 {
+        return Err(Error::Config(
+            "compaction checkpoint generation token allowance is zero".to_string(),
+        ));
+    }
+    Ok(limit)
 }
 
 fn thinking_name(level: imp_llm::ThinkingLevel) -> &'static str {
@@ -178,119 +255,5 @@ fn clone_model(model: &Model) -> Model {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
-
-    use async_trait::async_trait;
-    use futures::stream;
-    use futures_core::Stream;
-    use imp_llm::auth::AuthStore;
-    use imp_llm::model::{Capabilities, ModelMeta, ModelPricing};
-    use imp_llm::provider::Provider;
-    use imp_llm::{Message, ThinkingLevel};
-
-    use super::*;
-    use crate::compaction::state::CONTINUATION_STATE_VERSION;
-    use crate::session::ActiveMessageSource;
-
-    struct CaptureProvider {
-        options: Arc<Mutex<Option<RequestOptions>>>,
-    }
-
-    #[async_trait]
-    impl Provider for CaptureProvider {
-        fn stream(
-            &self,
-            _model: &Model,
-            context: Context,
-            options: RequestOptions,
-            _api_key: &str,
-        ) -> Pin<Box<dyn Stream<Item = imp_llm::Result<StreamEvent>> + Send>> {
-            *self.options.lock().unwrap() = Some(options);
-            let prompt = serde_json::to_value(context.messages).unwrap().to_string();
-            assert!(prompt.contains("entry:source-1"));
-            let document = serde_json::json!({
-                "version": 2,
-                "summary": "validated Luna checkpoint",
-                "fact_coverage": [{
-                    "fact_id": "entry:source-1",
-                    "summary_excerpt": "validated Luna checkpoint"
-                }],
-            });
-            Box::pin(stream::iter([Ok(StreamEvent::TextDelta {
-                text: document.to_string(),
-            })]))
-        }
-
-        async fn resolve_auth(&self, _auth: &AuthStore) -> imp_llm::Result<ApiKey> {
-            Ok("test-key".into())
-        }
-
-        fn id(&self) -> &str {
-            "capture"
-        }
-
-        fn models(&self) -> &[ModelMeta] {
-            &[]
-        }
-    }
-
-    #[tokio::test]
-    async fn coordinator_uses_configured_xhigh_prompt_and_publishes_valid_document() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = CheckpointStore::for_session(&temp.path().join("session.jsonl"));
-        let options = Arc::new(Mutex::new(None));
-        let provider = CaptureProvider {
-            options: Arc::clone(&options),
-        };
-        let active = vec![ActiveSessionMessage {
-            source: ActiveMessageSource::Message {
-                entry_id: "source-1".into(),
-            },
-            message: Message::user(&"important objective ".repeat(100)),
-        }];
-        let config = SummarizerConfig {
-            model: "gpt-5.6-luna".into(),
-            reserve_tokens: 32_000,
-            target_summary_tokens: 8_000,
-            thinking: ThinkingLevel::XHigh,
-            checkpoint_interval_tokens: 1,
-            system_prompt: Some("CUSTOM COMPACTION SYSTEM".into()),
-        };
-        let model = Model {
-            meta: ModelMeta {
-                id: "gpt-5.6-luna".into(),
-                provider: "openai".into(),
-                name: "Luna".into(),
-                context_window: 1_050_000,
-                max_output_tokens: 128_000,
-                pricing: ModelPricing::default(),
-                capabilities: Capabilities::default(),
-            },
-            provider: Arc::new(provider),
-        };
-
-        generate_checkpoint(CheckpointRequest {
-            active,
-            previous: None,
-            store: store.clone(),
-            model,
-            api_key: "test-key".into(),
-            config,
-            authoritative_state: None,
-        })
-        .await
-        .unwrap();
-
-        let checkpoint = store.load().unwrap().unwrap();
-        assert_eq!(checkpoint.version, CHECKPOINT_VERSION);
-        assert_eq!(checkpoint.continuation.version, CONTINUATION_STATE_VERSION);
-        assert_eq!(checkpoint.summary, "validated Luna checkpoint");
-        assert_eq!(checkpoint.thinking, "xhigh");
-        let captured = options.lock().unwrap();
-        let captured = captured.as_ref().unwrap();
-        assert_eq!(captured.thinking_level, ThinkingLevel::XHigh);
-        assert_eq!(captured.system_prompt, "CUSTOM COMPACTION SYSTEM");
-    }
-}
+#[path = "coordinator_tests.rs"]
+mod tests;
