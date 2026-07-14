@@ -39,10 +39,7 @@ pub struct CompactionDocument {
     pub fact_coverage: Vec<FactCoverage>,
 }
 
-pub fn validate_document(
-    state: &ContinuationState,
-    document: &CompactionDocument,
-) -> Result<(), String> {
+pub fn validate_document_shape(document: &CompactionDocument) -> Result<(), String> {
     if document.version != COMPACTION_RECORD_VERSION {
         return Err(format!(
             "unsupported compaction document version {}",
@@ -52,6 +49,14 @@ pub fn validate_document(
     if document.summary.trim().is_empty() {
         return Err("compaction document summary is empty".to_string());
     }
+    Ok(())
+}
+
+pub fn validate_document(
+    state: &ContinuationState,
+    document: &CompactionDocument,
+) -> Result<(), String> {
+    validate_document_shape(document)?;
     let missing = state
         .required_fact_ids()
         .into_iter()

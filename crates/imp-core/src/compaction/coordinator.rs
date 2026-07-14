@@ -11,11 +11,12 @@ use super::checkpoint::{
     checkpoint_source_for_model, CheckpointStore, CompactionCheckpoint, CHECKPOINT_VERSION,
 };
 use super::prompt::DEFAULT_SYSTEM_PROMPT;
-use super::record::{validate_document, CompactionDocument};
+use super::record::{validate_document, validate_document_shape, CompactionDocument};
 use super::state::{extract_continuation_state, merge_continuation_state};
 use crate::config::SummarizerConfig;
 use crate::error::{Error, Result};
 use crate::session::ActiveSessionMessage;
+use input::next_prompt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckpointGenerationMode {
@@ -54,13 +55,22 @@ pub async fn generate_checkpoint(request: CheckpointRequest) -> Result<()> {
     let continuation = merge_continuation_state(inherited, delta);
     let continuation =
         merge_authoritative_projection(continuation, request.authoritative_state.as_deref());
-    let prompt = checkpoint_prompt(
-        &request.active[source.uncovered_start..],
+    let system_prompt = request
+        .config
+        .system_prompt
+        .clone()
+        .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string());
+    let generation_tokens = generation_token_limit(&request)?;
+    let source_text = input::serialize_source(&request.active[source.uncovered_start..])?;
+    let document = generate_document(
+        &request,
+        &source_text,
         request.previous.as_ref(),
         &continuation,
-        request.config.target_summary_tokens,
-    )?;
-    let document = request_document(&request, prompt).await?;
+        generation_tokens,
+        &system_prompt,
+    )
+    .await?;
     validate_document(&continuation, &document).map_err(Error::Config)?;
     let checkpoint = CompactionCheckpoint {
         version: CHECKPOINT_VERSION,
@@ -98,52 +108,55 @@ fn merge_authoritative_projection(
     continuation
 }
 
-fn checkpoint_prompt(
-    uncovered: &[ActiveSessionMessage],
+async fn generate_document(
+    request: &CheckpointRequest,
+    source: &str,
     previous: Option<&CompactionCheckpoint>,
     continuation: &super::state::ContinuationState,
-    summary_target_tokens: u32,
-) -> Result<String> {
-    let messages = uncovered
-        .iter()
-        .map(|entry| &entry.message)
-        .collect::<Vec<_>>();
-    let value = serde_json::json!({
-        "schema": {
-            "version": 2,
-            "summary": "string",
-            "fact_coverage": [{
-                "fact_id": "required fact ID",
-                "summary_excerpt": "exact non-empty substring from summary representing that fact"
-            }],
-        },
-        "summary_target_tokens": summary_target_tokens,
-        "previous_checkpoint": previous,
-        "authoritative_continuation_state": continuation,
-        "uncovered_messages": messages,
-    });
-    serde_json::to_string(&value).map_err(Into::into)
+    generation_tokens: u32,
+    system_prompt: &str,
+) -> Result<CompactionDocument> {
+    let mut offset = 0;
+    let mut document = None;
+    while offset < source.len() {
+        let chunk = next_prompt(
+            source,
+            offset,
+            document
+                .as_ref()
+                .map(|value: &CompactionDocument| value.summary.as_str()),
+            previous,
+            continuation,
+            request.config.target_summary_tokens,
+            generation_tokens,
+            system_prompt,
+            &request.model.meta,
+        )?;
+        let next =
+            request_document(request, chunk.prompt, generation_tokens, system_prompt).await?;
+        validate_document_shape(&next).map_err(Error::Config)?;
+        offset = chunk.end;
+        document = Some(next);
+    }
+    document.ok_or_else(|| Error::Config("compaction checkpoint source is empty".to_string()))
 }
 
 async fn request_document(
     request: &CheckpointRequest,
     prompt: String,
+    generation_tokens: u32,
+    system_prompt: &str,
 ) -> Result<CompactionDocument> {
     let context = Context {
         messages: vec![imp_llm::Message::user(prompt)],
         session_id: None,
         thread_id: None,
     };
-    let generation_tokens = generation_token_limit(request)?;
     let options = RequestOptions {
         thinking_level: request.config.thinking,
         max_tokens: Some(generation_tokens),
         temperature: Some(0.2),
-        system_prompt: request
-            .config
-            .system_prompt
-            .clone()
-            .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_string()),
+        system_prompt: system_prompt.to_string(),
         tools: Vec::new(),
         cache_options: CacheOptions::default(),
         effort: None,
@@ -266,6 +279,12 @@ fn clone_model(model: &Model) -> Model {
         provider: Arc::clone(&model.provider),
     }
 }
+
+mod input;
+
+#[cfg(test)]
+#[path = "coordinator/rolling_tests.rs"]
+mod rolling_tests;
 
 #[cfg(test)]
 #[path = "coordinator_tests.rs"]
