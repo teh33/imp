@@ -150,12 +150,10 @@ impl RuntimeStateAccumulator {
                 turn.assessment = summary.clone();
                 delta.workflow_changed = true;
             }
-            RuntimeEventKind::TurnEnded { index } => self.end_turn(*index, None, None, delta),
-            RuntimeEventKind::TurnCompleted {
-                index,
-                message,
-                usage,
-            } => self.end_turn(*index, Some(message), usage.as_ref(), delta),
+            RuntimeEventKind::TurnEnded { index } => self.end_turn(*index, None, delta),
+            RuntimeEventKind::TurnCompleted { index, usage } => {
+                self.end_turn(*index, usage.as_ref(), delta)
+            }
             RuntimeEventKind::MessageStarted { role, summary } => {
                 self.start_message(role, summary.as_deref(), event, delta)
             }
@@ -430,15 +428,11 @@ impl RuntimeStateAccumulator {
     fn end_turn(
         &mut self,
         index: u32,
-        message: Option<&RuntimeTranscriptMessage>,
         usage: Option<&RuntimeUsageSummary>,
         delta: &mut RuntimeStateDelta,
     ) {
         let turn = upsert_turn(&mut self.snapshot.turns, index);
         turn.status = RuntimeTurnStatus::Completed;
-        if let Some(message) = message {
-            self.finalize_active_message(Some(message), delta);
-        }
         if let Some(usage) = usage {
             add_usage(&mut self.snapshot.usage, usage);
             delta.usage_changed = true;

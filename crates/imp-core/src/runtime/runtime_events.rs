@@ -6,6 +6,46 @@ use crate::workflow::{
 };
 
 #[test]
+fn turn_completion_does_not_duplicate_finalized_assistant_message() {
+    let mut accumulator = RuntimeStateAccumulator::new("run-1");
+    let finalized = RuntimeTranscriptMessage {
+        id: "assistant-finalized".into(),
+        role: RuntimeMessageRole::Assistant,
+        blocks: vec![RuntimeAssistantBlock::VisibleText {
+            text: "One response".into(),
+        }],
+        ..RuntimeTranscriptMessage::default()
+    };
+
+    accumulator.apply(&RuntimeEvent {
+        run_id: "run-1".into(),
+        sequence: 1,
+        kind: RuntimeEventKind::MessageFinalized {
+            message: finalized.clone(),
+        },
+        ..RuntimeEvent::default()
+    });
+    accumulator.apply(&RuntimeEvent {
+        run_id: "run-1".into(),
+        sequence: 2,
+        kind: RuntimeEventKind::TurnCompleted {
+            index: 0,
+            usage: None,
+        },
+        ..RuntimeEvent::default()
+    });
+
+    let assistant_messages = accumulator
+        .snapshot_ref()
+        .transcript
+        .iter()
+        .filter(|message| message.role == RuntimeMessageRole::Assistant)
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_messages.len(), 1);
+    assert_eq!(assistant_messages[0].visible_text(), "One response");
+}
+
+#[test]
 fn runtime_state_snapshot_default_is_empty_and_versioned() {
     let snapshot = RuntimeStateSnapshot::default();
     assert_eq!(snapshot.schema_version, RUNTIME_SCHEMA_VERSION);
@@ -130,6 +170,13 @@ fn runtime_event_kind_names_are_stable_json_contract() {
             "agent_started",
         ),
         (
+            RuntimeEventKind::TurnCompleted {
+                index: 1,
+                usage: None,
+            },
+            "turn_completed",
+        ),
+        (
             RuntimeEventKind::MessageDelta {
                 delta: "hello".into(),
             },
@@ -182,6 +229,9 @@ fn runtime_event_kind_names_are_stable_json_contract() {
         };
         let value = serde_json::to_value(&event).expect("runtime event json");
         assert_eq!(value["kind"]["type"], expected_type);
+        if expected_type == "turn_completed" {
+            assert!(value["kind"].get("message").is_none());
+        }
     }
 }
 

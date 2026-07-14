@@ -152,6 +152,50 @@ fn build_click_map_from_rendered_lines_respects_scroll_window() {
 }
 
 #[test]
+fn duplicate_tool_call_ids_render_once() {
+    let theme = Theme::default();
+    let highlighter = Highlighter::new();
+    let messages = vec![DisplayMessage {
+        role: MessageRole::Assistant,
+        content: String::new(),
+        thinking: None,
+        tool_calls: vec![make_tool("tc-1")],
+        assistant_blocks: vec![
+            DisplayAssistantBlock::ToolCall { id: "tc-1".into() },
+            DisplayAssistantBlock::ToolCall { id: "tc-1".into() },
+        ],
+        is_streaming: false,
+        timestamp: 0,
+    }];
+
+    let (lines, visible_tools) = build_chat_lines(
+        &messages,
+        &theme,
+        &highlighter,
+        80,
+        0,
+        None,
+        true,
+        ChatToolDisplay::Summary,
+        10,
+        5,
+        false,
+        AnimationLevel::Minimal,
+        AnimationState::Idle,
+    );
+
+    let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
+    assert_eq!(visible_tools.len(), 1);
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|line| line.contains("Read") && line.contains("src/main.rs"))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn assistant_blocks_preserve_thought_duration_tool_thought_order() {
     let display = DisplayMessage {
         role: MessageRole::Assistant,

@@ -323,7 +323,6 @@ impl AgentEvent {
             },
             AgentEvent::TurnEnd { index, message, .. } => RuntimeEventKind::TurnCompleted {
                 index: *index,
-                message: runtime_assistant_message(message, false),
                 usage: message.usage.as_ref().map(runtime_usage_without_cost),
             },
             AgentEvent::MessageStart { message } => RuntimeEventKind::MessageObserved {

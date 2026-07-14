@@ -111,7 +111,6 @@ pub enum RuntimeEventKind {
     },
     TurnCompleted {
         index: u32,
-        message: RuntimeTranscriptMessage,
         usage: Option<RuntimeUsageSummary>,
     },
     MessageStarted {

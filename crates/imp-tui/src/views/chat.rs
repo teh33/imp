@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use imp_core::config::{AnimationLevel, ChatToolDisplay};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -399,6 +401,7 @@ fn build_chat_lines(
     let mut tool_call_counter: usize = 0;
 
     for (message_index, msg) in messages.iter().enumerate() {
+        let mut rendered_tool_call_ids = HashSet::new();
         if show_timestamps {
             all_lines.push(Line::from(Span::styled(
                 format!("  [{}]", format_timestamp(msg.timestamp)),
@@ -493,6 +496,9 @@ fn build_chat_lines(
                                 ));
                             }
                             DisplayAssistantBlock::ToolCall { id } => {
+                                if !rendered_tool_call_ids.insert(id.as_str()) {
+                                    continue;
+                                }
                                 let focused = tool_focus == Some(tool_call_counter);
                                 tool_call_counter += 1;
                                 if let Some(tc) = msg.find_tool_call(id) {
@@ -530,6 +536,9 @@ fn build_chat_lines(
                         }
                     }
                     for tc in &msg.tool_calls {
+                        if !rendered_tool_call_ids.insert(tc.id.as_str()) {
+                            continue;
+                        }
                         let focused = tool_focus == Some(tool_call_counter);
                         tool_call_counter += 1;
                         push_tool_call_chat_lines(
