@@ -22,13 +22,10 @@ pub fn is_retryable(err: &imp_llm::Error) -> bool {
         }
         // Stream errors are transient (connection reset, partial read, etc.).
         imp_llm::Error::Stream(_) => true,
-        // Provider errors may carry an HTTP status in the message. Check for 5xx.
-        imp_llm::Error::Provider(msg) => {
-            msg.contains("HTTP 500")
-                || msg.contains("HTTP 502")
-                || msg.contains("HTTP 503")
-                || msg.contains("HTTP 529")
-        }
+        // Provider errors may carry an HTTP status or a machine-readable code.
+        // Some streaming APIs report failures in-band without exposing the HTTP
+        // status, so classify known transient codes as well.
+        imp_llm::Error::Provider(msg) => is_retryable_provider_message(msg),
         // Auth errors (401, 403) and bad request (400) are permanent.
         imp_llm::Error::Auth(_) => false,
         // Serialization, IO, context-too-long: not transient.
@@ -36,6 +33,33 @@ pub fn is_retryable(err: &imp_llm::Error) -> bool {
         | imp_llm::Error::Io(_)
         | imp_llm::Error::ContextTooLong { .. } => false,
     }
+}
+
+fn is_retryable_provider_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "http 529",
+        "server_error",
+        "internal_error",
+        "service_unavailable",
+        "overloaded_error",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn retryable_terminal_error(event: &StreamEvent) -> Option<imp_llm::Error> {
+    let StreamEvent::MessageEnd { message } = event else {
+        return None;
+    };
+    let imp_llm::StopReason::Error(error) = &message.stop_reason else {
+        return None;
+    };
+    is_retryable_provider_message(error).then(|| imp_llm::Error::Provider(error.clone()))
 }
 
 /// Compute how long to wait before a retry attempt.
@@ -106,6 +130,26 @@ where
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(event) => {
+                        if !emitted_meaningful_event {
+                            if let Some(err) = retryable_terminal_error(&event) {
+                                if attempt < policy.max_retries {
+                                    match backoff_delay(attempt, &policy, None) {
+                                        Some(delay) => {
+                                            tokio::time::sleep(delay).await;
+                                            attempt += 1;
+                                            continue 'attempt;
+                                        }
+                                        None => {
+                                            let _ = tx.unbounded_send(Err(err));
+                                            return;
+                                        }
+                                    }
+                                }
+                                let _ = tx.unbounded_send(Err(err));
+                                return;
+                            }
+                        }
+
                         if !emitted_meaningful_event
                             && matches!(event, StreamEvent::MessageStart { .. })
                         {
@@ -246,6 +290,13 @@ mod tests {
     }
 
     #[test]
+    fn provider_server_error_code_is_retryable() {
+        let err =
+            imp_llm::Error::Provider("server_error: request failed; request ID req-123".into());
+        assert!(is_retryable(&err));
+    }
+
+    #[test]
     fn provider_4xx_is_not_retryable() {
         let err = imp_llm::Error::Provider("HTTP 400: bad request".into());
         assert!(!is_retryable(&err));
@@ -255,6 +306,81 @@ mod tests {
     fn provider_401_is_not_retryable() {
         let err = imp_llm::Error::Provider("HTTP 401: unauthorized".into());
         assert!(!is_retryable(&err));
+    }
+
+    #[tokio::test]
+    async fn retries_in_band_server_error_before_output() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempt_counter = attempts.clone();
+        let stream = stream_with_retry(
+            move || {
+                let attempt = attempt_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let events = if attempt == 0 {
+                    vec![StreamEvent::MessageEnd {
+                        message: imp_llm::AssistantMessage {
+                            content: vec![],
+                            usage: None,
+                            stop_reason: imp_llm::StopReason::Error(
+                                "server_error: temporary failure; request ID req-123".into(),
+                            ),
+                            timestamp: 0,
+                        },
+                    }]
+                } else {
+                    vec![StreamEvent::TextDelta { text: "ok".into() }]
+                };
+                futures::stream::iter(events.into_iter().map(Ok))
+            },
+            RetryPolicy {
+                max_retries: 1,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+                retry_on: vec![],
+            },
+        );
+
+        let events: Vec<_> = stream.collect::<Vec<_>>().await;
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(matches!(
+            events.as_slice(),
+            [Ok(StreamEvent::TextDelta { text })] if text == "ok"
+        ));
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_in_band_server_error_after_output() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let attempt_counter = attempts.clone();
+        let stream = stream_with_retry(
+            move || {
+                attempt_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                futures::stream::iter(vec![
+                    Ok(StreamEvent::TextDelta {
+                        text: "partial".into(),
+                    }),
+                    Ok(StreamEvent::MessageEnd {
+                        message: imp_llm::AssistantMessage {
+                            content: vec![],
+                            usage: None,
+                            stop_reason: imp_llm::StopReason::Error(
+                                "server_error: temporary failure".into(),
+                            ),
+                            timestamp: 0,
+                        },
+                    }),
+                ])
+            },
+            RetryPolicy {
+                max_retries: 3,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+                retry_on: vec![],
+            },
+        );
+
+        let events: Vec<_> = stream.collect::<Vec<_>>().await;
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(events.len(), 2);
     }
 
     // ── backoff_delay ─────────────────────────────────────────────
