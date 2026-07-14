@@ -959,10 +959,17 @@ fn publish_test_checkpoint(app: &App) {
         .unwrap();
 }
 
-#[test]
-fn tui_integration_slash_compact_without_checkpoint_preserves_context() {
+#[tokio::test]
+async fn tui_integration_slash_compact_without_checkpoint_starts_manual_checkpoint() {
     let temp = TempDir::new().unwrap();
     let mut app = make_persistent_app(&temp);
+    app.session
+        .append(SessionEntry::Message {
+            id: "source".into(),
+            parent_id: None,
+            message: Message::user("retain this objective while preparing compaction"),
+        })
+        .unwrap();
     let before = serde_json::to_string(&app.session.get_active_messages()).unwrap();
 
     app.execute_command("compact");
@@ -971,16 +978,57 @@ fn tui_integration_slash_compact_without_checkpoint_preserves_context() {
         serde_json::to_string(&app.session.get_active_messages()).unwrap(),
         before
     );
+    let task = app.checkpoint_task.as_ref().unwrap();
+    assert_eq!(task.purpose, CheckpointPurpose::ManualCompaction);
+    assert!(app.status_items.contains_key("compaction-checkpoint"));
     assert!(app.messages.iter().any(|message| {
-        message.role == MessageRole::Error
+        message.role == MessageRole::System
             && message
                 .content
-                .contains("No validated compaction checkpoint is ready")
+                .contains("Preparing a validated compaction checkpoint")
+    }));
+    app.checkpoint_task.take().unwrap().handle.abort();
+}
+
+#[tokio::test]
+async fn slash_compact_promotes_running_checkpoint_to_manual_compaction() {
+    let mut app = make_app();
+    app.checkpoint_task = Some(CheckpointTask {
+        handle: tokio::spawn(async { Ok(()) }),
+        purpose: CheckpointPurpose::Rolling,
+    });
+
+    app.run_manual_compaction(false);
+
+    assert_eq!(
+        app.checkpoint_task.as_ref().unwrap().purpose,
+        CheckpointPurpose::ManualCompaction
+    );
+}
+
+#[test]
+fn manual_checkpoint_failure_preserves_context_and_reports_error() {
+    let mut app = make_app();
+    let before = serde_json::to_string(&app.session.get_active_messages()).unwrap();
+
+    app.handle_runtime_signal(RuntimeSignal::CheckpointTaskFailed {
+        purpose: CheckpointPurpose::ManualCompaction,
+        error: "provider unavailable".into(),
+    });
+
+    assert_eq!(
+        serde_json::to_string(&app.session.get_active_messages()).unwrap(),
+        before
+    );
+    assert!(app.messages.iter().any(|message| {
+        message.role == MessageRole::Error
+            && message.content.contains("provider unavailable")
+            && message.content.contains("Context was left unchanged")
     }));
 }
 
 #[test]
-fn tui_integration_slash_compact_activates_checkpoint_and_drops_covered_output() {
+fn manual_checkpoint_completion_activates_checkpoint_and_drops_covered_output() {
     let temp = TempDir::new().unwrap();
     let mut app = make_persistent_app(&temp);
     let huge_output = "x".repeat(80_000);
@@ -998,7 +1046,9 @@ fn tui_integration_slash_compact_activates_checkpoint_and_drops_covered_output()
 
     publish_test_checkpoint(&app);
 
-    app.finish_manual_compaction(String::new());
+    app.handle_runtime_signal(RuntimeSignal::CheckpointTaskCompleted(
+        CheckpointPurpose::ManualCompaction,
+    ));
 
     let active_json = serde_json::to_string(&app.session.get_active_messages()).unwrap();
     assert!(active_json.contains("CONTEXT COMPACTION"));

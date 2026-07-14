@@ -11,11 +11,32 @@ impl App {
             self.push_error_msg("Cannot compact while the agent is actively streaming.");
             return;
         }
-        if self.checkpoint_task.is_some() {
+        if let Some(task) = self.checkpoint_task.as_mut() {
+            task.purpose = super::CheckpointPurpose::ManualCompaction;
             self.push_system_msg("A compaction checkpoint is still being prepared.");
             return;
         }
-        self.finish_manual_compaction(String::new());
+        let Some(session_path) = self.session.path() else {
+            self.push_error_msg("Compaction requires a durable session checkpoint.");
+            return;
+        };
+        match CheckpointStore::for_session(session_path).load() {
+            Ok(Some(_)) => self.finish_manual_compaction(String::new()),
+            Ok(None) => match self.start_manual_checkpoint() {
+                Ok(true) => self.push_system_msg(
+                    "Preparing a validated compaction checkpoint. Context remains available.",
+                ),
+                Ok(false) => self.push_error_msg(
+                    "Compaction checkpoint could not be started. Context was left unchanged.",
+                ),
+                Err(error) => self.push_error_msg(&format!(
+                    "Compaction checkpoint could not be started: {error}. Context was left unchanged."
+                )),
+            },
+            Err(error) => self.push_error_msg(&format!(
+                "Compaction checkpoint is invalid: {error}. Context was left unchanged."
+            )),
+        }
     }
 
     pub(super) fn finish_compaction_status_message(&mut self, content: &str) {

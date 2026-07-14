@@ -82,20 +82,8 @@ impl App {
             }
         }
 
-        let checkpoint_task_finished = self
-            .checkpoint_task
-            .as_ref()
-            .is_some_and(tokio::task::JoinHandle::is_finished);
-        if checkpoint_task_finished {
-            if let Some(task) = self.checkpoint_task.take() {
-                match task.await {
-                    Ok(Ok(())) => signals.push(RuntimeSignal::CheckpointTaskCompleted),
-                    Ok(Err(error)) => signals.push(RuntimeSignal::CheckpointTaskFailed(error)),
-                    Err(error) => signals.push(RuntimeSignal::CheckpointTaskFailed(format!(
-                        "Internal checkpoint task failure: {error}"
-                    ))),
-                }
-            }
+        if let Some(signal) = self.collect_checkpoint_signal().await {
+            signals.push(signal);
         }
 
         let lua_command_task_finished = self
@@ -221,12 +209,11 @@ impl App {
                 self.finish_compaction_status_message("Compaction failed.");
                 self.push_error_msg(&format!("Compaction failed: {error}"));
             }
-            RuntimeSignal::CheckpointTaskCompleted => {
-                self.status_items.remove("compaction-checkpoint");
+            RuntimeSignal::CheckpointTaskCompleted(purpose) => {
+                self.handle_checkpoint_completed(purpose)
             }
-            RuntimeSignal::CheckpointTaskFailed(error) => {
-                self.status_items.remove("compaction-checkpoint");
-                self.push_warning_msg(&format!("Compaction checkpoint failed: {error}"));
+            RuntimeSignal::CheckpointTaskFailed { purpose, error } => {
+                self.handle_checkpoint_failed(purpose, error)
             }
             RuntimeSignal::LuaCommandCompleted { command, result } => {
                 self.finish_lua_command_status_message(&format!("/{command} finished."));

@@ -17,6 +17,12 @@ use crate::config::SummarizerConfig;
 use crate::error::{Error, Result};
 use crate::session::ActiveSessionMessage;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointGenerationMode {
+    WhenDue,
+    Force,
+}
+
 pub struct CheckpointRequest {
     pub active: Vec<ActiveSessionMessage>,
     pub previous: Option<CompactionCheckpoint>,
@@ -25,6 +31,7 @@ pub struct CheckpointRequest {
     pub api_key: ApiKey,
     pub config: SummarizerConfig,
     pub authoritative_state: Option<String>,
+    pub generation_mode: CheckpointGenerationMode,
 }
 
 pub async fn generate_checkpoint(request: CheckpointRequest) -> Result<()> {
@@ -33,7 +40,9 @@ pub async fn generate_checkpoint(request: CheckpointRequest) -> Result<()> {
         request.previous.as_ref(),
         &request.model.meta,
     )?;
-    if !source.is_due(request.config.checkpoint_interval_tokens) {
+    if request.generation_mode == CheckpointGenerationMode::WhenDue
+        && !source.is_due(request.config.checkpoint_interval_tokens)
+    {
         return Ok(());
     }
     let delta = extract_continuation_state(&request.active[source.uncovered_start..]);

@@ -42,7 +42,9 @@ use imp_llm::{Model, ThinkingLevel};
 use crate::agent::{Agent, AgentCommand, AgentEvent, AgentHandle};
 use crate::builder::AgentBuilder;
 use crate::compaction::checkpoint::{checkpoint_source_for_model, CheckpointStore};
-use crate::compaction::coordinator::{generate_checkpoint, CheckpointRequest};
+use crate::compaction::coordinator::{
+    generate_checkpoint, CheckpointGenerationMode, CheckpointRequest,
+};
 use crate::config::{AgentMode, Config};
 use crate::error::{Error, Result};
 use crate::policy::RunPolicy;
@@ -767,6 +769,7 @@ impl ImpSession {
             api_key,
             config: summarizer,
             authoritative_state,
+            generation_mode: CheckpointGenerationMode::WhenDue,
         };
         self.checkpoint_task = Some(tokio::spawn(generate_checkpoint(request)));
         Ok(())

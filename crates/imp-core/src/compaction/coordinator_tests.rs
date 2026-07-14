@@ -139,6 +139,7 @@ fn request(store: CheckpointStore, model: Model) -> CheckpointRequest {
         api_key: "test-key".into(),
         config: config(),
         authoritative_state: None,
+        generation_mode: CheckpointGenerationMode::WhenDue,
     }
 }
 
@@ -169,6 +170,29 @@ async fn coordinator_uses_generation_reserve_and_publishes_valid_document() {
     let prompt = prompt.lock().unwrap();
     assert!(prompt.as_ref().unwrap().contains("summary_target_tokens"));
     assert!(prompt.as_ref().unwrap().contains("8000"));
+}
+
+#[tokio::test]
+async fn forced_checkpoint_generation_ignores_rolling_interval() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = CheckpointStore::for_session(&temp.path().join("session.jsonl"));
+    let document = valid_document();
+    let (model, _, _) = model(vec![
+        StreamEvent::TextDelta {
+            text: document.clone(),
+        },
+        message_end(&document, StopReason::EndTurn),
+    ]);
+    let mut request = request(store.clone(), model);
+    request.config.checkpoint_interval_tokens = 1_000_000;
+    request.generation_mode = CheckpointGenerationMode::Force;
+
+    generate_checkpoint(request).await.unwrap();
+
+    assert_eq!(
+        store.load().unwrap().unwrap().summary,
+        "validated Luna checkpoint"
+    );
 }
 
 #[tokio::test]

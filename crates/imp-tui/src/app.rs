@@ -36,6 +36,7 @@ use agent_start::{
     agent_start_join_result_to_signal, start_agent_from_request, AgentStartRequest,
     AgentStartResult,
 };
+use checkpoint::{CheckpointPurpose, CheckpointTask};
 use diagnostics::{open_path_in_editor, selected_read_file_path_from_tool, trace_tui_to, TuiTrace};
 use event_kinds::{agent_event_kind, runtime_signal_kind};
 use git_status::compact_git_label;
@@ -313,8 +314,11 @@ enum RuntimeSignal {
     AgentTaskFailed(String),
     CompactionTaskCompleted(String),
     CompactionTaskFailed(String),
-    CheckpointTaskCompleted,
-    CheckpointTaskFailed(String),
+    CheckpointTaskCompleted(CheckpointPurpose),
+    CheckpointTaskFailed {
+        purpose: CheckpointPurpose,
+        error: String,
+    },
     LuaCommandCompleted {
         command: String,
         result: Option<String>,
@@ -406,7 +410,7 @@ pub struct App {
     agent_task: Option<tokio::task::JoinHandle<Result<(), ImpCoreError>>>,
     agent_start_task: Option<tokio::task::JoinHandle<()>>,
     compaction_task: Option<tokio::task::JoinHandle<Result<String, String>>>,
-    checkpoint_task: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    checkpoint_task: Option<CheckpointTask>,
     lua_command_task: Option<LuaCommandTask>,
     pub is_streaming: bool,
     pub message_queue: Vec<QueuedMessage>,
