@@ -138,6 +138,7 @@ async fn later_chunk_failure_preserves_previous_checkpoint() {
             system_prompt: Some("summarize safely".into()),
         },
         authoritative_state: None,
+        generation_mode: CheckpointGenerationMode::WhenDue,
     };
 
     let error = generate_checkpoint(request).await.unwrap_err();
